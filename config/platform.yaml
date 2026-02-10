@@ -1,0 +1,323 @@
+# ============================================================
+# AgentSDLC — Platform Configuration (defaults)
+# These are system-wide defaults. Projects can override.
+# ============================================================
+
+defaults:
+  model_per_agent:
+    orchestrator:
+      provider: anthropic
+      model: claude-sonnet-4-5-20250929  # orchestrator needs to be smart but not most expensive
+    product:
+      provider: anthropic
+      model: claude-sonnet-4-5-20250929
+    architect:
+      provider: anthropic
+      model: claude-sonnet-4-5-20250929
+    developer:
+      provider: anthropic
+      model: claude-sonnet-4-5-20250929
+    qa:
+      provider: anthropic
+      model: claude-sonnet-4-5-20250929
+    security:
+      provider: anthropic
+      model: claude-sonnet-4-5-20250929
+    ui-ux:
+      provider: anthropic
+      model: claude-sonnet-4-5-20250929
+    devops:
+      provider: anthropic
+      model: claude-sonnet-4-5-20250929
+
+  budgets:
+    per_agent_tokens: 500000       # 500K tokens max per single agent run
+    per_task_total_tokens: 3000000 # 3M tokens max across all agents for one task
+    per_task_max_cost_usd: 25.00   # $25 hard cap per task
+
+  timeouts:
+    agent_timeout_minutes: 30      # single agent max
+    task_timeout_minutes: 180      # 3 hours for entire task
+    human_gate_timeout_hours: 48   # escalate after 48 hours
+
+  max_rework_cycles: 3             # QA can send back to dev max 3 times
+
+  # Claude Code CLI flags passed to all agents
+  agent_cli_flags:
+    max_budget_usd: 5.00           # per-agent budget cap
+    output_format: json            # structured output for token tracking
+    skip_permissions: true         # required for autonomous operation
+
+  # Docker container resource limits
+  container_resources:
+    memory: 4g
+    cpus: "2"
+    network: bridge
+
+# Global events directory for JSONL persistence
+events_dir: .agentsdlc/events
+
+# ----- Mandatory Platform Rules -----
+# These cannot be overridden by projects or the orchestrator agent
+
+rules:
+  - id: always-qa-after-code
+    description: "A QA-role agent must always run after code changes are produced"
+    condition:
+      type: always
+    action:
+      type: require_role
+      role: qa
+    enforced: true
+
+  - id: security-on-auth
+    description: "Security agent must run when ticket touches auth/payments"
+    condition:
+      type: label_contains
+      value: security
+    action:
+      type: require_agent
+      agent: security
+    enforced: true
+
+  - id: security-on-auth-files
+    description: "Security agent must run when auth-related files are modified"
+    condition:
+      type: file_path_matches
+      pattern: "src/(auth|payments|billing)/**"
+    action:
+      type: require_agent
+      agent: security
+    enforced: true
+
+  - id: human-gate-p0
+    description: "P0 features always require human approval before merge"
+    condition:
+      type: priority_is
+      values: ["p0"]
+    action:
+      type: require_human_gate
+      after_agent: qa
+    enforced: true
+
+# ----- Agent Definitions -----
+# Describes what each agent can do (sent to orchestrator for planning)
+
+agent_definitions:
+  - type: product
+    name: Product Agent
+    role: product
+    description: >
+      Analyzes tickets for completeness, clarifies ambiguity,
+      writes product specs, user stories, and acceptance criteria.
+      Use when the ticket is vague, is a new feature without clear spec,
+      or when product decisions need to be made.
+    container_image: agentsdlc/agent-product:latest
+    capabilities:
+      - Analyze feature requests and bug reports
+      - Write product requirement documents
+      - Define user stories and acceptance criteria
+      - Identify scope, edge cases, and out-of-scope items
+      - Prioritize requirements
+    output_artifacts:
+      - artifacts/product-spec.md
+      - artifacts/user-stories.md
+      - artifacts/scope.md
+    required_inputs:
+      - ticket_details
+
+  - type: architect
+    name: Architecture Agent
+    role: architect
+    description: >
+      Makes technical architecture decisions, designs data models,
+      API contracts, and system design. Use when the ticket requires
+      new infrastructure, new data models, new integrations, or when
+      the technical approach is non-obvious.
+    container_image: agentsdlc/agent-architect:latest
+    capabilities:
+      - Design system architecture
+      - Create data models and ER diagrams
+      - Define API contracts (OpenAPI/YAML)
+      - Write architecture decision records (ADRs)
+      - Evaluate technical tradeoffs
+    output_artifacts:
+      - artifacts/architecture.md
+      - artifacts/api-contracts.yaml
+      - artifacts/data-model.md
+      - artifacts/decisions/
+    required_inputs:
+      - ticket_details
+      - product-spec (if available)
+      - existing codebase structure
+
+  - type: developer
+    name: Developer Agent
+    role: developer
+    stack: js
+    plugins:
+      - js-nextjs
+    description: >
+      Implements features, fixes bugs, writes production code.
+      The primary code-writing agent for JavaScript/TypeScript projects.
+      Can handle frontend, backend, database migrations, and full-stack work.
+    container_image: agentsdlc/agent-developer:latest
+    capabilities:
+      - Write production TypeScript/JavaScript code
+      - Build React/Next.js frontend components
+      - Build API routes and server-side logic
+      - Create database migrations
+      - Integrate third-party services
+      - Fix bugs in existing code
+    output_artifacts:
+      - src/ (modified source code)
+      - artifacts/handoff/dev-to-qa.md
+    required_inputs:
+      - ticket_details
+      - relevant source files
+      - architecture docs (if available)
+
+  - type: go-developer
+    name: Go Developer Agent
+    role: developer
+    stack: go
+    description: >
+      Implements features, fixes bugs, writes production code for Go projects.
+      Handles HTTP servers, CLI tools, gRPC services, and database work.
+      Follows idiomatic Go patterns and conventions.
+    container_image: agentsdlc/agent-go-developer:latest
+    capabilities:
+      - Write production Go code
+      - Build HTTP servers (net/http, chi, echo)
+      - Build gRPC services
+      - Create database migrations (golang-migrate)
+      - Write CLI tools (cobra, urfave/cli)
+      - Fix bugs in existing Go code
+    output_artifacts:
+      - "**/*.go (modified source code)"
+      - artifacts/handoff/dev-to-qa.md
+    required_inputs:
+      - ticket_details
+      - relevant source files
+      - architecture docs (if available)
+
+  - type: qa
+    name: QA Agent
+    role: qa
+    stack: js
+    description: >
+      Writes and runs tests, validates code against requirements.
+      Always runs after the developer agent. Reports bugs and
+      can trigger rework. For JavaScript/TypeScript projects.
+    container_image: agentsdlc/agent-qa:latest
+    capabilities:
+      - Write unit tests (vitest)
+      - Write integration/API tests
+      - Write E2E tests (playwright)
+      - Run test suites and report results
+      - Validate code against acceptance criteria
+      - Report bugs with severity classification
+    output_artifacts:
+      - tests/ (test files)
+      - artifacts/test-report.json
+      - artifacts/bugs.md
+    required_inputs:
+      - ticket_details
+      - source code
+      - acceptance criteria
+
+  - type: go-qa
+    name: Go QA Agent
+    role: qa
+    stack: go
+    description: >
+      Writes and runs tests for Go projects, validates code against requirements.
+      Uses the standard testing package, httptest, and benchmarks.
+      Reports bugs and can trigger rework.
+    container_image: agentsdlc/agent-go-qa:latest
+    capabilities:
+      - Write unit tests (testing package)
+      - Write HTTP tests (httptest)
+      - Write integration tests
+      - Run tests with race detector (-race)
+      - Run benchmarks
+      - Validate code against acceptance criteria
+      - Report bugs with severity classification
+    output_artifacts:
+      - "**/*_test.go (test files)"
+      - artifacts/test-report.json
+      - artifacts/bugs.md
+    required_inputs:
+      - ticket_details
+      - source code
+      - acceptance criteria
+
+  - type: security
+    name: Security Agent
+    role: security
+    description: >
+      Scans code for security vulnerabilities, reviews auth flows,
+      checks for data leakage, dependency vulnerabilities.
+      Required for auth/payment changes, recommended for all features.
+    container_image: agentsdlc/agent-security:latest
+    capabilities:
+      - Static analysis security scanning
+      - Dependency vulnerability checking
+      - Auth flow review
+      - Data exposure analysis
+      - Secret detection
+      - OWASP top 10 verification
+    output_artifacts:
+      - artifacts/security-report.json
+      - artifacts/security-fixes.md
+    required_inputs:
+      - source code
+      - architecture docs (if available)
+
+  - type: ui-ux
+    name: UI/UX Agent
+    role: ui-ux
+    plugins:
+      - frontend-design
+    description: >
+      Designs user interfaces, creates component specifications,
+      generates wireframes as React previews. Use when the ticket
+      involves new UI, redesigns, or significant UX changes.
+    container_image: agentsdlc/agent-ui-ux:latest
+    capabilities:
+      - Create wireframes and user flows
+      - Design component specifications
+      - Generate React component previews
+      - Review accessibility (a11y)
+      - Define responsive behavior
+    output_artifacts:
+      - artifacts/ui-specs/
+      - artifacts/wireframes/
+      - artifacts/component-specs.md
+    required_inputs:
+      - ticket_details
+      - product spec (if available)
+      - existing design system (if available)
+
+  - type: devops
+    name: DevOps Agent
+    role: devops
+    description: >
+      Handles deployment configuration, CI/CD pipelines,
+      infrastructure-as-code. Use for infrastructure tickets
+      or when deployment setup is needed.
+    container_image: agentsdlc/agent-devops:latest
+    capabilities:
+      - Create/modify CI/CD pipelines
+      - Write Dockerfiles and compose files
+      - Configure cloud infrastructure (Terraform/Pulumi)
+      - Set up environment variables
+      - Configure monitoring and logging
+    output_artifacts:
+      - infra/ (IaC files)
+      - .github/workflows/ (CI/CD)
+      - artifacts/deployment-guide.md
+    required_inputs:
+      - architecture docs
+      - source code
+      - deployment requirements

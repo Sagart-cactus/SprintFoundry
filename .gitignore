@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.DS_Store
+.env
+config/project.yaml
+.agentsdlc/
+mnt/user-data/outputs/
+coverage/
+*.log

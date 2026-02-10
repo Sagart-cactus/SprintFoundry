@@ -1,0 +1,340 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import * as fs from "fs/promises";
+import * as path from "path";
+import * as os from "os";
+import { EventEmitter } from "events";
+import { makePlatformConfig, makeProjectConfig, makeModelConfig } from "./fixtures/configs.js";
+import { makeResult } from "./fixtures/results.js";
+import type { AgentRunConfig } from "../src/service/agent-runner.js";
+
+// Mock child_process.spawn
+vi.mock("child_process", () => {
+  const actual = vi.importActual("child_process");
+  return {
+    ...actual,
+    spawn: vi.fn(),
+  };
+});
+
+const { spawn: mockSpawn } = await import("child_process");
+
+const { AgentRunner } = await import("../src/service/agent-runner.js");
+
+function makeFakeProcess(
+  stdout = "",
+  exitCode = 0,
+  options?: { delay?: number }
+) {
+  const proc = new EventEmitter() as any;
+  proc.stdout = new EventEmitter();
+  proc.stderr = new EventEmitter();
+  proc.stdin = { write: vi.fn(), end: vi.fn() };
+  proc.pid = 12345;
+  proc.kill = vi.fn();
+
+  setTimeout(() => {
+    if (stdout) proc.stdout.emit("data", Buffer.from(stdout));
+    proc.emit("close", exitCode);
+  }, options?.delay ?? 5);
+
+  return proc;
+}
+
+function makeRunConfig(overrides?: Partial<AgentRunConfig>): AgentRunConfig {
+  return {
+    agent: overrides?.agent ?? "developer",
+    task: overrides?.task ?? "Implement the feature",
+    context_inputs: overrides?.context_inputs ?? [{ type: "ticket" }],
+    workspacePath: overrides?.workspacePath ?? "/tmp/test-workspace",
+    modelConfig: overrides?.modelConfig ?? makeModelConfig(),
+    apiKey: overrides?.apiKey ?? "sk-ant-test-key",
+    tokenBudget: overrides?.tokenBudget ?? 500_000,
+    timeoutMinutes: overrides?.timeoutMinutes ?? 30,
+    previousStepResults: overrides?.previousStepResults ?? [],
+    plugins: overrides?.plugins,
+    cliFlags: overrides?.cliFlags,
+    containerResources: overrides?.containerResources,
+  };
+}
+
+describe("AgentRunner", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-runner-test-"));
+
+    // Create the workspace structure tests expect
+    const agentDir = path.join(tmpDir, "src", "agents", "developer");
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.writeFile(
+      path.join(agentDir, "CLAUDE.md"),
+      "# Developer Agent",
+      "utf-8"
+    );
+  });
+
+  it("buildClaudeCliArgs includes -p, --output-format, --dangerously-skip-permissions", async () => {
+    const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig());
+
+    // Access private method via prototype trick
+    const args = (runner as any).buildClaudeCliArgs("Do the task", makeRunConfig());
+
+    expect(args).toContain("-p");
+    expect(args).toContain("Do the task");
+    expect(args).toContain("--output-format");
+    expect(args).toContain("json");
+    expect(args).toContain("--dangerously-skip-permissions");
+  });
+
+  it("buildClaudeCliArgs includes --max-budget-usd when set", () => {
+    const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig());
+
+    const args = (runner as any).buildClaudeCliArgs(
+      "Do the task",
+      makeRunConfig({ cliFlags: { max_budget_usd: 5.0 } })
+    );
+
+    expect(args).toContain("--max-budget-usd");
+    expect(args).toContain("5");
+  });
+
+  it("buildClaudeCliArgs does NOT include --max-budget-usd when not set", () => {
+    const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig());
+
+    const args = (runner as any).buildClaudeCliArgs(
+      "Do the task",
+      makeRunConfig({ cliFlags: {} })
+    );
+
+    expect(args).not.toContain("--max-budget-usd");
+  });
+
+  it("buildClaudeCliArgs includes --plugin-dir for each plugin", () => {
+    const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig());
+
+    const args = (runner as any).buildClaudeCliArgs(
+      "Do the task",
+      makeRunConfig({ plugins: ["js-nextjs", "frontend-design"] })
+    );
+
+    const pluginDirIndices = args
+      .map((a: string, i: number) => (a === "--plugin-dir" ? i : -1))
+      .filter((i: number) => i >= 0);
+
+    expect(pluginDirIndices).toHaveLength(2);
+    // Each --plugin-dir should be followed by a path
+    for (const idx of pluginDirIndices) {
+      expect(args[idx + 1]).toContain("plugins");
+    }
+  });
+
+  it("readAgentResult parses valid .agent-result.json", async () => {
+    const workspacePath = path.join(tmpDir, "workspace-valid");
+    await fs.mkdir(workspacePath, { recursive: true });
+    const result = makeResult();
+    await fs.writeFile(
+      path.join(workspacePath, ".agent-result.json"),
+      JSON.stringify(result),
+      "utf-8"
+    );
+
+    const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig());
+    const parsed = await (runner as any).readAgentResult(workspacePath);
+
+    expect(parsed.status).toBe("complete");
+    expect(parsed.summary).toBe("Task completed successfully");
+  });
+
+  it("readAgentResult returns failure stub for missing file", async () => {
+    const workspacePath = path.join(tmpDir, "workspace-missing");
+    await fs.mkdir(workspacePath, { recursive: true });
+
+    const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig());
+    const parsed = await (runner as any).readAgentResult(workspacePath);
+
+    expect(parsed.status).toBe("failed");
+    expect(parsed.summary).toContain("did not produce a result file");
+  });
+
+  it("readAgentResult returns failure stub for invalid JSON", async () => {
+    const workspacePath = path.join(tmpDir, "workspace-invalid");
+    await fs.mkdir(workspacePath, { recursive: true });
+    await fs.writeFile(
+      path.join(workspacePath, ".agent-result.json"),
+      "not json {{{",
+      "utf-8"
+    );
+
+    const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig());
+    const parsed = await (runner as any).readAgentResult(workspacePath);
+
+    expect(parsed.status).toBe("failed");
+  });
+
+  it("readAgentResult returns failure for missing required fields", async () => {
+    const workspacePath = path.join(tmpDir, "workspace-partial");
+    await fs.mkdir(workspacePath, { recursive: true });
+    await fs.writeFile(
+      path.join(workspacePath, ".agent-result.json"),
+      JSON.stringify({ foo: "bar" }),
+      "utf-8"
+    );
+
+    const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig());
+    const parsed = await (runner as any).readAgentResult(workspacePath);
+
+    expect(parsed.status).toBe("failed");
+    expect(parsed.issues).toContain("Missing required fields in .agent-result.json");
+  });
+
+  it("parseTokenUsage extracts from JSON output", () => {
+    const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig());
+    const output = JSON.stringify({ usage: { total_tokens: 1234 } });
+
+    const tokens = (runner as any).parseTokenUsage(output);
+
+    expect(tokens).toBe(1234);
+  });
+
+  it("parseTokenUsage extracts from regex fallback", () => {
+    const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig());
+    const output = "Process completed. Tokens: 5678\nDone.";
+
+    const tokens = (runner as any).parseTokenUsage(output);
+
+    expect(tokens).toBe(5678);
+  });
+
+  it("parseTokenUsage returns 0 for unrecognized output", () => {
+    const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig());
+    const output = "no token info here";
+
+    const tokens = (runner as any).parseTokenUsage(output);
+
+    expect(tokens).toBe(0);
+  });
+
+  it("estimateCost calculates correctly for known models", () => {
+    const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig());
+
+    const cost = (runner as any).estimateCost(
+      1_000_000,
+      { provider: "anthropic", model: "claude-sonnet-4-5-20250929" }
+    );
+
+    expect(cost).toBe(3.0); // $3 per 1M tokens
+  });
+
+  it("estimateCost uses default rate for unknown models", () => {
+    const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig());
+
+    const cost = (runner as any).estimateCost(
+      1_000_000,
+      { provider: "anthropic", model: "claude-unknown-model" }
+    );
+
+    expect(cost).toBe(3.0); // default $3 per 1M
+  });
+
+  it("spawnLocalClaudeCode called when AGENTSDLC_USE_CONTAINERS unset", async () => {
+    delete process.env.AGENTSDLC_USE_CONTAINERS;
+
+    const proc = makeFakeProcess(
+      JSON.stringify({ usage: { total_tokens: 500 } })
+    );
+    (mockSpawn as any).mockReturnValueOnce(proc);
+
+    const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig());
+
+    // Mock prepareWorkspace and readAgentResult
+    (runner as any).prepareWorkspace = vi.fn().mockResolvedValue(undefined);
+    (runner as any).readAgentResult = vi.fn().mockResolvedValue(makeResult());
+
+    const result = await runner.run(makeRunConfig());
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      "claude",
+      expect.any(Array),
+      expect.any(Object)
+    );
+    expect(result.agentResult.status).toBe("complete");
+  });
+
+  it("spawnContainer constructs correct docker args with volume mounts", async () => {
+    process.env.AGENTSDLC_USE_CONTAINERS = "true";
+
+    const proc = makeFakeProcess(
+      JSON.stringify({ usage: { total_tokens: 200 } })
+    );
+    (mockSpawn as any).mockReturnValueOnce(proc);
+
+    const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig());
+    (runner as any).prepareWorkspace = vi.fn().mockResolvedValue(undefined);
+    (runner as any).readAgentResult = vi.fn().mockResolvedValue(makeResult());
+
+    const result = await runner.run(
+      makeRunConfig({ agent: "developer", plugins: ["js-nextjs"] })
+    );
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      "docker",
+      expect.arrayContaining(["run", "--rm", "-v"]),
+      expect.any(Object)
+    );
+
+    const dockerArgs = (mockSpawn as any).mock.calls[0][1];
+    // Should have volume mount for workspace
+    expect(dockerArgs.some((a: string) => a.includes("/workspace"))).toBe(true);
+
+    delete process.env.AGENTSDLC_USE_CONTAINERS;
+  });
+
+  it("timeout kills the process", async () => {
+    delete process.env.AGENTSDLC_USE_CONTAINERS;
+
+    // Create a process that never closes (we'll trigger timeout)
+    const proc = new EventEmitter() as any;
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.stdin = { write: vi.fn(), end: vi.fn() };
+    proc.pid = 99999;
+    proc.kill = vi.fn();
+
+    (mockSpawn as any).mockReturnValueOnce(proc);
+
+    const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig());
+    (runner as any).prepareWorkspace = vi.fn().mockResolvedValue(undefined);
+
+    const config = makeRunConfig({ timeoutMinutes: 0.001 }); // ~60ms timeout
+
+    await expect(runner.run(config)).rejects.toThrow(/timed out/);
+    expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
+  });
+
+  it("run rejects when local claude exits with non-zero code", async () => {
+    delete process.env.AGENTSDLC_USE_CONTAINERS;
+
+    const proc = makeFakeProcess("error output", 1);
+    (mockSpawn as any).mockReturnValueOnce(proc);
+
+    const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig());
+    (runner as any).prepareWorkspace = vi.fn().mockResolvedValue(undefined);
+
+    await expect(runner.run(makeRunConfig())).rejects.toThrow(/exited with code 1/);
+  });
+
+  it("run rejects when docker exits with non-zero code", async () => {
+    process.env.AGENTSDLC_USE_CONTAINERS = "true";
+
+    const proc = makeFakeProcess("container error", 2);
+    (mockSpawn as any).mockReturnValueOnce(proc);
+
+    const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig());
+    (runner as any).prepareWorkspace = vi.fn().mockResolvedValue(undefined);
+
+    await expect(runner.run(makeRunConfig())).rejects.toThrow(/exited with code 2/);
+
+    delete process.env.AGENTSDLC_USE_CONTAINERS;
+  });
+});

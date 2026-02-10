@@ -1,0 +1,146 @@
+# ============================================================
+# AgentSDLC — Project Configuration
+# Copy this file to config/project.yaml and customize
+# ============================================================
+
+project_id: my-saas-app
+name: My SaaS Application
+
+# ----- Stack & Agent Selection -----
+# Which technology stack this project uses (informational)
+stack: js
+
+# Which agents from the platform catalog this project needs.
+# If omitted, all agents are available to the orchestrator.
+agents:
+  - product
+  - architect
+  - developer
+  - qa
+  - security
+  - ui-ux
+  - devops
+
+# ----- Repository -----
+repo:
+  url: git@github.com:myorg/myapp.git
+  default_branch: main
+  # ssh_key_path: ~/.ssh/id_ed25519      # for SSH clone
+  # token: ghp_xxxxxxxxxxxx               # for HTTPS clone
+
+# ----- API Keys (BYOK) -----
+# You can also set these as environment variables:
+#   AGENTSDLC_ANTHROPIC_KEY, AGENTSDLC_OPENAI_KEY, etc.
+api_keys:
+  anthropic: ${AGENTSDLC_ANTHROPIC_KEY}
+  # openai: ${AGENTSDLC_OPENAI_KEY}
+  # google: ${AGENTSDLC_GOOGLE_KEY}
+
+# ----- Model Overrides (optional) -----
+# Override the default model for specific agents
+# model_overrides:
+#   architect:
+#     provider: anthropic
+#     model: claude-opus-4-5-20250929   # use opus for architecture decisions
+#   developer:
+#     provider: anthropic
+#     model: claude-sonnet-4-5-20250929
+
+# ----- Budget Overrides (optional) -----
+# budget_overrides:
+#   per_agent_tokens: 800000
+#   per_task_max_cost_usd: 50.00
+
+# ----- Branch Strategy -----
+branch_strategy:
+  prefix: feat/
+  include_ticket_id: true
+  naming: kebab-case
+  # Results in branches like: feat/lin-423-csv-export
+
+# ----- Integrations -----
+integrations:
+  ticket_source:
+    type: linear               # linear | github | jira
+    config:
+      api_key: ${LINEAR_API_KEY}
+      team_id: TEAM-123
+      # For GitHub:
+      # type: github
+      # config:
+      #   token: ${GITHUB_TOKEN}
+      #   owner: myorg
+      #   repo: myapp
+      # For Jira:
+      # type: jira
+      # config:
+      #   host: https://myorg.atlassian.net
+      #   email: user@myorg.com
+      #   api_token: ${JIRA_API_TOKEN}
+      #   project_key: MYAPP
+
+  notifications:
+    type: slack
+    config:
+      webhook_url: ${SLACK_WEBHOOK_URL}
+      channel: "#dev-agents"
+
+# ----- Project-Specific Rules -----
+rules:
+  - id: security-on-payments
+    description: "Always run security agent on payment-related changes"
+    condition:
+      type: file_path_matches
+      pattern: "src/payments/**"
+    action:
+      type: require_agent
+      agent: security
+
+  - id: human-gate-api-changes
+    description: "Require human review for any API contract changes"
+    condition:
+      type: file_path_matches
+      pattern: "src/api/**"
+    action:
+      type: require_human_gate
+      after_agent: developer
+
+# ============================================================
+# Example: Go Backend Project
+# Save as config/go-api.yaml and use with: --project go-api
+# ============================================================
+#
+# project_id: my-go-api
+# name: My Go API Service
+#
+# stack: go
+#
+# agents:
+#   - product
+#   - architect
+#   - go-developer
+#   - go-qa
+#   - security
+#   - devops
+#
+# repo:
+#   url: git@github.com:myorg/my-go-api.git
+#   default_branch: main
+#
+# api_keys:
+#   anthropic: ${AGENTSDLC_ANTHROPIC_KEY}
+#
+# branch_strategy:
+#   prefix: feat/
+#   include_ticket_id: true
+#   naming: kebab-case
+#
+# integrations:
+#   ticket_source:
+#     type: github
+#     config:
+#       token: ${GITHUB_TOKEN}
+#       owner: myorg
+#       repo: my-go-api
+#
+# rules: []
