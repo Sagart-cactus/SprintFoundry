@@ -262,14 +262,19 @@ describe("AgentRunner", () => {
   });
 
   it("spawnContainer constructs correct docker args with volume mounts", async () => {
-    process.env.AGENTSDLC_USE_CONTAINERS = "true";
-
     const proc = makeFakeProcess(
       JSON.stringify({ usage: { total_tokens: 200 } })
     );
     (mockSpawn as any).mockReturnValueOnce(proc);
 
-    const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig());
+    const runner = new AgentRunner(
+      makePlatformConfig(),
+      makeProjectConfig({
+        runtime_overrides: {
+          developer: { provider: "claude-code", mode: "container" },
+        },
+      })
+    );
     (runner as any).prepareWorkspace = vi.fn().mockResolvedValue(undefined);
     (runner as any).readAgentResult = vi.fn().mockResolvedValue(makeResult());
 
@@ -287,7 +292,6 @@ describe("AgentRunner", () => {
     // Should have volume mount for workspace
     expect(dockerArgs.some((a: string) => a.includes("/workspace"))).toBe(true);
 
-    delete process.env.AGENTSDLC_USE_CONTAINERS;
   });
 
   it("timeout kills the process", async () => {
@@ -325,16 +329,91 @@ describe("AgentRunner", () => {
   });
 
   it("run rejects when docker exits with non-zero code", async () => {
-    process.env.AGENTSDLC_USE_CONTAINERS = "true";
-
     const proc = makeFakeProcess("container error", 2);
     (mockSpawn as any).mockReturnValueOnce(proc);
 
-    const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig());
+    const runner = new AgentRunner(
+      makePlatformConfig(),
+      makeProjectConfig({
+        runtime_overrides: {
+          developer: { provider: "claude-code", mode: "container" },
+        },
+      })
+    );
     (runner as any).prepareWorkspace = vi.fn().mockResolvedValue(undefined);
 
     await expect(runner.run(makeRunConfig())).rejects.toThrow(/exited with code 2/);
+  });
 
+  it("uses codex runtime when project runtime override is set", async () => {
     delete process.env.AGENTSDLC_USE_CONTAINERS;
+
+    const proc = makeFakeProcess(JSON.stringify({ usage: { total_tokens: 321 } }));
+    (mockSpawn as any).mockReturnValueOnce(proc);
+
+    const runner = new AgentRunner(
+      makePlatformConfig(),
+      makeProjectConfig({
+        runtime_overrides: {
+          developer: { provider: "codex", mode: "local_process" },
+        },
+      })
+    );
+    (runner as any).prepareWorkspace = vi.fn().mockResolvedValue(undefined);
+    (runner as any).readAgentResult = vi.fn().mockResolvedValue(makeResult());
+
+    const result = await runner.run(makeRunConfig({ agent: "developer" }));
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      "codex",
+      expect.any(Array),
+      expect.any(Object)
+    );
+    expect(result.tokens_used).toBe(321);
+  });
+
+  it("project runtime override takes precedence over platform runtime defaults", async () => {
+    const proc = makeFakeProcess(JSON.stringify({ usage: { total_tokens: 111 } }));
+    (mockSpawn as any).mockReturnValueOnce(proc);
+
+    const runner = new AgentRunner(
+      makePlatformConfig({
+        defaults: {
+          model_per_agent: {
+            orchestrator: { provider: "anthropic", model: "claude-sonnet-4-5-20250929" },
+            developer: { provider: "anthropic", model: "claude-sonnet-4-5-20250929" },
+            qa: { provider: "anthropic", model: "claude-sonnet-4-5-20250929" },
+          },
+          budgets: {
+            per_agent_tokens: 500_000,
+            per_task_total_tokens: 3_000_000,
+            per_task_max_cost_usd: 25,
+          },
+          timeouts: {
+            agent_timeout_minutes: 30,
+            task_timeout_minutes: 180,
+            human_gate_timeout_hours: 48,
+          },
+          max_rework_cycles: 3,
+          runtime_per_agent: {
+            developer: { provider: "claude-code", mode: "local_process" },
+          },
+        },
+      }),
+      makeProjectConfig({
+        runtime_overrides: {
+          developer: { provider: "codex", mode: "local_process" },
+        },
+      })
+    );
+    (runner as any).prepareWorkspace = vi.fn().mockResolvedValue(undefined);
+    (runner as any).readAgentResult = vi.fn().mockResolvedValue(makeResult());
+
+    await runner.run(makeRunConfig({ agent: "developer" }));
+    expect(mockSpawn).toHaveBeenCalledWith(
+      "codex",
+      expect.any(Array),
+      expect.any(Object)
+    );
   });
 });

@@ -18,9 +18,6 @@ export class WorkspaceManager {
   async create(runId: string): Promise<string> {
     const workspacePath = path.join(this.baseDir, runId);
     await fs.mkdir(workspacePath, { recursive: true });
-    await fs.mkdir(path.join(workspacePath, "artifacts", "handoff"), {
-      recursive: true,
-    });
     return workspacePath;
   }
 

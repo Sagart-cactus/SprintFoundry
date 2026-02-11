@@ -122,4 +122,9 @@ program
     console.log(`Review decision written: ${decisionPath}`);
   });
 
-program.parse();
+const argv =
+  process.argv[2] === "--"
+    ? [process.argv[0], process.argv[1], ...process.argv.slice(3)]
+    : process.argv;
+
+program.parse(argv);

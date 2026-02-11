@@ -20,20 +20,22 @@ import type {
   TaskEvent,
   EventType,
   RunStatus,
+  RuntimeConfig,
 } from "../shared/types.js";
 import { PlanValidator } from "./plan-validator.js";
 import { AgentRunner } from "./agent-runner.js";
-import { OrchestratorAgent } from "./orchestrator-agent.js";
 import { EventStore } from "./event-store.js";
 import { WorkspaceManager } from "./workspace-manager.js";
 import { TicketFetcher } from "./ticket-fetcher.js";
 import { GitManager } from "./git-manager.js";
 import { NotificationService } from "./notification-service.js";
+import type { PlannerRuntime } from "./runtime/types.js";
+import { PlannerFactory } from "./runtime/planner-factory.js";
 
 export class OrchestrationService {
   private validator: PlanValidator;
   private agentRunner: AgentRunner;
-  private orchestratorAgent: OrchestratorAgent;
+  private plannerRuntime: PlannerRuntime;
   private events: EventStore;
   private workspace: WorkspaceManager;
   private tickets: TicketFetcher;
@@ -46,7 +48,7 @@ export class OrchestrationService {
   ) {
     this.validator = new PlanValidator(platformConfig, projectConfig);
     this.agentRunner = new AgentRunner(platformConfig, projectConfig);
-    this.orchestratorAgent = new OrchestratorAgent(platformConfig, projectConfig);
+    this.plannerRuntime = new PlannerFactory().create(platformConfig, projectConfig);
     this.events = new EventStore(platformConfig.events_dir);
     this.workspace = new WorkspaceManager(projectConfig);
     this.tickets = new TicketFetcher(projectConfig.integrations);
@@ -84,7 +86,7 @@ export class OrchestrationService {
 
       // 4. Get plan from orchestrator agent
       run.status = "planning";
-      const plan = await this.orchestratorAgent.generatePlan(
+      const plan = await this.plannerRuntime.generatePlan(
         ticket,
         this.platformConfig.agent_definitions,
         this.getMergedRules(),
@@ -276,6 +278,7 @@ export class OrchestrationService {
 
     // Resolve model + budget for this agent (project overrides > platform defaults)
     const modelConfig = this.resolveModel(step.agent);
+    const runtime = this.resolveRuntimeForAgent(step.agent);
     const budget = this.resolveBudget();
     const cliFlags = this.platformConfig.defaults.agent_cli_flags;
     const containerResources = this.platformConfig.defaults.container_resources;
@@ -304,7 +307,7 @@ export class OrchestrationService {
         context_inputs: step.context_inputs,
         workspacePath,
         modelConfig,
-        apiKey: this.resolveApiKey(modelConfig.provider),
+        apiKey: this.resolveApiKey(modelConfig.provider, runtime),
         tokenBudget: budget.per_agent_tokens,
         timeoutMinutes: this.platformConfig.defaults.timeouts.agent_timeout_minutes,
         previousStepResults: this.gatherPreviousResults(run, step),
@@ -365,7 +368,7 @@ export class OrchestrationService {
           .map((s) => s.result!);
 
         // Ask orchestrator agent how to handle the rework (with full context)
-        const reworkPlan = await this.orchestratorAgent.planRework(
+        const reworkPlan = await this.plannerRuntime.planRework(
           run.ticket,
           step,
           result.agentResult,
@@ -510,11 +513,33 @@ export class OrchestrationService {
     };
   }
 
-  private resolveApiKey(provider: string): string {
+  private resolveApiKey(provider: string, runtime?: RuntimeConfig): string {
     const keys = this.projectConfig.api_keys;
     const key = keys[provider as keyof typeof keys];
-    if (!key) throw new Error(`No API key configured for provider: ${provider}`);
-    return typeof key === "string" ? key : key[0]?.key ?? "";
+    const resolved = typeof key === "string" ? key : key?.[0]?.key ?? "";
+    if (!resolved && runtime?.mode !== "local_process") {
+      throw new Error(`No API key configured for provider: ${provider}`);
+    }
+    return resolved;
+  }
+
+  private resolveRuntimeForAgent(agent: AgentType): RuntimeConfig {
+    const override = this.projectConfig.runtime_overrides?.[agent];
+    if (override) return override;
+
+    const fromDefaults = this.platformConfig.defaults.runtime_per_agent?.[agent];
+    if (fromDefaults) return fromDefaults;
+
+    const role = this.platformConfig.agent_definitions.find((d) => d.type === agent)?.role;
+    if (role && this.platformConfig.defaults.runtime_per_agent?.[role]) {
+      return this.platformConfig.defaults.runtime_per_agent[role];
+    }
+
+    const useContainer = process.env.AGENTSDLC_USE_CONTAINERS === "true";
+    return {
+      provider: "claude-code",
+      mode: useContainer ? "container" : "local_process",
+    };
   }
 
   private getMergedRules() {

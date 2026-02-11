@@ -95,6 +95,18 @@ export interface ContainerResources {
   network?: string;  // default: "bridge"
 }
 
+export type RuntimeProvider = "claude-code" | "codex";
+export type RuntimeMode = "local_process" | "container" | "remote";
+
+export interface RuntimeConfig {
+  provider: RuntimeProvider;
+  mode: RuntimeMode;
+  command?: string;
+  args?: string[];
+  image?: string;
+  env?: Record<string, string>;
+}
+
 export interface PlatformConfig {
   defaults: {
     model_per_agent: Record<string, ModelConfig>;
@@ -103,6 +115,8 @@ export interface PlatformConfig {
     max_rework_cycles: number;
     agent_cli_flags?: AgentCliFlags;
     container_resources?: ContainerResources;
+    runtime_per_agent?: Record<string, RuntimeConfig>;
+    planner_runtime?: RuntimeConfig;
   };
   rules: PlatformRule[];
   agent_definitions: AgentDefinition[];
@@ -121,6 +135,8 @@ export interface ProjectConfig {
   branch_strategy: BranchStrategy;
   stack?: string;       // e.g. "js", "go", "python"
   agents?: string[];    // agent IDs this project uses (filters the catalog)
+  runtime_overrides?: Partial<Record<string, RuntimeConfig>>;
+  planner_runtime_override?: RuntimeConfig;
 }
 
 export interface ModelConfig {

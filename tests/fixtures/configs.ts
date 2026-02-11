@@ -38,6 +38,13 @@ export function makePlatformConfig(
         cpus: "2",
         network: "bridge",
       },
+      runtime_per_agent: {
+        orchestrator: { provider: "claude-code", mode: "local_process" },
+        developer: { provider: "claude-code", mode: "local_process" },
+        qa: { provider: "claude-code", mode: "local_process" },
+        security: { provider: "claude-code", mode: "local_process" },
+      },
+      planner_runtime: { provider: "claude-code", mode: "local_process" },
       ...overrides?.defaults,
     },
     rules: overrides?.rules ?? defaultPlatformRules(),
@@ -80,6 +87,8 @@ export function makeProjectConfig(
     },
     stack: overrides?.stack,
     agents: overrides?.agents,
+    runtime_overrides: overrides?.runtime_overrides,
+    planner_runtime_override: overrides?.planner_runtime_override,
   };
 }
 

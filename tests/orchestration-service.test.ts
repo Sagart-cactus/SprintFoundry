@@ -90,7 +90,7 @@ describe("OrchestrationService", () => {
     );
 
     // Get references to the mock instances
-    mockOrchestratorAgent = (service as any).orchestratorAgent;
+    mockOrchestratorAgent = (service as any).plannerRuntime;
     mockAgentRunner = (service as any).agentRunner;
     mockTicketFetcher = (service as any).tickets;
     mockGitManager = (service as any).git;
@@ -327,7 +327,7 @@ describe("OrchestrationService", () => {
       makeProjectConfig()
     );
 
-    const mockOrch = (lowBudgetService as any).orchestratorAgent;
+    const mockOrch = (lowBudgetService as any).plannerRuntime;
     const mockRunner = (lowBudgetService as any).agentRunner;
 
     const plan = makeDevQaPlan();
@@ -463,6 +463,101 @@ describe("OrchestrationService", () => {
     // "go-developer" is not in model_per_agent but has role "developer" in agent_definitions
     const goDevModel = (svc as any).resolveModel("go-developer");
     expect(goDevModel.model).toBe("platform-default-model");
+  });
+
+  it("allows missing API key for local_process runtime", async () => {
+    const serviceNoKeys = new OrchestrationService(
+      makePlatformConfig({
+        defaults: {
+          model_per_agent: {
+            orchestrator: { provider: "anthropic", model: "claude-sonnet-4-5-20250929" },
+            developer: { provider: "openai", model: "gpt-5" },
+          },
+          budgets: {
+            per_agent_tokens: 500_000,
+            per_task_total_tokens: 3_000_000,
+            per_task_max_cost_usd: 25,
+          },
+          timeouts: {
+            agent_timeout_minutes: 30,
+            task_timeout_minutes: 180,
+            human_gate_timeout_hours: 48,
+          },
+          max_rework_cycles: 3,
+          runtime_per_agent: {
+            developer: { provider: "codex", mode: "local_process" },
+          },
+        },
+        rules: [],
+      }),
+      makeProjectConfig({
+        api_keys: {},
+        rules: [],
+      })
+    );
+
+    const mockPlanner = (serviceNoKeys as any).plannerRuntime;
+    const mockRunner = (serviceNoKeys as any).agentRunner;
+    mockPlanner.generatePlan.mockResolvedValue(
+      makePlan({
+        steps: [makeStep({ step_number: 1, agent: "developer", task: "Implement" })],
+      })
+    );
+    mockRunner.run.mockResolvedValue({
+      agentResult: makeResult(),
+      tokens_used: 50,
+      cost_usd: 0.01,
+      duration_seconds: 1,
+      container_id: "local-1",
+    });
+
+    const run = await serviceNoKeys.handleTask("p1", "prompt", "Build thing");
+    expect(run.status).toBe("completed");
+    expect(mockRunner.run).toHaveBeenCalled();
+    expect(mockRunner.run.mock.calls[0][0].apiKey).toBe("");
+  });
+
+  it("still requires API key for non-local runtimes", async () => {
+    const serviceNoKeys = new OrchestrationService(
+      makePlatformConfig({
+        defaults: {
+          model_per_agent: {
+            orchestrator: { provider: "anthropic", model: "claude-sonnet-4-5-20250929" },
+            developer: { provider: "anthropic", model: "claude-sonnet-4-5-20250929" },
+          },
+          budgets: {
+            per_agent_tokens: 500_000,
+            per_task_total_tokens: 3_000_000,
+            per_task_max_cost_usd: 25,
+          },
+          timeouts: {
+            agent_timeout_minutes: 30,
+            task_timeout_minutes: 180,
+            human_gate_timeout_hours: 48,
+          },
+          max_rework_cycles: 3,
+          runtime_per_agent: {
+            developer: { provider: "claude-code", mode: "container" },
+          },
+        },
+        rules: [],
+      }),
+      makeProjectConfig({
+        api_keys: {},
+        rules: [],
+      })
+    );
+    const mockPlanner = (serviceNoKeys as any).plannerRuntime;
+    const mockRunner = (serviceNoKeys as any).agentRunner;
+    mockPlanner.generatePlan.mockResolvedValue(
+      makePlan({
+        steps: [makeStep({ step_number: 1, agent: "developer", task: "Implement" })],
+      })
+    );
+
+    const run = await serviceNoKeys.handleTask("p1", "prompt", "Build thing");
+    expect(run.status).toBe("failed");
+    expect(mockRunner.run).not.toHaveBeenCalled();
   });
 
   it("waitForReviewDecision resolves approved decision from workspace file", async () => {

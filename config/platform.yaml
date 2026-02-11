@@ -54,6 +54,38 @@ defaults:
     cpus: "2"
     network: bridge
 
+  # Runtime defaults per agent/role (can be overridden per project)
+  runtime_per_agent:
+    orchestrator:
+      provider: claude-code
+      mode: local_process
+    developer:
+      provider: claude-code
+      mode: local_process
+    qa:
+      provider: claude-code
+      mode: local_process
+    security:
+      provider: claude-code
+      mode: local_process
+    product:
+      provider: claude-code
+      mode: local_process
+    architect:
+      provider: claude-code
+      mode: local_process
+    ui-ux:
+      provider: claude-code
+      mode: local_process
+    devops:
+      provider: claude-code
+      mode: local_process
+
+  # Planner runtime (claude-code default; can be set to codex)
+  planner_runtime:
+    provider: claude-code
+    mode: local_process
+
 # Global events directory for JSONL persistence
 events_dir: .agentsdlc/events
 

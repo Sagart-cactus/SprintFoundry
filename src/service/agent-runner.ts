@@ -16,7 +16,9 @@ import type {
   ContextInput,
   PlatformConfig,
   ProjectConfig,
+  RuntimeConfig,
 } from "../shared/types.js";
+import { RuntimeFactory } from "./runtime/runtime-factory.js";
 
 export interface AgentRunConfig {
   agent: AgentType;
@@ -47,7 +49,9 @@ export interface AgentRunResult {
 
 export class AgentRunner {
   private agentDir: string;
+  private codexAgentDir: string;
   private projectRoot: string;
+  private runtimeFactory: RuntimeFactory;
 
   constructor(
     private platformConfig: PlatformConfig,
@@ -56,20 +60,40 @@ export class AgentRunner {
     const __filename = fileURLToPath(import.meta.url);
     const __dirname = path.dirname(__filename);
     this.agentDir = path.resolve(__dirname, "../agents");
+    this.codexAgentDir = path.resolve(__dirname, "../agents-codex");
     this.projectRoot = path.resolve(__dirname, "../..");
+    this.runtimeFactory = new RuntimeFactory();
   }
 
   async run(config: AgentRunConfig): Promise<AgentRunResult> {
     const startTime = Date.now();
+    const runtime = this.resolveRuntime(config.agent);
 
     // 1. Prepare the workspace for this agent
-    await this.prepareWorkspace(config);
+    await this.prepareWorkspace(config, runtime);
 
     // 2. Build the task prompt
     const taskPrompt = this.buildTaskPrompt(config);
 
-    // 3. Spawn the agent (either as container or local Claude Code process)
-    const result = await this.spawnAgent(config, taskPrompt);
+    // 3. Spawn runtime selected for this agent
+    const agentDef = this.platformConfig.agent_definitions.find((d) => d.type === config.agent);
+    const runtimeImpl = this.runtimeFactory.create(runtime);
+    const result = await runtimeImpl.runStep({
+      agent: config.agent,
+      task: config.task,
+      context_inputs: config.context_inputs,
+      workspacePath: config.workspacePath,
+      modelConfig: config.modelConfig,
+      apiKey: config.apiKey,
+      timeoutMinutes: config.timeoutMinutes,
+      tokenBudget: config.tokenBudget,
+      previousStepResults: config.previousStepResults,
+      plugins: this.resolvePluginPaths(config.plugins),
+      cliFlags: config.cliFlags,
+      containerResources: config.containerResources,
+      runtime,
+      containerImage: agentDef?.container_image,
+    });
 
     // 4. Read the agent's result file
     const agentResult = await this.readAgentResult(config.workspacePath);
@@ -81,19 +105,30 @@ export class AgentRunner {
       tokens_used: result.tokens_used,
       cost_usd: this.estimateCost(result.tokens_used, config.modelConfig),
       duration_seconds: duration,
-      container_id: result.container_id,
+      container_id: result.runtime_id,
     };
   }
 
   // ---- Workspace Preparation ----
 
-  private async prepareWorkspace(config: AgentRunConfig) {
+  private async prepareWorkspace(config: AgentRunConfig, runtime: RuntimeConfig) {
     const workspacePath = config.workspacePath;
 
-    // Copy the agent's CLAUDE.md into the workspace
-    const claudeMdSource = path.join(this.agentDir, config.agent, "CLAUDE.md");
-    const claudeMdDest = path.join(workspacePath, "CLAUDE.md");
-    await fs.copyFile(claudeMdSource, claudeMdDest);
+    const instructionSource =
+      runtime.provider === "codex"
+        ? path.join(this.codexAgentDir, config.agent, "CODEX.md")
+        : path.join(this.agentDir, config.agent, "CLAUDE.md");
+    const fallbackSource = path.join(this.agentDir, config.agent, "CLAUDE.md");
+    const existingSource = await fs
+      .access(instructionSource)
+      .then(() => instructionSource)
+      .catch(async () => {
+        await fs.access(fallbackSource);
+        return fallbackSource;
+      });
+    const primaryDest = runtime.provider === "codex" ? "AGENTS.md" : "CLAUDE.md";
+    await fs.copyFile(existingSource, path.join(workspacePath, primaryDest));
+    await fs.copyFile(existingSource, path.join(workspacePath, ".agent-profile.md"));
 
     // Write the task file
     const taskContent = this.buildTaskPrompt(config);
@@ -233,6 +268,25 @@ export class AgentRunner {
   private resolvePluginPaths(plugins: string[] | undefined): string[] {
     if (!plugins || plugins.length === 0) return [];
     return plugins.map((p) => path.resolve(this.projectRoot, "plugins", p));
+  }
+
+  private resolveRuntime(agent: AgentType): RuntimeConfig {
+    const override = this.projectConfig.runtime_overrides?.[agent];
+    if (override) return override;
+
+    const def = this.platformConfig.defaults.runtime_per_agent?.[agent];
+    if (def) return def;
+
+    const role = this.platformConfig.agent_definitions.find((d) => d.type === agent)?.role;
+    if (role && this.platformConfig.defaults.runtime_per_agent?.[role]) {
+      return this.platformConfig.defaults.runtime_per_agent[role];
+    }
+
+    const useContainer = process.env.AGENTSDLC_USE_CONTAINERS === "true";
+    return {
+      provider: "claude-code",
+      mode: useContainer ? "container" : "local_process",
+    };
   }
 
   // ---- Agent Spawning ----

@@ -4,6 +4,21 @@ An AI-powered multi-agent orchestration platform for end-to-end software develop
 
 AgentSDLC takes tickets from your project management tools (Linear, GitHub Issues, Jira) and orchestrates specialized AI agents — Product, Architecture, Developer, QA, Security, UI/UX — to deliver tested, reviewed code as pull requests.
 
+## Runtime Portability
+
+Agent execution is runtime-driven and can be mixed per agent:
+
+- `claude-code` runtime
+- `codex` runtime
+
+Planning remains on the orchestrator runtime.
+
+Runtime selection precedence:
+
+1. `project.runtime_overrides[agent]`
+2. `platform.defaults.runtime_per_agent[agent or role]`
+3. legacy fallback (`claude-code`, local process unless `AGENTSDLC_USE_CONTAINERS=true`)
+
 ## Architecture
 
 ```
@@ -87,6 +102,8 @@ agentsdlc/
 ├── src/
 │   ├── service/          # Orchestration service (hard shell)
 │   ├── agents/           # Agent definitions (CLAUDE.md + Dockerfiles)
+│   ├── agents-codex/     # Codex-specific agent profiles (CODEX.md)
+│   ├── service/runtime/  # Runtime adapters + factories
 │   ├── mcp-servers/      # Custom MCP servers
 │   ├── integrations/     # Linear, GitHub, Jira connectors
 │   └── shared/           # Shared types, utilities

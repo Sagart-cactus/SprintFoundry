@@ -16,7 +16,7 @@ describe("WorkspaceManager", () => {
     baseDir = path.join(os.tmpdir(), "agentsdlc", projectId);
   });
 
-  it("create() makes workspace + artifacts/handoff dirs", async () => {
+  it("create() makes an empty workspace directory", async () => {
     const runId = "run-001";
     const workspacePath = await manager.create(runId);
 
@@ -24,14 +24,6 @@ describe("WorkspaceManager", () => {
 
     const stat = await fs.stat(workspacePath);
     expect(stat.isDirectory()).toBe(true);
-
-    const artifactsStat = await fs.stat(path.join(workspacePath, "artifacts"));
-    expect(artifactsStat.isDirectory()).toBe(true);
-
-    const handoffStat = await fs.stat(
-      path.join(workspacePath, "artifacts", "handoff")
-    );
-    expect(handoffStat.isDirectory()).toBe(true);
   });
 
   it("getPath() returns expected path format", () => {
