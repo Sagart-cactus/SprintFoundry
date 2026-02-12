@@ -77,15 +77,20 @@ export class OrchestrationService {
       await this.emitEvent(run.run_id, "task.created", { ticket });
 
       // 3. Prepare workspace (clone repo, create branch)
+      console.log(`[orchestrator] Creating workspace for run ${run.run_id}...`);
       const workspacePath = await this.workspace.create(run.run_id);
+      console.log(`[orchestrator] Workspace created: ${workspacePath}`);
 
       // Initialize event store with workspace path for per-run logs
       await this.events.initialize(workspacePath);
 
+      console.log(`[orchestrator] Cloning repo and creating branch...`);
       await this.git.cloneAndBranch(workspacePath, ticket);
+      console.log(`[orchestrator] Repo cloned successfully.`);
 
       // 4. Get plan from orchestrator agent
       run.status = "planning";
+      console.log(`[orchestrator] Generating execution plan via ${this.plannerRuntime.constructor.name}...`);
       const plan = await this.plannerRuntime.generatePlan(
         ticket,
         this.platformConfig.agent_definitions,
@@ -93,11 +98,17 @@ export class OrchestrationService {
         workspacePath
       );
       run.plan = plan;
+      console.log(`[orchestrator] Plan generated: ${plan.steps.length} steps, classification=${plan.classification}`);
+      for (const step of plan.steps) {
+        console.log(`  Step ${step.step_number}: ${step.agent} — ${step.task.slice(0, 80)}`);
+      }
       await this.emitEvent(run.run_id, "task.plan_generated", { plan });
 
       // 5. Validate and enforce rules on the plan
+      console.log(`[orchestrator] Validating plan against rules...`);
       const validatedPlan = this.validator.validate(plan, ticket);
       run.validated_plan = validatedPlan;
+      console.log(`[orchestrator] Plan validated: ${validatedPlan.steps.length} steps (${validatedPlan.steps.length - plan.steps.length} injected by rules)`);
       await this.emitEvent(run.run_id, "task.plan_validated", {
         original_steps: plan.steps.length,
         validated_steps: validatedPlan.steps.length,
@@ -106,6 +117,7 @@ export class OrchestrationService {
 
       // 6. Execute the plan
       run.status = "executing";
+      console.log(`[orchestrator] Starting plan execution...`);
       await this.executePlan(run, validatedPlan, workspacePath);
 
       // 7. If all passed, create PR and update ticket
@@ -300,6 +312,8 @@ export class OrchestrationService {
         (d) => d.type === step.agent
       );
 
+      console.log(`[step ${step.step_number}] Spawning agent ${step.agent} (runtime: ${runtime.provider}/${runtime.mode})...`);
+
       // Spawn the agent container and run
       const result = await this.agentRunner.run({
         agent: step.agent,
@@ -315,6 +329,11 @@ export class OrchestrationService {
         cliFlags,
         containerResources,
       });
+
+      console.log(`[step ${step.step_number}] Agent ${step.agent} finished: status=${result.agentResult.status}, tokens=${result.tokens_used}, cost=$${result.cost_usd.toFixed(2)}, duration=${result.duration_seconds.toFixed(1)}s`);
+      if (result.agentResult.summary) {
+        console.log(`[step ${step.step_number}] Summary: ${result.agentResult.summary.slice(0, 120)}`);
+      }
 
       stepExec.tokens_used = result.tokens_used;
       stepExec.cost_usd = result.cost_usd;

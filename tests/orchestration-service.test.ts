@@ -8,11 +8,16 @@ import { makePlan, makeStep, makeDevQaPlan } from "./fixtures/plans.js";
 import { makeResult, makeFailedResult, makeReworkResult } from "./fixtures/results.js";
 
 // Mock all sub-services using class syntax so they work with `new`
-vi.mock("../src/service/orchestrator-agent.js", () => ({
-  OrchestratorAgent: class {
-    generatePlan = vi.fn();
-    planRework = vi.fn();
-    constructor(..._args: any[]) {}
+// Mock PlannerFactory — returns a mock planner with generatePlan/planRework
+vi.mock("../src/service/runtime/planner-factory.js", () => ({
+  PlannerFactory: class {
+    create() {
+      return {
+        generatePlan: vi.fn(),
+        planRework: vi.fn(),
+      };
+    }
+    constructor() {}
   },
 }));
 

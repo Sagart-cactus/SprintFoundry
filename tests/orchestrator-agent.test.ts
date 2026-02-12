@@ -255,14 +255,14 @@ describe("OrchestratorAgent", () => {
     expect(callArgs.system).not.toContain('id: "developer"');
   });
 
-  it("resolveApiKey throws when no key configured", () => {
-    expect(
-      () =>
-        new OrchestratorAgent(
-          makePlatformConfig(),
-          makeProjectConfig({ api_keys: {} })
-        )
-    ).toThrow(/No API key/);
+  it("resolveApiKey returns empty string when no key configured (SDK falls back to env)", () => {
+    // OrchestratorAgent no longer throws on missing key — the Anthropic SDK
+    // handles env-based credential lookup when no explicit key is provided
+    const agent = new OrchestratorAgent(
+      makePlatformConfig(),
+      makeProjectConfig({ api_keys: {} })
+    );
+    expect(agent).toBeDefined();
   });
 
   it("model resolution: project override → platform default → hardcoded", async () => {

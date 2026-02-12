@@ -126,6 +126,7 @@ export class GitManager {
   }
 
   private exec(args: string[], cwd: string): string {
+    console.log(`[git] Running: ${args.join(" ")}`);
     const [command, ...commandArgs] = args;
     const result = spawnSync(command, commandArgs, {
       cwd,

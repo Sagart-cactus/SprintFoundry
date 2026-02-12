@@ -28,7 +28,8 @@ export class OrchestratorAgent {
     private projectConfig: ProjectConfig
   ) {
     const apiKey = this.resolveApiKey();
-    this.client = new Anthropic({ apiKey });
+    // If key is empty, let the SDK resolve from ANTHROPIC_API_KEY env var
+    this.client = apiKey ? new Anthropic({ apiKey }) : new Anthropic();
     this.model =
       projectConfig.model_overrides?.orchestrator?.model ??
       platformConfig.defaults.model_per_agent.orchestrator?.model ??
@@ -388,7 +389,8 @@ Analyze this ticket and return an execution plan as JSON.`;
     const provider =
       this.projectConfig.model_overrides?.orchestrator?.provider ?? "anthropic";
     const key = keys[provider as keyof typeof keys];
-    if (!key) throw new Error(`No API key for orchestrator provider: ${provider}`);
+    // Return empty string if no key configured — the Anthropic SDK will
+    // fall back to ANTHROPIC_API_KEY env var automatically
     return typeof key === "string" ? key : "";
   }
 }

@@ -69,7 +69,10 @@ export class AgentRunner {
     const startTime = Date.now();
     const runtime = this.resolveRuntime(config.agent);
 
+    console.log(`[agent-runner] Running agent ${config.agent} (runtime: ${runtime.provider}/${runtime.mode})`);
+
     // 1. Prepare the workspace for this agent
+    console.log(`[agent-runner] Preparing workspace at ${config.workspacePath}...`);
     await this.prepareWorkspace(config, runtime);
 
     // 2. Build the task prompt
@@ -78,6 +81,7 @@ export class AgentRunner {
     // 3. Spawn runtime selected for this agent
     const agentDef = this.platformConfig.agent_definitions.find((d) => d.type === config.agent);
     const runtimeImpl = this.runtimeFactory.create(runtime);
+    console.log(`[agent-runner] Spawning ${runtime.provider} runtime for ${config.agent}...`);
     const result = await runtimeImpl.runStep({
       agent: config.agent,
       task: config.task,
@@ -94,6 +98,8 @@ export class AgentRunner {
       runtime,
       containerImage: agentDef?.container_image,
     });
+
+    console.log(`[agent-runner] Runtime completed for ${config.agent}. Reading result...`);
 
     // 4. Read the agent's result file
     const agentResult = await this.readAgentResult(config.workspacePath);

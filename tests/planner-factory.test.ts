@@ -3,10 +3,39 @@ import { PlannerFactory } from "../src/service/runtime/planner-factory.js";
 import { makePlatformConfig, makeProjectConfig } from "./fixtures/configs.js";
 
 describe("PlannerFactory", () => {
-  it("returns OrchestratorAgent by default", () => {
+  it("returns ClaudeCodePlannerRuntime for local_process mode (default)", () => {
     const planner = new PlannerFactory().create(
       makePlatformConfig(),
       makeProjectConfig()
+    );
+    // Default mode is local_process, which uses the CLI-based planner
+    expect(planner.constructor.name).toBe("ClaudeCodePlannerRuntime");
+  });
+
+  it("returns OrchestratorAgent for container mode", () => {
+    const planner = new PlannerFactory().create(
+      makePlatformConfig({
+        defaults: {
+          model_per_agent: {
+            orchestrator: { provider: "anthropic", model: "claude-sonnet-4-5-20250929" },
+            developer: { provider: "anthropic", model: "claude-sonnet-4-5-20250929" },
+            qa: { provider: "anthropic", model: "claude-sonnet-4-5-20250929" },
+          },
+          budgets: {
+            per_agent_tokens: 500_000,
+            per_task_total_tokens: 3_000_000,
+            per_task_max_cost_usd: 25,
+          },
+          timeouts: {
+            agent_timeout_minutes: 30,
+            task_timeout_minutes: 180,
+            human_gate_timeout_hours: 48,
+          },
+          max_rework_cycles: 3,
+          planner_runtime: { provider: "claude-code", mode: "container" },
+        },
+      }),
+      makeProjectConfig({ api_keys: { anthropic: "sk-ant-test-key" } })
     );
     expect(planner.constructor.name).toBe("OrchestratorAgent");
   });
