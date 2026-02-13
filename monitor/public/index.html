@@ -32,6 +32,7 @@
         <button id="manual-sync">Sync now</button>
         <button id="refresh-btn">Reload runs</button>
       </div>
+      <p id="header-error" class="header-error" hidden>Unable to load run data. Check connection and try Sync now.</p>
     </header>
 
     <section class="phase-panel" aria-labelledby="phase-heading">
@@ -52,22 +53,45 @@
           <button id="load-more-btn">Load older events</button>
           <button id="jump-latest-btn" hidden>Jump to latest</button>
         </div>
-        <p id="follow-notice" class="notice" hidden>Following paused because you moved away from the latest events.</p>
+        <p id="follow-notice" class="notice" hidden>
+          Following paused because you moved away from the latest events.
+        </p>
         <ul id="events-list" class="events" role="listbox" tabindex="0" aria-label="Run timeline events"></ul>
       </section>
 
       <section class="panel context-pane" aria-labelledby="context-heading">
         <h2 id="context-heading" tabindex="-1">Active Context</h2>
-        <div class="context-grid">
-          <article class="context-card">
-            <h3>Active Step</h3>
-            <div id="active-step">No active step yet.</div>
-          </article>
-          <article class="context-card">
-            <h3>Next Action</h3>
-            <div id="next-action">Waiting for run selection.</div>
-          </article>
-        </div>
+
+        <article class="context-card">
+          <h3>Active Step</h3>
+          <div id="active-step">No active step yet. Waiting for planner or executor transition.</div>
+          <button id="step-details-toggle" type="button" class="disclosure-btn" aria-expanded="false" aria-controls="step-details-panel" disabled>
+            Step details
+          </button>
+          <div id="step-details-panel" class="step-details" hidden>
+            <div>
+              <h4>Artifacts in this step</h4>
+              <ul id="step-artifacts-list" class="step-list"></ul>
+            </div>
+            <div>
+              <h4>Change summary</h4>
+              <p id="step-change-summary" class="meta">No change summary.</p>
+            </div>
+          </div>
+        </article>
+
+        <article class="context-card next-action-card">
+          <h3>Next Action</h3>
+          <div id="next-action">Waiting for run selection.</div>
+          <div id="next-action-controls" class="next-actions" aria-busy="false"></div>
+          <p id="next-action-error" class="inline-error" role="status" aria-live="polite" hidden></p>
+        </article>
+
+        <article class="context-card metrics-card" aria-labelledby="metrics-heading">
+          <h3 id="metrics-heading">Run Metrics</h3>
+          <dl id="metrics-grid" class="metrics-grid" aria-live="polite"></dl>
+          <p id="metrics-note" class="meta" hidden>Metric not reported for this run.</p>
+        </article>
 
         <article id="selected-event" class="selected-event" aria-live="polite">
           <h3>Selected Timeline Event</h3>
@@ -104,7 +128,7 @@
     </main>
 
     <footer class="status">
-      <span id="status-line">Loading…</span>
+      <span id="status-line">Loading...</span>
       <span id="live-region" class="sr-only" aria-live="polite"></span>
     </footer>
     <script src="/app.js" type="module"></script>
