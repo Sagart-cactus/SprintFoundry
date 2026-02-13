@@ -104,11 +104,72 @@ export async function runProcess(
 }
 
 export function parseTokenUsage(output: string): number {
-  try {
-    const parsed = JSON.parse(output);
-    return parsed?.usage?.total_tokens ?? parsed?.tokens_used ?? 0;
-  } catch {
-    const match = output.match(/tokens?[:\s]+(\d+)/i);
-    return match ? parseInt(match[1], 10) : 0;
+  const trimmed = output.trim();
+  if (!trimmed) return 0;
+
+  // First try a single JSON payload.
+  const fromSingleJson = parseUsageFromJson(trimmed);
+  if (fromSingleJson !== null) return fromSingleJson;
+
+  // Fallback: parse JSONL streams (Codex emits one JSON object per line).
+  let totalFromJsonl = 0;
+  let foundJsonlUsage = false;
+  for (const rawLine of trimmed.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || (!line.startsWith("{") && !line.startsWith("["))) continue;
+    const value = parseUsageFromJson(line);
+    if (value !== null) {
+      totalFromJsonl += value;
+      foundJsonlUsage = true;
+    }
   }
+  if (foundJsonlUsage) return totalFromJsonl;
+
+  // Final fallback for plain-text output.
+  const match = trimmed.match(/tokens?[:\s]+(\d+)/i);
+  return match ? parseInt(match[1], 10) : 0;
+}
+
+function parseUsageFromJson(jsonText: string): number | null {
+  try {
+    const parsed = JSON.parse(jsonText);
+    return extractUsage(parsed);
+  } catch {
+    return null;
+  }
+}
+
+function extractUsage(value: unknown): number | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+
+  // Claude: { usage: { total_tokens } } or { usage: { input_tokens, output_tokens } }
+  const usage = record["usage"];
+  if (usage && typeof usage === "object") {
+    const usageObj = usage as Record<string, unknown>;
+
+    const totalTokens = numberOrNull(usageObj["total_tokens"]);
+    if (totalTokens !== null) return totalTokens;
+
+    const inputTokens = numberOrNull(usageObj["input_tokens"]) ?? 0;
+    const outputTokens = numberOrNull(usageObj["output_tokens"]) ?? 0;
+    if (inputTokens > 0 || outputTokens > 0) {
+      return inputTokens + outputTokens;
+    }
+  }
+
+  // Legacy fallback: { tokens_used: N }
+  const tokensUsed = numberOrNull(record["tokens_used"]);
+  if (tokensUsed !== null) return tokensUsed;
+
+  return null;
+}
+
+function numberOrNull(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
 }

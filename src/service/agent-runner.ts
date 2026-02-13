@@ -19,6 +19,8 @@ import type {
   RuntimeConfig,
 } from "../shared/types.js";
 import { RuntimeFactory } from "./runtime/runtime-factory.js";
+import { CodexSkillManager } from "./runtime/codex-skill-manager.js";
+import { parseTokenUsage as parseRuntimeTokenUsage } from "./runtime/process-utils.js";
 
 export interface AgentRunConfig {
   agent: AgentType;
@@ -39,6 +41,11 @@ export interface AgentRunConfig {
   containerResources?: ContainerResources;
 }
 
+interface WorkspacePrepResult {
+  codexHomeDir?: string;
+  codexSkillNames?: string[];
+}
+
 export interface AgentRunResult {
   agentResult: AgentResult;
   tokens_used: number;
@@ -52,6 +59,7 @@ export class AgentRunner {
   private codexAgentDir: string;
   private projectRoot: string;
   private runtimeFactory: RuntimeFactory;
+  private codexSkillManager: CodexSkillManager;
 
   constructor(
     private platformConfig: PlatformConfig,
@@ -63,6 +71,11 @@ export class AgentRunner {
     this.codexAgentDir = path.resolve(__dirname, "../agents-codex");
     this.projectRoot = path.resolve(__dirname, "../..");
     this.runtimeFactory = new RuntimeFactory();
+    this.codexSkillManager = new CodexSkillManager(
+      platformConfig,
+      projectConfig,
+      this.projectRoot
+    );
   }
 
   async run(config: AgentRunConfig): Promise<AgentRunResult> {
@@ -73,10 +86,7 @@ export class AgentRunner {
 
     // 1. Prepare the workspace for this agent
     console.log(`[agent-runner] Preparing workspace at ${config.workspacePath}...`);
-    await this.prepareWorkspace(config, runtime);
-
-    // 2. Build the task prompt
-    const taskPrompt = this.buildTaskPrompt(config);
+    const prep = (await this.prepareWorkspace(config, runtime)) ?? {};
 
     // 3. Spawn runtime selected for this agent
     const agentDef = this.platformConfig.agent_definitions.find((d) => d.type === config.agent);
@@ -97,6 +107,8 @@ export class AgentRunner {
       containerResources: config.containerResources,
       runtime,
       containerImage: agentDef?.container_image,
+      codexHomeDir: prep.codexHomeDir,
+      codexSkillNames: prep.codexSkillNames,
     });
 
     console.log(`[agent-runner] Runtime completed for ${config.agent}. Reading result...`);
@@ -117,7 +129,10 @@ export class AgentRunner {
 
   // ---- Workspace Preparation ----
 
-  private async prepareWorkspace(config: AgentRunConfig, runtime: RuntimeConfig) {
+  private async prepareWorkspace(
+    config: AgentRunConfig,
+    runtime: RuntimeConfig
+  ): Promise<WorkspacePrepResult> {
     const workspacePath = config.workspacePath;
 
     const instructionSource =
@@ -133,7 +148,8 @@ export class AgentRunner {
         return fallbackSource;
       });
     const primaryDest = runtime.provider === "codex" ? "AGENTS.md" : "CLAUDE.md";
-    await fs.copyFile(existingSource, path.join(workspacePath, primaryDest));
+    const primaryDestPath = path.join(workspacePath, primaryDest);
+    await fs.copyFile(existingSource, primaryDestPath);
     await fs.copyFile(existingSource, path.join(workspacePath, ".agent-profile.md"));
 
     // Write the task file
@@ -161,6 +177,47 @@ export class AgentRunner {
     // Ensure artifacts directory exists
     await fs.mkdir(path.join(workspacePath, "artifacts"), { recursive: true });
     await fs.mkdir(path.join(workspacePath, "artifacts", "handoff"), { recursive: true });
+
+    if (runtime.provider !== "codex") {
+      return {};
+    }
+
+    const resolved = this.codexSkillManager.resolveForAgent(config.agent);
+    if (!resolved.enabled) {
+      return {};
+    }
+
+    const staged = await this.codexSkillManager.stageSkills(
+      workspacePath,
+      resolved.skillNames
+    );
+
+    if (staged.skillNames.length > 0) {
+      await this.appendCodexSkillsSection(primaryDestPath, staged.skillNames);
+    }
+
+    return {
+      codexHomeDir: staged.codexHomeDir,
+      codexSkillNames: staged.skillNames,
+    };
+  }
+
+  private async appendCodexSkillsSection(
+    agentsPath: string,
+    skillNames: string[]
+  ): Promise<void> {
+    const existing = await fs.readFile(agentsPath, "utf-8");
+    const section = [
+      "",
+      "## Runtime Skills",
+      "",
+      "These Codex skills are available for this run:",
+      ...skillNames.map((name) => `- ${name}`),
+      "",
+      "Use these skills when relevant to the assigned task.",
+      "",
+    ].join("\n");
+    await fs.writeFile(agentsPath, `${existing}${section}`, "utf-8");
   }
 
   // ---- Task Prompt Building ----
@@ -507,15 +564,7 @@ export class AgentRunner {
   // ---- Utilities ----
 
   private parseTokenUsage(output: string): number {
-    // Try to parse token usage from Claude Code's JSON output
-    try {
-      const parsed = JSON.parse(output);
-      return parsed?.usage?.total_tokens ?? parsed?.tokens_used ?? 0;
-    } catch {
-      // Try to find token count in output text
-      const match = output.match(/tokens?[:\s]+(\d+)/i);
-      return match ? parseInt(match[1], 10) : 0;
-    }
+    return parseRuntimeTokenUsage(output);
   }
 
   private estimateCost(tokens: number, model: ModelConfig): number {
