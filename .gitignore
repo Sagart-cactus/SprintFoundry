@@ -7,3 +7,7 @@ config/project.yaml
 mnt/user-data/outputs/
 coverage/
 *.log
+
+# Runtime artifacts
+.codex-home/
+.agent-context/
