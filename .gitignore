@@ -11,3 +11,18 @@ coverage/
 # Runtime artifacts
 .codex-home/
 .agent-context/
+
+# Runtime plans / logs / step metadata
+.events.jsonl
+.planner-task.md
+.planner-plan.raw.txt
+.planner-runtime.stdout.log
+.planner-runtime.stderr.log
+.codex-runtime.stdout.log
+.codex-runtime.stderr.log
+.codex-runtime.retry.stdout.log
+.codex-runtime.retry.stderr.log
+.codex-runtime.debug.json
+.agent-task.md
+.agent-result.json
+.agent-profile.md
