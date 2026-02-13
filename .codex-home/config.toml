@@ -1,0 +1,28 @@
+model = "gpt-5.3-codex"
+model_reasoning_effort = "medium"
+personality = "pragmatic"
+
+[projects."/Users/trivedi/Documents/Projects/optipod"]
+trust_level = "trusted"
+
+[projects."/Users/trivedi/Documents/Projects/k8s-crd-creator"]
+trust_level = "trusted"
+
+[projects."/Users/trivedi/Documents/Projects/k8s-operator-creator-agent"]
+trust_level = "trusted"
+
+[projects."/Users/trivedi/Documents/Projects/claude-go-plugin"]
+trust_level = "trusted"
+
+[projects."/Users/trivedi/Documents/Projects"]
+trust_level = "trusted"
+
+[projects."/Users/trivedi/Documents/Projects/claude-k8s-plugin"]
+trust_level = "trusted"
+
+[projects."/Users/trivedi/Documents/Projects/agentsdlc"]
+trust_level = "trusted"
+
+[notice.model_migrations]
+"gpt-5.2" = "gpt-5.2-codex"
+"gpt-5.2-codex" = "gpt-5.3-codex"

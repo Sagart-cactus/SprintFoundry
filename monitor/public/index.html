@@ -7,9 +7,19 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
+    <a class="skip-link" href="#timeline-heading">Skip to timeline</a>
+
     <header class="topbar">
-      <h1>Run Monitor</h1>
-      <div class="controls">
+      <div class="topbar-main">
+        <h1>Run Monitor</h1>
+        <div class="run-strip">
+          <span id="run-label">No run selected</span>
+          <span id="run-status" class="badge">Unknown</span>
+          <span id="run-elapsed" class="meta-pill">Elapsed: -</span>
+        </div>
+      </div>
+
+      <div class="controls" aria-label="Run controls">
         <label>
           Project
           <select id="project-select"></select>
@@ -18,42 +28,84 @@
           Run
           <select id="run-select"></select>
         </label>
-        <label class="checkbox">
-          <input type="checkbox" id="auto-refresh" checked />
-          Auto refresh
-        </label>
-        <button id="refresh-btn">Refresh</button>
+        <button id="live-toggle" aria-pressed="true" aria-label="Auto refresh run data">Pause updates</button>
+        <button id="manual-sync">Sync now</button>
+        <button id="refresh-btn">Reload runs</button>
       </div>
     </header>
 
-    <main class="layout">
-      <section class="panel left">
-        <h2>Plan & Steps</h2>
-        <div id="plan-meta" class="meta"></div>
-        <ul id="steps-list" class="steps"></ul>
-      </section>
+    <section class="phase-panel" aria-labelledby="phase-heading">
+      <div class="phase-head">
+        <h2 id="phase-heading">Phase Progress</h2>
+        <span id="current-phase" class="meta">Current phase: -</span>
+      </div>
+      <ol id="phase-list" class="phase-list" role="list"></ol>
+    </section>
 
-      <section class="panel center">
-        <h2>Events</h2>
-        <div class="meta"><span id="event-count">0</span> events</div>
-        <div id="events-list" class="events"></div>
-      </section>
-
-      <section class="panel right">
-        <h2>Logs</h2>
-        <div class="tabs">
-          <button data-kind="planner_stdout" class="tab active">Planner Out</button>
-          <button data-kind="planner_stderr" class="tab">Planner Err</button>
-          <button data-kind="agent_stdout" class="tab">Agent Out</button>
-          <button data-kind="agent_stderr" class="tab">Agent Err</button>
-          <button data-kind="agent_result" class="tab">Result JSON</button>
+    <main class="layout" id="main-content">
+      <section class="panel timeline-pane" aria-labelledby="timeline-heading">
+        <div class="panel-head">
+          <h2 id="timeline-heading">Timeline</h2>
+          <div class="meta"><span id="event-count">0</span> events</div>
         </div>
-        <pre id="log-view" class="log"></pre>
+        <div class="timeline-actions">
+          <button id="load-more-btn">Load older events</button>
+          <button id="jump-latest-btn" hidden>Jump to latest</button>
+        </div>
+        <p id="follow-notice" class="notice" hidden>Following paused because you moved away from the latest events.</p>
+        <ul id="events-list" class="events" role="listbox" tabindex="0" aria-label="Run timeline events"></ul>
+      </section>
+
+      <section class="panel context-pane" aria-labelledby="context-heading">
+        <h2 id="context-heading" tabindex="-1">Active Context</h2>
+        <div class="context-grid">
+          <article class="context-card">
+            <h3>Active Step</h3>
+            <div id="active-step">No active step yet.</div>
+          </article>
+          <article class="context-card">
+            <h3>Next Action</h3>
+            <div id="next-action">Waiting for run selection.</div>
+          </article>
+        </div>
+
+        <article id="selected-event" class="selected-event" aria-live="polite">
+          <h3>Selected Timeline Event</h3>
+          <p class="meta">Select an event to inspect details.</p>
+        </article>
+      </section>
+
+      <section class="panel secondary-pane" aria-labelledby="secondary-heading">
+        <h2 id="secondary-heading">Artifacts & Logs</h2>
+        <div class="tabs" role="tablist" aria-label="Secondary views">
+          <button class="tab active" data-panel="artifacts" role="tab" aria-selected="true">Artifacts</button>
+          <button class="tab" data-panel="logs" role="tab" aria-selected="false">Logs</button>
+          <button class="tab" data-panel="result" role="tab" aria-selected="false">Result JSON</button>
+        </div>
+
+        <section id="artifacts-panel" class="secondary-panel" role="tabpanel">
+          <ul id="artifacts-list" class="artifact-list"></ul>
+        </section>
+
+        <section id="logs-panel" class="secondary-panel" role="tabpanel" hidden>
+          <div class="tabs log-tabs">
+            <button data-kind="planner_stdout" class="tab active">Planner Out</button>
+            <button data-kind="planner_stderr" class="tab">Planner Err</button>
+            <button data-kind="agent_stdout" class="tab">Agent Out</button>
+            <button data-kind="agent_stderr" class="tab">Agent Err</button>
+          </div>
+          <pre id="log-view" class="log"></pre>
+        </section>
+
+        <section id="result-panel" class="secondary-panel" role="tabpanel" hidden>
+          <pre id="result-view" class="log"></pre>
+        </section>
       </section>
     </main>
 
     <footer class="status">
       <span id="status-line">Loading…</span>
+      <span id="live-region" class="sr-only" aria-live="polite"></span>
     </footer>
     <script src="/app.js" type="module"></script>
   </body>

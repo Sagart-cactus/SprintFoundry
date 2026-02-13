@@ -1,0 +1,63 @@
+{
+  "classification": "ui_change",
+  "reasoning": "The ticket requires a structural redesign of the Run Monitor information architecture and interaction model (not backend/API changes), with strict UX behavior requirements around readability, progressive disclosure, responsiveness, accessibility, and jitter-free incremental updates.",
+  "steps": [
+    {
+      "step_number": 1,
+      "agent": "ui-ux",
+      "task": "Define the exact IA layout and responsive behavior for the new Run Monitor: top run header strip, phase progress bar, main split (timeline + active step/decision context), and secondary artifacts/logs treatment with mobile accordion/drawer behavior.",
+      "context_inputs": [
+        {
+          "type": "ticket"
+        }
+      ],
+      "depends_on": [],
+      "estimated_complexity": "medium"
+    },
+    {
+      "step_number": 2,
+      "agent": "developer",
+      "task": "Implement the IA and behavior changes in monitor/public/index.html, monitor/public/styles.css, and monitor/public/app.js while keeping monitor/server.mjs contracts unchanged; add summary-first timeline rows with payload toggles, load-more behavior, active step/next-action derivation, pause-live-updates + manual sync, and incremental DOM patching with state/scroll/focus preservation.",
+      "context_inputs": [
+        {
+          "type": "ticket"
+        }
+      ],
+      "depends_on": [
+        1
+      ],
+      "estimated_complexity": "high"
+    },
+    {
+      "step_number": 3,
+      "agent": "developer",
+      "task": "Create artifacts/handoff/dev-to-qa.md documenting IA decisions, incremental update strategy, preserved UI state rules, and explicit verification notes on jitter reduction approach.",
+      "context_inputs": [
+        {
+          "type": "ticket"
+        }
+      ],
+      "depends_on": [
+        2
+      ],
+      "estimated_complexity": "low"
+    },
+    {
+      "step_number": 4,
+      "agent": "qa",
+      "task": "Run UI/behavior regression and acceptance validation for project/run selection, refresh and auto-refresh, logs tab switching, event/plan loading, accessibility keyboard reachability, and responsive checks at 390x844; explicitly report whether jitter is resolved and what was measured.",
+      "context_inputs": [
+        {
+          "type": "ticket"
+        }
+      ],
+      "depends_on": [
+        2,
+        3
+      ],
+      "estimated_complexity": "medium"
+    }
+  ],
+  "parallel_groups": [],
+  "human_gates": []
+}

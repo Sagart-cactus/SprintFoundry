@@ -1,0 +1,19 @@
+{
+  "timestamp": "2026-02-13T17:56:02.990Z",
+  "runtime_command": "codex",
+  "runtime_mode": "local_process",
+  "runtime_args": [
+    "--sandbox",
+    "danger-full-access"
+  ],
+  "has_sandbox_flag": true,
+  "openai_model": "gpt-5.3-codex",
+  "openai_api_key_present": true,
+  "codex_home": "/var/folders/3h/qx4txpps3ps2sfy2bwc4_wlh0000gn/T/agentsdlc/sprintfoundry-self/run-1771004861240-76pypp/.codex-home",
+  "codex_home_present": true,
+  "skill_names": [
+    "accessibility-audit",
+    "responsive-layout",
+    "playwright"
+  ]
+}
