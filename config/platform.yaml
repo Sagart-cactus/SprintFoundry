@@ -86,6 +86,17 @@ defaults:
     provider: claude-code
     mode: local_process
 
+  # Codex runtime skill injection (workspace-scoped, optional)
+  codex_skills_enabled: false
+  codex_skill_catalog: {}
+  # Example:
+  # codex_skill_catalog:
+  #   web-design-guidelines:
+  #     path: vendor/codex-skills/web-design-guidelines
+  #
+  # codex_skills_per_agent:
+  #   ui-ux: [web-design-guidelines]
+
 # Global events directory for JSONL persistence
 events_dir: .agentsdlc/events
 

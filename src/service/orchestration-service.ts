@@ -568,9 +568,15 @@ export class OrchestrationService {
     ];
   }
 
-  private findParallelGroup(ready: PlanStep[], groups: number[][]): PlanStep[] {
+  private findParallelGroup(
+    ready: PlanStep[],
+    groups: Array<number[] | { step_numbers?: number[] }>
+  ): PlanStep[] {
     for (const group of groups) {
-      const matching = ready.filter((s) => group.includes(s.step_number));
+      const stepNumbers = Array.isArray(group)
+        ? group
+        : (group?.step_numbers ?? []);
+      const matching = ready.filter((s) => stepNumbers.includes(s.step_number));
       if (matching.length > 1) return matching;
     }
     return [ready[0]]; // no parallel group found, run first ready step

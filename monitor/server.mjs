@@ -1,0 +1,296 @@
+import http from "node:http";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { promises as fs } from "node:fs";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const publicDir = path.join(__dirname, "public");
+const runsRoot = process.env.AGENTSDLC_RUNS_ROOT ?? path.join(os.tmpdir(), "agentsdlc");
+const port = Number(process.env.MONITOR_PORT ?? 4310);
+
+const LOG_KIND_TO_FILE = {
+  planner_stdout: ".planner-runtime.stdout.log",
+  planner_stderr: ".planner-runtime.stderr.log",
+  agent_stdout: ".codex-runtime.stdout.log",
+  agent_stderr: ".codex-runtime.stderr.log",
+  agent_result: ".agent-result.json",
+};
+
+function sendJson(res, status, body) {
+  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
+  res.end(JSON.stringify(body));
+}
+
+function sendText(res, status, body) {
+  res.writeHead(status, { "Content-Type": "text/plain; charset=utf-8" });
+  res.end(body);
+}
+
+function parseJsonLines(raw) {
+  return raw
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+}
+
+function safeJoin(base, ...parts) {
+  const resolved = path.resolve(base, ...parts);
+  const resolvedBase = path.resolve(base);
+  if (!resolved.startsWith(resolvedBase + path.sep) && resolved !== resolvedBase) {
+    throw new Error("Invalid path traversal attempt");
+  }
+  return resolved;
+}
+
+async function listRuns() {
+  const projects = await fs.readdir(runsRoot, { withFileTypes: true }).catch(() => []);
+  const runs = [];
+
+  for (const projectDir of projects) {
+    if (!projectDir.isDirectory()) continue;
+    const projectId = projectDir.name;
+    const projectPath = path.join(runsRoot, projectId);
+    const runDirs = await fs.readdir(projectPath, { withFileTypes: true }).catch(() => []);
+
+    for (const runDir of runDirs) {
+      if (!runDir.isDirectory()) continue;
+      const runId = runDir.name;
+      if (!runId.startsWith("run-")) continue;
+      const runPath = path.join(projectPath, runId);
+      const summary = await loadRunSummary(projectId, runId, runPath);
+      runs.push(summary);
+    }
+  }
+
+  runs.sort((a, b) => (b.last_event_ts ?? 0) - (a.last_event_ts ?? 0));
+  return runs;
+}
+
+async function readEvents(runPath) {
+  const eventsPath = path.join(runPath, ".events.jsonl");
+  const raw = await fs.readFile(eventsPath, "utf-8").catch(() => "");
+  return parseJsonLines(raw);
+}
+
+function inferStatus(events) {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const t = events[i]?.event_type;
+    if (t === "task.completed") return "completed";
+    if (t === "task.failed") return "failed";
+    if (t === "step.started") return "executing";
+    if (t === "task.plan_generated") return "planning";
+    if (t === "task.created") return "pending";
+  }
+  return "unknown";
+}
+
+function buildStepStatus(plan, events) {
+  const byStep = new Map();
+  for (const step of plan?.steps ?? []) {
+    byStep.set(step.step_number, {
+      step_number: step.step_number,
+      agent: step.agent,
+      task: step.task,
+      status: "pending",
+      started_at: null,
+      completed_at: null,
+      tokens: null,
+    });
+  }
+
+  for (const evt of events) {
+    const data = evt?.data ?? {};
+    const stepNum = data.step;
+    if (typeof stepNum !== "number") continue;
+    if (!byStep.has(stepNum)) continue;
+    const st = byStep.get(stepNum);
+    if (evt.event_type === "step.started") {
+      st.status = "running";
+      st.started_at = evt.timestamp ?? null;
+    } else if (evt.event_type === "step.completed") {
+      st.status = "completed";
+      st.completed_at = evt.timestamp ?? null;
+      st.tokens = data.tokens ?? null;
+    } else if (evt.event_type === "step.failed") {
+      st.status = "failed";
+      st.completed_at = evt.timestamp ?? null;
+    }
+  }
+
+  return Array.from(byStep.values()).sort((a, b) => a.step_number - b.step_number);
+}
+
+async function loadRunSummary(projectId, runId, runPath) {
+  const events = await readEvents(runPath);
+  const planEvent = events.find((e) => e.event_type === "task.plan_generated");
+  const plan = planEvent?.data?.plan ?? null;
+  const steps = buildStepStatus(plan, events);
+  const last = events.at(-1);
+  return {
+    project_id: projectId,
+    run_id: runId,
+    status: inferStatus(events),
+    classification: plan?.classification ?? null,
+    step_count: plan?.steps?.length ?? 0,
+    steps,
+    started_at: events.find((e) => e.event_type === "task.created")?.timestamp ?? null,
+    last_event_type: last?.event_type ?? null,
+    last_event_ts: last?.timestamp ? Date.parse(last.timestamp) : null,
+    workspace_path: runPath,
+  };
+}
+
+async function loadRun(projectId, runId) {
+  const runPath = safeJoin(runsRoot, projectId, runId);
+  const summary = await loadRunSummary(projectId, runId, runPath);
+  const events = await readEvents(runPath);
+  const planEvent = events.find((e) => e.event_type === "task.plan_generated");
+  return {
+    ...summary,
+    plan: planEvent?.data?.plan ?? null,
+  };
+}
+
+async function readLogText(projectId, runId, kind, lines = 400) {
+  const file = LOG_KIND_TO_FILE[kind];
+  if (!file) return "";
+  const runPath = safeJoin(runsRoot, projectId, runId);
+  const logPath = path.join(runPath, file);
+  const raw = await fs.readFile(logPath, "utf-8").catch(() => "");
+  const allLines = raw.split("\n");
+  return allLines.slice(Math.max(0, allLines.length - lines)).join("\n");
+}
+
+async function listFiles(projectId, runId, root = "") {
+  const runPath = safeJoin(runsRoot, projectId, runId);
+  const start = safeJoin(runPath, root || ".");
+  const out = [];
+
+  async function walk(current) {
+    const ents = await fs.readdir(current, { withFileTypes: true }).catch(() => []);
+    for (const ent of ents) {
+      const abs = path.join(current, ent.name);
+      const rel = path.relative(runPath, abs).replace(/\\/g, "/");
+      if (ent.isDirectory()) {
+        if (rel.startsWith(".git")) continue;
+        await walk(abs);
+      } else {
+        const stat = await fs.stat(abs).catch(() => null);
+        if (!stat) continue;
+        out.push({
+          path: rel,
+          size: stat.size,
+          mtime_ms: stat.mtimeMs,
+        });
+        if (out.length >= 1000) return;
+      }
+    }
+  }
+
+  await walk(start);
+  out.sort((a, b) => b.mtime_ms - a.mtime_ms);
+  return out;
+}
+
+async function serveStatic(res, pathname) {
+  const filePath = pathname === "/" ? path.join(publicDir, "index.html") : safeJoin(publicDir, pathname.slice(1));
+  const contentType = filePath.endsWith(".css")
+    ? "text/css; charset=utf-8"
+    : filePath.endsWith(".js")
+      ? "application/javascript; charset=utf-8"
+      : "text/html; charset=utf-8";
+  const body = await fs.readFile(filePath, "utf-8").catch(() => null);
+  if (body === null) {
+    sendText(res, 404, "Not found");
+    return;
+  }
+  res.writeHead(200, { "Content-Type": contentType });
+  res.end(body);
+}
+
+const server = http.createServer(async (req, res) => {
+  const reqUrl = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+  const pathname = reqUrl.pathname;
+
+  try {
+    if (pathname === "/api/runs") {
+      const runs = await listRuns();
+      sendJson(res, 200, { runs, runs_root: runsRoot });
+      return;
+    }
+
+    if (pathname === "/api/run") {
+      const project = reqUrl.searchParams.get("project");
+      const run = reqUrl.searchParams.get("run");
+      if (!project || !run) {
+        sendJson(res, 400, { error: "Missing project/run query params" });
+        return;
+      }
+      const data = await loadRun(project, run);
+      sendJson(res, 200, data);
+      return;
+    }
+
+    if (pathname === "/api/events") {
+      const project = reqUrl.searchParams.get("project");
+      const run = reqUrl.searchParams.get("run");
+      const limit = Number(reqUrl.searchParams.get("limit") ?? "300");
+      if (!project || !run) {
+        sendJson(res, 400, { error: "Missing project/run query params" });
+        return;
+      }
+      const runPath = safeJoin(runsRoot, project, run);
+      const events = await readEvents(runPath);
+      sendJson(res, 200, { events: events.slice(Math.max(0, events.length - limit)) });
+      return;
+    }
+
+    if (pathname === "/api/log") {
+      const project = reqUrl.searchParams.get("project");
+      const run = reqUrl.searchParams.get("run");
+      const kind = reqUrl.searchParams.get("kind");
+      const lines = Number(reqUrl.searchParams.get("lines") ?? "400");
+      if (!project || !run || !kind) {
+        sendJson(res, 400, { error: "Missing project/run/kind query params" });
+        return;
+      }
+      const text = await readLogText(project, run, kind, lines);
+      sendText(res, 200, text);
+      return;
+    }
+
+    if (pathname === "/api/files") {
+      const project = reqUrl.searchParams.get("project");
+      const run = reqUrl.searchParams.get("run");
+      const root = reqUrl.searchParams.get("root") ?? "";
+      if (!project || !run) {
+        sendJson(res, 400, { error: "Missing project/run query params" });
+        return;
+      }
+      const files = await listFiles(project, run, root);
+      sendJson(res, 200, { files });
+      return;
+    }
+
+    await serveStatic(res, pathname);
+  } catch (err) {
+    sendJson(res, 500, {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+server.listen(port, "127.0.0.1", () => {
+  console.log(`[monitor] Run Monitor listening at http://127.0.0.1:${port}`);
+  console.log(`[monitor] Watching runs under: ${runsRoot}`);
+});

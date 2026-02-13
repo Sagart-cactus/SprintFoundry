@@ -34,6 +34,8 @@ export interface RuntimeStepContext {
   containerResources?: ContainerResources;
   runtime: RuntimeConfig;
   containerImage?: string;
+  codexHomeDir?: string;
+  codexSkillNames?: string[];
 }
 
 export interface RuntimeStepResult {

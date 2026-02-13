@@ -107,6 +107,10 @@ export interface RuntimeConfig {
   env?: Record<string, string>;
 }
 
+export interface CodexSkillDefinition {
+  path: string; // repo-relative or absolute path to skill directory containing SKILL.md
+}
+
 export interface PlatformConfig {
   defaults: {
     model_per_agent: Record<string, ModelConfig>;
@@ -117,6 +121,9 @@ export interface PlatformConfig {
     container_resources?: ContainerResources;
     runtime_per_agent?: Record<string, RuntimeConfig>;
     planner_runtime?: RuntimeConfig;
+    codex_skills_enabled?: boolean;
+    codex_skill_catalog?: Record<string, CodexSkillDefinition>;
+    codex_skills_per_agent?: Record<string, string[]>;
   };
   rules: PlatformRule[];
   agent_definitions: AgentDefinition[];
@@ -137,6 +144,9 @@ export interface ProjectConfig {
   agents?: string[];    // agent IDs this project uses (filters the catalog)
   runtime_overrides?: Partial<Record<string, RuntimeConfig>>;
   planner_runtime_override?: RuntimeConfig;
+  codex_skills_enabled?: boolean;
+  codex_skill_catalog_overrides?: Record<string, CodexSkillDefinition>;
+  codex_skills_overrides?: Record<string, string[]>;
 }
 
 export interface ModelConfig {

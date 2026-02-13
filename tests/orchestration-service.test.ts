@@ -393,6 +393,45 @@ describe("OrchestrationService", () => {
     expect(mockAgentRunner.run.mock.calls.length).toBeGreaterThanOrEqual(3);
   });
 
+  it("parallel group supports object format with step_numbers", async () => {
+    const plan = makePlan({
+      steps: [
+        makeStep({
+          step_number: 1,
+          agent: "developer",
+          task: "Build frontend",
+        }),
+        makeStep({
+          step_number: 2,
+          agent: "developer",
+          task: "Build backend",
+        }),
+        makeStep({
+          step_number: 3,
+          agent: "qa",
+          task: "Test all",
+          depends_on: [1, 2],
+        }),
+      ],
+    });
+    // Codex planner may emit object groups instead of raw number arrays.
+    (plan as any).parallel_groups = [{ group_id: "g1", step_numbers: [1, 2] }];
+
+    mockOrchestratorAgent.generatePlan.mockResolvedValue(plan);
+    mockAgentRunner.run.mockResolvedValue({
+      agentResult: makeResult(),
+      tokens_used: 100,
+      cost_usd: 0.01,
+      duration_seconds: 5,
+      container_id: "local-1",
+    });
+
+    const run = await service.handleTask("p1", "prompt", "Build it");
+
+    expect(run.status).toBe("completed");
+    expect(mockAgentRunner.run.mock.calls.length).toBeGreaterThanOrEqual(3);
+  });
+
   it("deadlock detection when no steps are ready", async () => {
     // Create a circular dependency that causes deadlock
     const plan = makePlan({

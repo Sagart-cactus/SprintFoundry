@@ -67,6 +67,14 @@ api_keys:
 # planner_runtime_override:
 #   provider: codex
 #   mode: local_process
+#
+# # Codex skill overrides (workspace-scoped, no global install required)
+# # codex_skills_enabled: true
+# # codex_skill_catalog_overrides:
+# #   web-design-guidelines:
+# #     path: vendor/codex-skills/web-design-guidelines
+# # codex_skills_overrides:
+# #   ui-ux: [web-design-guidelines]
 
 # ----- Branch Strategy -----
 branch_strategy:

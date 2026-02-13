@@ -359,7 +359,10 @@ describe("AgentRunner", () => {
         },
       })
     );
-    (runner as any).prepareWorkspace = vi.fn().mockResolvedValue(undefined);
+    (runner as any).prepareWorkspace = vi.fn().mockResolvedValue({
+      codexHomeDir: "/tmp/codex-home-test",
+      codexSkillNames: ["web-design-guidelines"],
+    });
     (runner as any).readAgentResult = vi.fn().mockResolvedValue(makeResult());
 
     const result = await runner.run(makeRunConfig({ agent: "developer" }));
@@ -369,7 +372,58 @@ describe("AgentRunner", () => {
       expect.any(Array),
       expect.any(Object)
     );
+    const spawnOpts = (mockSpawn as any).mock.calls[0][2];
+    expect(spawnOpts.env.CODEX_HOME).toBe("/tmp/codex-home-test");
     expect(result.tokens_used).toBe(321);
+  });
+
+  it("prepareWorkspace stages codex skills and appends AGENTS.md skill section", async () => {
+    const workspacePath = path.join(tmpDir, "workspace-codex-skill");
+    await fs.mkdir(workspacePath, { recursive: true });
+
+    const skillSource = path.join(tmpDir, "skills", "web-design-guidelines");
+    await fs.mkdir(skillSource, { recursive: true });
+    await fs.writeFile(path.join(skillSource, "SKILL.md"), "# Skill", "utf-8");
+    await fs.writeFile(path.join(skillSource, "notes.md"), "helper", "utf-8");
+
+    const runner = new AgentRunner(
+      makePlatformConfig({
+        defaults: {
+          ...makePlatformConfig().defaults,
+          codex_skills_enabled: true,
+          codex_skill_catalog: {
+            "web-design-guidelines": { path: skillSource },
+          },
+          codex_skills_per_agent: {
+            developer: ["web-design-guidelines"],
+          },
+        },
+      }),
+      makeProjectConfig()
+    );
+
+    const prep = await (runner as any).prepareWorkspace(
+      makeRunConfig({ agent: "developer", workspacePath }),
+      { provider: "codex", mode: "local_process" }
+    );
+
+    expect(prep.codexHomeDir).toBe(path.join(workspacePath, ".codex-home"));
+    expect(prep.codexSkillNames).toEqual(["web-design-guidelines"]);
+    await expect(
+      fs.access(
+        path.join(
+          workspacePath,
+          ".codex-home",
+          "skills",
+          "web-design-guidelines",
+          "SKILL.md"
+        )
+      )
+    ).resolves.toBeUndefined();
+
+    const agentsMd = await fs.readFile(path.join(workspacePath, "AGENTS.md"), "utf-8");
+    expect(agentsMd).toContain("## Runtime Skills");
+    expect(agentsMd).toContain("web-design-guidelines");
   });
 
   it("project runtime override takes precedence over platform runtime defaults", async () => {
