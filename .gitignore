@@ -26,3 +26,4 @@ coverage/
 .agent-task.md
 .agent-result.json
 .agent-profile.md
+artifacts/
