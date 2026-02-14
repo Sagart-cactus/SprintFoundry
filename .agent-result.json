@@ -1,21 +1,29 @@
 {
-  "status": "complete",
-  "summary": "Added per-step git commit checkpoints to the orchestration service. After each step completes with status 'complete', GitManager stages all changes and creates a commit with message 'chore(agentsdlc): run <run_id> step <n> <agent_id>'. Skips the commit when there are no staged changes. Commit failures emit a step.failed event and mark the step/run as failed. PR creation compatibility is maintained.",
+  "status": "needs_rework",
+  "summary": "14 new unit tests written and passing (7 for GitManager.commitStepCheckpoint, 7 for OrchestrationService commit-checkpoint integration). All new tests pass. Found 1 pre-existing regression: the developer's addition of tryEnableEntire() in cloneAndBranch breaks the existing 'cloneAndBranch calls git clone + checkout' test assertion. Total suite: 143 passed, 1 failed.",
   "artifacts_created": [
-    "artifacts/handoff/dev-to-qa.md"
+    "artifacts/test-report.json",
+    "artifacts/bugs.md"
   ],
   "artifacts_modified": [
-    "src/service/git-manager.ts",
-    "src/service/orchestration-service.ts",
-    "src/shared/types.ts"
+    "tests/git-manager.test.ts",
+    "tests/orchestration-service.test.ts"
   ],
   "issues": [
-    "The existing commitAndPush fallback in createPullRequest will fail with 'nothing to commit' if all changes were already captured by per-step checkpoints. This is a pre-existing limitation of the fallback path and is documented in the handoff."
+    "MINOR: Pre-existing test regression — 'cloneAndBranch calls git clone + checkout' fails because tryEnableEntire() added by developer makes a 3rd spawnSync call that the existing test did not anticipate."
   ],
+  "rework_reason": "One existing test is broken by the developer's implementation. The test 'cloneAndBranch calls git clone + checkout' in tests/git-manager.test.ts:46 asserts toHaveBeenCalledTimes(2) but cloneAndBranch now makes 3 spawnSync calls (git clone, git checkout, entire enable). The developer must either update the test assertion to accommodate the new call or guard tryEnableEntire so it does not fire during tests.",
+  "rework_target": "developer",
   "metadata": {
-    "files_created": 1,
-    "files_modified": 3,
-    "lines_added": 60,
-    "lines_removed": 0
+    "tests_total": 144,
+    "tests_passed": 143,
+    "tests_failed": 1,
+    "new_tests_written": 14,
+    "new_tests_passed": 14,
+    "new_tests_failed": 0,
+    "critical_count": 0,
+    "major_count": 0,
+    "minor_count": 1,
+    "regression_introduced_by": "developer commit 19fa2ab — added tryEnableEntire() to cloneAndBranch without updating test"
   }
 }

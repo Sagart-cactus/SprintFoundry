@@ -1,0 +1,39 @@
+{
+  "summary": {
+    "total": 144,
+    "passed": 143,
+    "failed": 1,
+    "skipped": 0
+  },
+  "new_tests_added": {
+    "git_manager_commitStepCheckpoint": 7,
+    "orchestration_service_commit_checkpoint": 7,
+    "total_new": 14
+  },
+  "new_tests_result": {
+    "passed": 14,
+    "failed": 0
+  },
+  "failures": [
+    {
+      "test": "GitManager > cloneAndBranch calls git clone + checkout",
+      "file": "tests/git-manager.test.ts",
+      "line": 46,
+      "error": "expected \"vi.fn()\" to be called 2 times, but got 3 times",
+      "severity": "minor",
+      "root_cause": "Pre-existing regression: the developer's commit added tryEnableEntire() to cloneAndBranch, which makes a third spawnSync call (to run 'entire enable'). The existing test asserted exactly 2 calls (git clone + git checkout) and was not updated to account for the new call.",
+      "suggestion": "Update the test to expect 3 calls (or use toHaveBeenCalledWith checks rather than toHaveBeenCalledTimes), OR have the developer conditionally guard the tryEnableEntire call so it doesn't fire in test mode."
+    }
+  ],
+  "regressions": [
+    {
+      "test": "GitManager > cloneAndBranch calls git clone + checkout",
+      "file": "tests/git-manager.test.ts",
+      "introduced_by": "Developer commit (19fa2ab) that added tryEnableEntire() to cloneAndBranch without updating the existing test assertion",
+      "severity": "minor"
+    }
+  ],
+  "coverage": {
+    "note": "Coverage collection not configured in vitest.config.ts; raw counts not available. New tests cover all identified code paths for the per-step commit feature."
+  }
+}

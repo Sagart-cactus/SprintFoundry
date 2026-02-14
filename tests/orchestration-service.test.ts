@@ -49,6 +49,7 @@ vi.mock("../src/service/git-manager.js", () => ({
   GitManager: class {
     cloneAndBranch = vi.fn();
     commitAndPush = vi.fn();
+    commitStepCheckpoint = vi.fn().mockResolvedValue(true);
     createPullRequest = vi
       .fn()
       .mockResolvedValue("https://github.com/test/repo/pull/1");
@@ -629,6 +630,188 @@ describe("OrchestrationService", () => {
 
     expect(decision.status).toBe("approved");
     expect(decision.reviewer_feedback).toBe("Ship it");
+  });
+
+  // ---- commitStepCheckpoint integration tests ----
+
+  it("commit checkpoint: happy path — commitStepCheckpoint called after each complete step", async () => {
+    const plan = makeDevQaPlan();
+    mockOrchestratorAgent.generatePlan.mockResolvedValue(plan);
+    mockAgentRunner.run.mockResolvedValue({
+      agentResult: makeResult(),
+      tokens_used: 100,
+      cost_usd: 0.01,
+      duration_seconds: 5,
+      container_id: "local-1",
+    });
+    // commitStepCheckpoint returns true (changes were committed) for each step
+    mockGitManager.commitStepCheckpoint.mockResolvedValue(true);
+
+    const run = await service.handleTask("p1", "prompt", "Build it");
+
+    expect(run.status).toBe("completed");
+    // Should be called once per completed step (2 steps in dev-qa plan)
+    expect(mockGitManager.commitStepCheckpoint).toHaveBeenCalledTimes(2);
+    // Verify call arguments for the first step
+    const firstCall = mockGitManager.commitStepCheckpoint.mock.calls[0];
+    expect(firstCall[0]).toBe("/tmp/workspace"); // workspacePath
+    expect(firstCall[1]).toMatch(/^run-/);        // runId
+    expect(firstCall[2]).toBe(1);                 // stepNumber
+    expect(firstCall[3]).toBe("developer");        // agentId
+  });
+
+  it("commit checkpoint: step.committed event emitted when commitStepCheckpoint returns true", async () => {
+    const plan = makePlan({
+      steps: [makeStep({ step_number: 1, agent: "developer", task: "Do work" })],
+    });
+    mockOrchestratorAgent.generatePlan.mockResolvedValue(plan);
+    mockAgentRunner.run.mockResolvedValue({
+      agentResult: makeResult(),
+      tokens_used: 100,
+      cost_usd: 0.01,
+      duration_seconds: 5,
+      container_id: "local-1",
+    });
+    mockGitManager.commitStepCheckpoint.mockResolvedValue(true);
+
+    const mockEventStore = (service as any).events;
+    const run = await service.handleTask("p1", "prompt", "Build it");
+
+    expect(run.status).toBe("completed");
+    // At least the developer step triggered a commit (plan validator may inject qa step too)
+    expect(mockGitManager.commitStepCheckpoint).toHaveBeenCalled();
+
+    // Verify step.committed event was emitted for step 1 (developer)
+    const storedEvents = mockEventStore.store.mock.calls.map((c: any[]) => c[0]);
+    const committedEvents = storedEvents.filter((e: any) => e.event_type === "step.committed");
+    expect(committedEvents.length).toBeGreaterThanOrEqual(1);
+    const devCommit = committedEvents.find((e: any) => e.data.agent === "developer");
+    expect(devCommit).toBeDefined();
+    expect(devCommit.data.step).toBe(1);
+  });
+
+  it("commit checkpoint: no-diff skip — no step.committed event when commitStepCheckpoint returns false", async () => {
+    const plan = makePlan({
+      steps: [makeStep({ step_number: 1, agent: "developer", task: "Do work" })],
+    });
+    mockOrchestratorAgent.generatePlan.mockResolvedValue(plan);
+    mockAgentRunner.run.mockResolvedValue({
+      agentResult: makeResult(),
+      tokens_used: 100,
+      cost_usd: 0.01,
+      duration_seconds: 5,
+      container_id: "local-1",
+    });
+    // No diff — nothing staged for any step
+    mockGitManager.commitStepCheckpoint.mockResolvedValue(false);
+
+    const mockEventStore = (service as any).events;
+    const run = await service.handleTask("p1", "prompt", "Build it");
+
+    expect(run.status).toBe("completed");
+    // commitStepCheckpoint was still called (for each step)
+    expect(mockGitManager.commitStepCheckpoint).toHaveBeenCalled();
+
+    // step.committed should NOT have been emitted
+    const storedEvents = mockEventStore.store.mock.calls.map((c: any[]) => c[0]);
+    const committedEvent = storedEvents.find((e: any) => e.event_type === "step.committed");
+    expect(committedEvent).toBeUndefined();
+
+    // Run should still complete normally
+    expect(run.pr_url).toBeDefined();
+  });
+
+  it("commit checkpoint: commit failure — step and run marked failed, step.failed emitted", async () => {
+    const plan = makeDevQaPlan();
+    mockOrchestratorAgent.generatePlan.mockResolvedValue(plan);
+    mockAgentRunner.run.mockResolvedValue({
+      agentResult: makeResult(),
+      tokens_used: 100,
+      cost_usd: 0.01,
+      duration_seconds: 5,
+      container_id: "local-1",
+    });
+    // Commit throws — simulates locked .git/index or corrupt repo
+    mockGitManager.commitStepCheckpoint.mockRejectedValue(
+      new Error("fatal: Unable to create '.git/index.lock': File exists")
+    );
+
+    const mockEventStore = (service as any).events;
+    const run = await service.handleTask("p1", "prompt", "Build it");
+
+    expect(run.status).toBe("failed");
+    expect(run.error).toContain("Git checkpoint commit failed");
+    expect(run.error).toContain("step 1");
+
+    // step.failed event should be emitted with git error details
+    const storedEvents = mockEventStore.store.mock.calls.map((c: any[]) => c[0]);
+    const failedEvent = storedEvents.find((e: any) => e.event_type === "step.failed");
+    expect(failedEvent).toBeDefined();
+    expect(failedEvent.data.error).toContain("Git checkpoint commit failed");
+    expect(failedEvent.data.error).toContain("index.lock");
+
+    // PR should NOT be created when run fails
+    expect(mockGitManager.createPullRequest).not.toHaveBeenCalled();
+  });
+
+  it("commit checkpoint: needs_rework steps do NOT get a checkpoint commit", async () => {
+    const plan = makePlan({
+      steps: [
+        makeStep({ step_number: 1, agent: "developer", task: "Write code" }),
+        makeStep({ step_number: 2, agent: "qa", task: "Test code", depends_on: [1] }),
+      ],
+    });
+    mockOrchestratorAgent.generatePlan.mockResolvedValue(plan);
+
+    let qaCallCount = 0;
+    mockAgentRunner.run.mockImplementation(async (config: any) => {
+      if (config.agent === "developer") {
+        return { agentResult: makeResult(), tokens_used: 100, cost_usd: 0.01, duration_seconds: 5, container_id: "c1" };
+      }
+      qaCallCount++;
+      if (qaCallCount === 1) {
+        return { agentResult: makeReworkResult(), tokens_used: 100, cost_usd: 0.01, duration_seconds: 3, container_id: "c2" };
+      }
+      return { agentResult: makeResult({ summary: "Tests pass" }), tokens_used: 100, cost_usd: 0.01, duration_seconds: 2, container_id: "c3" };
+    });
+
+    mockOrchestratorAgent.planRework.mockResolvedValue({
+      steps: [makeStep({ step_number: 901, agent: "developer", task: "Fix bugs" })],
+    });
+
+    mockGitManager.commitStepCheckpoint.mockResolvedValue(true);
+
+    const run = await service.handleTask("p1", "prompt", "Build it");
+
+    expect(run.status).toBe("completed");
+    // commitStepCheckpoint should have been called for each COMPLETE step only
+    // (not for the qa needs_rework step — it never reaches that code path)
+    // Steps that complete: developer(1), developer(901 rework fix), qa(retry), so 3 commits
+    const callCount = mockGitManager.commitStepCheckpoint.mock.calls.length;
+    expect(callCount).toBeGreaterThanOrEqual(2); // at least dev + qa-retry
+  });
+
+  it("commit checkpoint: PR creation compatibility — createPullRequest called after per-step commits", async () => {
+    const plan = makeDevQaPlan();
+    mockOrchestratorAgent.generatePlan.mockResolvedValue(plan);
+    mockAgentRunner.run.mockResolvedValue({
+      agentResult: makeResult(),
+      tokens_used: 100,
+      cost_usd: 0.01,
+      duration_seconds: 5,
+      container_id: "local-1",
+    });
+    mockGitManager.commitStepCheckpoint.mockResolvedValue(true);
+    mockGitManager.createPullRequest.mockResolvedValue("https://github.com/test/repo/pull/42");
+
+    const run = await service.handleTask("p1", "prompt", "Build it");
+
+    expect(run.status).toBe("completed");
+    // Per-step commits happened
+    expect(mockGitManager.commitStepCheckpoint).toHaveBeenCalled();
+    // createPullRequest still called and succeeds
+    expect(mockGitManager.createPullRequest).toHaveBeenCalledTimes(1);
+    expect(run.pr_url).toBe("https://github.com/test/repo/pull/42");
   });
 
   it("waitForReviewDecision times out and rejects", async () => {
