@@ -40,6 +40,28 @@ export class GitManager {
     return branchName;
   }
 
+  async commitStepCheckpoint(
+    workspacePath: string,
+    runId: string,
+    stepNumber: number,
+    agentId: string
+  ): Promise<boolean> {
+    this.exec(["git", "add", "-A"], workspacePath);
+
+    // Check whether there is anything staged to commit
+    const diffResult = this.execRaw(["git", "diff", "--staged", "--quiet"], workspacePath);
+    if (diffResult.status === 0) {
+      // Exit code 0 means no diff — nothing to commit
+      console.log(`[git] Step ${stepNumber} checkpoint: no changes to commit, skipping.`);
+      return false;
+    }
+
+    const message = `chore(agentsdlc): run ${runId} step ${stepNumber} ${agentId}`;
+    this.exec(["git", "commit", "-m", message], workspacePath);
+    console.log(`[git] Step ${stepNumber} checkpoint committed: "${message}"`);
+    return true;
+  }
+
   async commitAndPush(
     workspacePath: string,
     message: string
@@ -170,5 +192,26 @@ export class GitManager {
       );
     }
     return result.stdout ?? "";
+  }
+
+  // Like exec, but returns the raw result without throwing on non-zero exit codes.
+  private execRaw(args: string[], cwd: string): { status: number | null; stdout: string } {
+    const [command, ...commandArgs] = args;
+    const result = spawnSync(command, commandArgs, {
+      cwd,
+      encoding: "utf-8",
+      timeout: 60_000,
+      env: {
+        ...process.env,
+        GIT_SSH_COMMAND: this.repoConfig.ssh_key_path
+          ? `ssh -i ${this.repoConfig.ssh_key_path} -o StrictHostKeyChecking=no`
+          : undefined,
+      },
+    });
+
+    if (result.error) {
+      throw result.error;
+    }
+    return { status: result.status, stdout: result.stdout ?? "" };
   }
 }

@@ -330,6 +330,7 @@ export type EventType =
   | "task.failed"
   | "step.started"
   | "step.completed"
+  | "step.committed"
   | "step.failed"
   | "step.rework_triggered"
   | "agent.spawned"

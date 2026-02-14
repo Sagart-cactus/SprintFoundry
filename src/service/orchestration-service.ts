@@ -359,6 +359,34 @@ export class OrchestrationService {
           tokens: result.tokens_used,
           artifacts: result.agentResult.artifacts_created,
         });
+
+        // Create a git checkpoint commit for this step
+        try {
+          const committed = await this.git.commitStepCheckpoint(
+            workspacePath,
+            run.run_id,
+            step.step_number,
+            step.agent
+          );
+          if (committed) {
+            await this.emitEvent(run.run_id, "step.committed", {
+              step: step.step_number,
+              agent: step.agent,
+            });
+          }
+        } catch (commitError) {
+          const message = commitError instanceof Error ? commitError.message : String(commitError);
+          stepExec.status = "failed";
+          stepExec.completed_at = new Date();
+          await this.emitEvent(run.run_id, "step.failed", {
+            step: step.step_number,
+            error: `Git checkpoint commit failed: ${message}`,
+          });
+          run.status = "failed";
+          run.error = `Git checkpoint commit failed at step ${step.step_number}: ${message}`;
+          return "failed";
+        }
+
         return "completed";
       }
 

@@ -1,0 +1,21 @@
+{
+  "status": "complete",
+  "summary": "Added per-step git commit checkpoints to the orchestration service. After each step completes with status 'complete', GitManager stages all changes and creates a commit with message 'chore(agentsdlc): run <run_id> step <n> <agent_id>'. Skips the commit when there are no staged changes. Commit failures emit a step.failed event and mark the step/run as failed. PR creation compatibility is maintained.",
+  "artifacts_created": [
+    "artifacts/handoff/dev-to-qa.md"
+  ],
+  "artifacts_modified": [
+    "src/service/git-manager.ts",
+    "src/service/orchestration-service.ts",
+    "src/shared/types.ts"
+  ],
+  "issues": [
+    "The existing commitAndPush fallback in createPullRequest will fail with 'nothing to commit' if all changes were already captured by per-step checkpoints. This is a pre-existing limitation of the fallback path and is documented in the handoff."
+  ],
+  "metadata": {
+    "files_created": 1,
+    "files_modified": 3,
+    "lines_added": 60,
+    "lines_removed": 0
+  }
+}
