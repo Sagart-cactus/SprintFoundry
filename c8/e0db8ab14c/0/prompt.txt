@@ -1,0 +1,67 @@
+Implement the following plan:
+
+# Create SprintFoundry Self-Dev Project Config (Claude + Linear)
+
+## Context
+Create a new project config for running SprintFoundry against itself, using Claude Code for all agents and Linear as the ticket source. This replaces the current `project.yaml` which uses Codex/OpenAI.
+
+## Change
+Create `config/project-sprintfoundry-claude.yaml` with:
+- Target repo: `git@github.com:Sagart-cactus/SprintFoundry.git`
+- All 9 agents using Claude (claude-code runtime, no model overrides = platform default claude-sonnet-4-5)
+- Linear as ticket source
+- Frontend design + js-nextjs plugins for ui-ux/developer/qa agents
+
+## File to Create
+`config/project-sprintfoundry-claude.yaml`
+
+```yaml
+project_id: sprintfoundry-claude
+name: SprintFoundry (Claude)
+
+stack: js
+
+agents:
+  - product
+  - architect
+  - developer
+  - qa
+  - security
+  - ui-ux
+  - devops
+
+repo:
+  url: git@github.com:Sagart-cactus/SprintFoundry.git
+  default_branch: main
+
+api_keys:
+  anthropic: ${AGENTSDLC_ANTHROPIC_KEY}
+
+branch_strategy:
+  prefix: feat/
+  include_ticket_id: true
+  naming: kebab-case
+
+integrations:
+  ticket_source:
+    type: linear
+    config:
+      api_key: ${LINEAR_API_KEY}
+
+rules: []
+```
+
+No `model_overrides` or `runtime_overrides` needed — platform defaults use `claude-sonnet-4-5-20250929` and `claude-code`/`local_process` for all agents.
+
+## Usage
+```bash
+pnpm dev -- --source linear --ticket LIN-423 --project sprintfoundry-claude
+```
+
+## Verification
+```bash
+pnpm dev -- validate --project sprintfoundry-claude
+```
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/trivedi/.REDACTED.jsonl
