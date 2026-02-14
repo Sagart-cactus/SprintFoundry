@@ -1,10 +1,9 @@
 {
   "status": "complete",
-  "summary": "Re-ran the full test suite after the developer's regression fix. All 144 tests pass (143 previously passing + the previously failing cloneAndBranch test now fixed). The 14 new commit-checkpoint unit tests continue to pass. No failures, no regressions. artifacts/test-report.json and artifacts/bugs.md updated to reflect the clean run.",
+  "summary": "All 144 tests pass. Per-step git commit checkpoint implementation fully validated against all 4 acceptance criteria: (1) multi-step run produces one commit per successful changing step, (2) no-diff steps are skipped without empty commits, (3) commit failures surface in step.failed events and mark run.status=failed, (4) PR creation via gh CLI works correctly after per-step commits. 13 targeted commit-checkpoint tests (7 unit in git-manager.test.ts + 6 integration in orchestration-service.test.ts) all pass. No regressions detected.",
   "artifacts_created": [],
   "artifacts_modified": [
-    "artifacts/test-report.json",
-    "artifacts/bugs.md"
+    "artifacts/test-report.json"
   ],
   "issues": [],
   "metadata": {
@@ -12,8 +11,9 @@
     "tests_passed": 144,
     "tests_failed": 0,
     "test_files": 15,
-    "new_commit_checkpoint_tests": 14,
-    "regression_verified_fixed": "cloneAndBranch calls git clone + checkout (tests/git-manager.test.ts:46)",
-    "run_duration_seconds": 2.78
+    "commit_checkpoint_tests_unit": 7,
+    "commit_checkpoint_tests_integration": 6,
+    "acceptance_criteria_all_passed": true,
+    "run_duration_seconds": 2.79
   }
 }

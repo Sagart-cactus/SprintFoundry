@@ -7,23 +7,29 @@
   },
   "new_tests_added": {
     "git_manager_commitStepCheckpoint": 7,
-    "orchestration_service_commit_checkpoint": 7,
-    "total_new": 14
+    "orchestration_service_commit_checkpoint": 6,
+    "total_new": 13
   },
   "new_tests_result": {
-    "passed": 14,
+    "passed": 13,
     "failed": 0
   },
   "failures": [],
   "regressions": [],
+  "acceptance_criteria_verified": {
+    "multi_step_one_commit_per_step": "PASS — orchestration-service happy path confirms commitStepCheckpoint called once per completed step (2 calls for 2-step dev+qa plan)",
+    "no_diff_no_empty_commit": "PASS — git-manager no-diff test confirms return false + no git commit call; orchestration-service confirms no step.committed event emitted",
+    "commit_failure_surfaces_in_events_and_run_status": "PASS — orchestration-service commit failure test confirms run.status=failed, run.error contains 'Git checkpoint commit failed at step 1', and step.failed event with error detail is emitted; PR is not created",
+    "pr_creation_still_works_with_per_step_commits": "PASS — both git-manager and orchestration-service PR compat tests confirm gh pr create succeeds normally after per-step commits"
+  },
   "coverage": {
     "note": "Coverage collection not configured in vitest.config.ts; raw counts not available. New tests cover all identified code paths for the per-step commit feature."
   },
   "run_metadata": {
     "date": "2026-02-15",
     "test_runner": "vitest v4.0.18",
-    "duration_seconds": 2.78,
+    "duration_seconds": 2.79,
     "test_files": 15,
-    "fix_verified": "cloneAndBranch calls git clone + checkout now expects 3 spawnSync calls (clone + checkout + tryEnableEntire). All 144 tests pass."
+    "qa_verified": true
   }
 }
