@@ -8,6 +8,7 @@ export class CodexRuntime implements AgentRuntime {
     if (config.runtime.mode !== "local_process") {
       throw new Error("Codex runtime currently supports only local_process mode");
     }
+    await fs.mkdir(config.workspacePath, { recursive: true });
 
     const prompt = [
       "You are executing one agent step in SprintFoundry.",
@@ -32,28 +33,34 @@ export class CodexRuntime implements AgentRuntime {
       ...(config.runtime.env ?? {}),
     };
 
-    // Runtime-auth debugging without exposing secrets.
-    const debugPath = path.join(config.workspacePath, ".codex-runtime.debug.json");
-    await fs.writeFile(
-      debugPath,
-      JSON.stringify(
-        {
-          timestamp: new Date().toISOString(),
-          runtime_command: config.runtime.command ?? "codex",
-          runtime_mode: config.runtime.mode,
-          runtime_args: runtimeArgs,
-          has_sandbox_flag: hasSandboxFlag,
-          openai_model: env.OPENAI_MODEL ?? "",
-          openai_api_key_present: Boolean(env.OPENAI_API_KEY),
-          codex_home: env.CODEX_HOME ?? "",
-          codex_home_present: Boolean(env.CODEX_HOME),
-          skill_names: config.codexSkillNames ?? [],
-        },
-        null,
-        2
-      ),
-      "utf-8"
-    );
+    const stepPrefix = `.codex-runtime.step-${config.stepNumber}.attempt-${config.stepAttempt}`;
+    const legacyPaths = {
+      debugPath: path.join(config.workspacePath, ".codex-runtime.debug.json"),
+      stdoutPath: path.join(config.workspacePath, ".codex-runtime.stdout.log"),
+      stderrPath: path.join(config.workspacePath, ".codex-runtime.stderr.log"),
+    };
+    const stepPaths = {
+      debugPath: path.join(config.workspacePath, `${stepPrefix}.debug.json`),
+      stdoutPath: path.join(config.workspacePath, `${stepPrefix}.stdout.log`),
+      stderrPath: path.join(config.workspacePath, `${stepPrefix}.stderr.log`),
+      retryStdoutPath: path.join(config.workspacePath, `${stepPrefix}.retry.stdout.log`),
+      retryStderrPath: path.join(config.workspacePath, `${stepPrefix}.retry.stderr.log`),
+    };
+    const debugPayload: Record<string, unknown> = {
+      timestamp: new Date().toISOString(),
+      step_number: config.stepNumber,
+      step_attempt: config.stepAttempt,
+      runtime_command: config.runtime.command ?? "codex",
+      runtime_mode: config.runtime.mode,
+      runtime_args: runtimeArgs,
+      has_sandbox_flag: hasSandboxFlag,
+      openai_model: env.OPENAI_MODEL ?? "",
+      openai_api_key_present: Boolean(env.OPENAI_API_KEY),
+      codex_home: env.CODEX_HOME ?? "",
+      codex_home_present: Boolean(env.CODEX_HOME),
+      skill_names: config.codexSkillNames ?? [],
+    };
+    await this.writeDebugFiles(stepPaths.debugPath, legacyPaths.debugPath, debugPayload);
 
     console.log(
       `[codex-runtime] Debug env: openai_model=${env.OPENAI_MODEL}, openai_api_key_present=${Boolean(env.OPENAI_API_KEY)}, codex_home_present=${Boolean(env.CODEX_HOME)}, skills=${(config.codexSkillNames ?? []).join(",") || "none"}`
@@ -61,8 +68,8 @@ export class CodexRuntime implements AgentRuntime {
 
     const command = config.runtime.command ?? "codex";
     const baseOutputFiles = {
-      stdoutPath: path.join(config.workspacePath, ".codex-runtime.stdout.log"),
-      stderrPath: path.join(config.workspacePath, ".codex-runtime.stderr.log"),
+      stdoutPath: stepPaths.stdoutPath,
+      stderrPath: stepPaths.stderrPath,
     };
 
     let result;
@@ -74,6 +81,12 @@ export class CodexRuntime implements AgentRuntime {
         parseTokensFromStdout: true,
         outputFiles: baseOutputFiles,
       });
+      await this.copyLogPair(
+        baseOutputFiles.stdoutPath,
+        baseOutputFiles.stderrPath,
+        legacyPaths.stdoutPath,
+        legacyPaths.stderrPath
+      );
     } catch (error) {
       // Fallback path: some Codex/OpenAI auth flows fail only when CODEX_HOME is overridden.
       // Retry once without CODEX_HOME if we detect that signature.
@@ -88,15 +101,13 @@ export class CodexRuntime implements AgentRuntime {
         const fallbackEnv = { ...env };
         delete fallbackEnv.CODEX_HOME;
         await fs.writeFile(
-          debugPath,
-          JSON.stringify(
-            {
-              ...(JSON.parse(await fs.readFile(debugPath, "utf-8")) as Record<string, unknown>),
-              fallback_without_codex_home: true,
-            },
-            null,
-            2
-          ),
+          stepPaths.debugPath,
+          JSON.stringify({ ...debugPayload, fallback_without_codex_home: true }, null, 2),
+          "utf-8"
+        );
+        await fs.writeFile(
+          legacyPaths.debugPath,
+          JSON.stringify({ ...debugPayload, fallback_without_codex_home: true }, null, 2),
           "utf-8"
         );
         result = await runProcess(command, [...runtimeArgs, ...args], {
@@ -105,11 +116,23 @@ export class CodexRuntime implements AgentRuntime {
           timeoutMs: config.timeoutMinutes * 60 * 1000,
           parseTokensFromStdout: true,
           outputFiles: {
-            stdoutPath: path.join(config.workspacePath, ".codex-runtime.retry.stdout.log"),
-            stderrPath: path.join(config.workspacePath, ".codex-runtime.retry.stderr.log"),
+            stdoutPath: stepPaths.retryStdoutPath,
+            stderrPath: stepPaths.retryStderrPath,
           },
         });
+        await this.copyLogPair(
+          stepPaths.retryStdoutPath,
+          stepPaths.retryStderrPath,
+          legacyPaths.stdoutPath,
+          legacyPaths.stderrPath
+        );
       } else {
+        await this.copyLogPair(
+          baseOutputFiles.stdoutPath,
+          baseOutputFiles.stderrPath,
+          legacyPaths.stdoutPath,
+          legacyPaths.stderrPath
+        );
         throw error;
       }
     }
@@ -118,5 +141,31 @@ export class CodexRuntime implements AgentRuntime {
       tokens_used: result.tokensUsed,
       runtime_id: result.runtimeId,
     };
+  }
+
+  private async writeDebugFiles(
+    stepDebugPath: string,
+    legacyDebugPath: string,
+    payload: Record<string, unknown>
+  ): Promise<void> {
+    const content = JSON.stringify(payload, null, 2);
+    await Promise.all([
+      fs.writeFile(stepDebugPath, content, "utf-8"),
+      fs.writeFile(legacyDebugPath, content, "utf-8"),
+    ]);
+  }
+
+  private async copyLogPair(
+    sourceStdoutPath: string,
+    sourceStderrPath: string,
+    legacyStdoutPath: string,
+    legacyStderrPath: string
+  ): Promise<void> {
+    const stdout = await fs.readFile(sourceStdoutPath, "utf-8").catch(() => "");
+    const stderr = await fs.readFile(sourceStderrPath, "utf-8").catch(() => "");
+    await Promise.all([
+      fs.writeFile(legacyStdoutPath, stdout, "utf-8"),
+      fs.writeFile(legacyStderrPath, stderr, "utf-8"),
+    ]);
   }
 }

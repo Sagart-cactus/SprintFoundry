@@ -83,6 +83,15 @@ export class PlanValidator {
     return def?.role;
   }
 
+  private resolveModelForAgent(agentId: string): string {
+    return (
+      this.projectConfig.model_overrides?.[agentId]?.model ??
+      this.platformConfig.defaults.model_per_agent[agentId]?.model ??
+      this.platformConfig.defaults.model_per_agent.developer?.model ??
+      ""
+    );
+  }
+
   private findAgentByRole(role: AgentRole): AgentDefinition | undefined {
     // Prefer agents in the project's catalog if configured
     const catalog = this.projectConfig.agents;
@@ -143,6 +152,7 @@ export class PlanValidator {
     injected.push({
       step_number: stepNumber,
       agent,
+      model: this.resolveModelForAgent(agent),
       task: `[AUTO-INJECTED BY RULE] Run ${agent} agent scan/review`,
       context_inputs: [{ type: "ticket" }],
       depends_on: insertAfter ? [insertAfter] : [],
@@ -173,6 +183,7 @@ export class PlanValidator {
     injected.push({
       step_number: stepNumber,
       agent: agentDef.type,
+      model: this.resolveModelForAgent(agentDef.type),
       task: `[AUTO-INJECTED BY RULE] Run ${agentDef.name} (role: ${role})`,
       context_inputs: [{ type: "ticket" }],
       depends_on: insertAfter ? [insertAfter] : [],

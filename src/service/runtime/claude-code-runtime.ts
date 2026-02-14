@@ -1,10 +1,12 @@
 import * as path from "path";
 import { spawn } from "child_process";
+import * as fs from "fs/promises";
 import type { AgentRuntime, RuntimeStepContext, RuntimeStepResult } from "./types.js";
 import { runProcess, parseTokenUsage } from "./process-utils.js";
 
 export class ClaudeCodeRuntime implements AgentRuntime {
   async runStep(config: RuntimeStepContext): Promise<RuntimeStepResult> {
+    await fs.mkdir(config.workspacePath, { recursive: true });
     if (config.runtime.mode === "container") {
       return this.runContainer(config);
     }
@@ -38,6 +40,17 @@ export class ClaudeCodeRuntime implements AgentRuntime {
 
   private async runLocal(config: RuntimeStepContext): Promise<RuntimeStepResult> {
     const args = this.buildCliArgs(config);
+    const paths = this.buildLogPaths(config);
+    await this.writeDebugFiles(paths, {
+      timestamp: new Date().toISOString(),
+      step_number: config.stepNumber,
+      step_attempt: config.stepAttempt,
+      runtime_mode: config.runtime.mode,
+      runtime_provider: config.runtime.provider,
+      runtime_command: "claude",
+      model: config.modelConfig.model,
+      api_key_present: Boolean(config.apiKey),
+    });
     const result = await runProcess("claude", args, {
       cwd: config.workspacePath,
       env: {
@@ -47,7 +60,12 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       },
       timeoutMs: config.timeoutMinutes * 60 * 1000,
       parseTokensFromStdout: true,
+      outputFiles: {
+        stdoutPath: paths.stepStdoutPath,
+        stderrPath: paths.stepStderrPath,
+      },
     });
+    await this.copyLatestLogs(paths.stepStdoutPath, paths.stepStderrPath, paths.latestStdoutPath, paths.latestStderrPath);
     return {
       tokens_used: result.tokensUsed,
       runtime_id: result.runtimeId,
@@ -89,36 +107,118 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     }
 
     dockerArgs.push(image);
+    const paths = this.buildLogPaths(config);
+    await this.writeDebugFiles(paths, {
+      timestamp: new Date().toISOString(),
+      step_number: config.stepNumber,
+      step_attempt: config.stepAttempt,
+      runtime_mode: config.runtime.mode,
+      runtime_provider: config.runtime.provider,
+      runtime_command: "docker",
+      container_name: containerName,
+      image,
+      model: config.modelConfig.model,
+      api_key_present: Boolean(config.apiKey),
+    });
 
     return new Promise((resolve, reject) => {
       const proc = spawn("docker", dockerArgs, { stdio: ["pipe", "pipe", "pipe"] });
       let stdout = "";
+      let stderr = "";
 
       proc.stdout?.on("data", (data) => {
         stdout += data.toString();
       });
+      proc.stderr?.on("data", (data) => {
+        stderr += data.toString();
+      });
 
       const timeout = setTimeout(() => {
         spawn("docker", ["kill", containerName]);
-        reject(new Error(`Agent container ${config.agent} timed out`));
+        void this.persistContainerLogs(paths, stdout, stderr).finally(() => {
+          reject(new Error(`Agent container ${config.agent} timed out`));
+        });
       }, config.timeoutMinutes * 60 * 1000);
 
       proc.on("close", (code) => {
         clearTimeout(timeout);
-        if (code !== 0) {
-          reject(new Error(`Agent container ${config.agent} exited with code ${code}`));
-          return;
-        }
-        resolve({
-          tokens_used: parseTokenUsage(stdout),
-          runtime_id: containerName,
+        void this.persistContainerLogs(paths, stdout, stderr).finally(() => {
+          if (code !== 0) {
+            reject(new Error(`Agent container ${config.agent} exited with code ${code}`));
+            return;
+          }
+          resolve({
+            tokens_used: parseTokenUsage(stdout),
+            runtime_id: containerName,
+          });
         });
       });
 
       proc.on("error", (err) => {
         clearTimeout(timeout);
-        reject(err);
+        void this.persistContainerLogs(paths, stdout, stderr).finally(() => {
+          reject(err);
+        });
       });
     });
+  }
+
+  private buildLogPaths(config: RuntimeStepContext) {
+    const stepPrefix = `.claude-runtime.step-${config.stepNumber}.attempt-${config.stepAttempt}`;
+    return {
+      stepDebugPath: path.join(config.workspacePath, `${stepPrefix}.debug.json`),
+      stepStdoutPath: path.join(config.workspacePath, `${stepPrefix}.stdout.log`),
+      stepStderrPath: path.join(config.workspacePath, `${stepPrefix}.stderr.log`),
+      latestDebugPath: path.join(config.workspacePath, ".claude-runtime.debug.json"),
+      latestStdoutPath: path.join(config.workspacePath, ".claude-runtime.stdout.log"),
+      latestStderrPath: path.join(config.workspacePath, ".claude-runtime.stderr.log"),
+    };
+  }
+
+  private async writeDebugFiles(
+    paths: { stepDebugPath: string; latestDebugPath: string },
+    payload: Record<string, unknown>
+  ): Promise<void> {
+    const content = JSON.stringify(payload, null, 2);
+    await Promise.all([
+      fs.writeFile(paths.stepDebugPath, content, "utf-8"),
+      fs.writeFile(paths.latestDebugPath, content, "utf-8"),
+    ]);
+  }
+
+  private async copyLatestLogs(
+    stepStdoutPath: string,
+    stepStderrPath: string,
+    latestStdoutPath: string,
+    latestStderrPath: string
+  ): Promise<void> {
+    const stdout = await fs.readFile(stepStdoutPath, "utf-8").catch(() => "");
+    const stderr = await fs.readFile(stepStderrPath, "utf-8").catch(() => "");
+    await Promise.all([
+      fs.writeFile(latestStdoutPath, stdout, "utf-8"),
+      fs.writeFile(latestStderrPath, stderr, "utf-8"),
+    ]);
+  }
+
+  private async persistContainerLogs(
+    paths: {
+      stepStdoutPath: string;
+      stepStderrPath: string;
+      latestStdoutPath: string;
+      latestStderrPath: string;
+    },
+    stdout: string,
+    stderr: string
+  ): Promise<void> {
+    await Promise.all([
+      fs.writeFile(paths.stepStdoutPath, stdout, "utf-8"),
+      fs.writeFile(paths.stepStderrPath, stderr, "utf-8"),
+    ]);
+    await this.copyLatestLogs(
+      paths.stepStdoutPath,
+      paths.stepStderrPath,
+      paths.latestStdoutPath,
+      paths.latestStderrPath
+    );
   }
 }

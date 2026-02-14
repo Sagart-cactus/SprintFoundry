@@ -662,7 +662,9 @@ function inferArtifactCategory(pathValue) {
   const pathLower = String(pathValue || "").toLowerCase();
   if (pathLower.endsWith(".agent-result.json") || pathLower.includes("result")) return "final_result";
   if (pathLower.includes("planner") || pathLower.includes("stderr") || pathLower.includes("stdout") || pathLower.endsWith(".log")) {
-    return pathLower.includes("agent") ? "agent_log" : "system_log";
+    return pathLower.includes("agent") || pathLower.includes("codex-runtime") || pathLower.includes("claude-runtime")
+      ? "agent_log"
+      : "system_log";
   }
   if (pathLower.endsWith(".json") || pathLower.endsWith(".md") || pathLower.endsWith(".txt") || pathLower.endsWith(".yaml")) {
     return "output";
@@ -691,8 +693,9 @@ function artifactPreviewKind(pathValue) {
   const pathLower = String(pathValue || "").toLowerCase();
   if (pathLower.endsWith(".planner-runtime.stdout.log")) return "planner_stdout";
   if (pathLower.endsWith(".planner-runtime.stderr.log")) return "planner_stderr";
-  if (pathLower.endsWith(".codex-runtime.stdout.log")) return "agent_stdout";
-  if (pathLower.endsWith(".codex-runtime.stderr.log")) return "agent_stderr";
+  const isRuntimeLog = pathLower.includes(".codex-runtime") || pathLower.includes(".claude-runtime");
+  if (isRuntimeLog && pathLower.endsWith(".stdout.log")) return "agent_stdout";
+  if (isRuntimeLog && pathLower.endsWith(".stderr.log")) return "agent_stderr";
   if (pathLower.endsWith(".agent-result.json")) return "agent_result";
   return "";
 }

@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Run Monitor v3</title>
+    <link rel="stylesheet" href="/v3/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-title">
+        <h1>Run Monitor v3</h1>
+        <p>AI run execution dashboard</p>
+      </div>
+      <div class="topbar-controls">
+        <label class="control">
+          <span>Project</span>
+          <select id="project-filter" aria-label="Filter by project"></select>
+        </label>
+        <button id="refresh-btn" type="button">Refresh</button>
+      </div>
+    </header>
+
+    <main class="board-page">
+      <section class="lane">
+        <h2>Active Runs</h2>
+        <div id="active-lane" class="lane-grid" aria-live="polite"></div>
+      </section>
+      <section class="lane">
+        <h2>Failed Runs</h2>
+        <div id="failed-lane" class="lane-grid"></div>
+      </section>
+      <section class="lane">
+        <h2>Completed Runs</h2>
+        <div id="completed-lane" class="lane-grid"></div>
+      </section>
+    </main>
+
+    <footer class="statusbar">
+      <span id="status-line">Loading runs...</span>
+      <span id="last-refreshed">Last refreshed: -</span>
+    </footer>
+
+    <script type="module" src="/v3/app.js"></script>
+  </body>
+</html>

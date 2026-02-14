@@ -161,6 +161,7 @@ Return ONLY valid JSON, no markdown fences.
           {
             step_number: 900 + failedStep.step_number,
             agent: failureResult.rework_target ?? failedStep.agent,
+            model: this.resolveModelForAgent(failureResult.rework_target ?? failedStep.agent),
             task: `Fix issue from step ${failedStep.step_number}: ${failureResult.rework_reason ?? failureResult.issues.join("; ")}`,
             context_inputs: [
               { type: "ticket" },
@@ -216,6 +217,7 @@ Schema:
     {
       "step_number": 1,
       "agent": "agent_id",
+      "model": "string",
       "task": "detailed natural language task description for the agent",
       "context_inputs": [
         { "type": "ticket" },
@@ -231,6 +233,7 @@ Schema:
     { "after_step": 1, "reason": "Review product spec before coding", "required": true }
   ]
 }
+Set "model" for each step to the agent model that should run that step.
 
 ## Planning Guidelines
 
@@ -257,7 +260,7 @@ ${agentDefinitions.map((a) => `- ${a.name} (id: "${a.type}", role: "${a.role}"):
 ## Rules
 - Return ONLY a valid JSON array of rework steps (no markdown fences).
 - Keep rework minimal: 1-2 steps maximum.
-- Each step must have: step_number, agent, task, context_inputs, depends_on, estimated_complexity.
+- Each step must have: step_number, agent, model, task, context_inputs, depends_on, estimated_complexity.
 - Use step_number 900+ for rework steps to avoid collisions.
 - If previous rework attempts failed, try a different approach.`;
   }
@@ -365,13 +368,17 @@ Analyze this ticket and return an execution plan as JSON.`;
 
     try {
       const parsed = JSON.parse(cleaned);
+      const steps = (parsed.steps as PlanStep[]).map((step) => ({
+        ...step,
+        model: this.resolveModelForAgent(step.agent),
+      }));
 
       return {
         plan_id: `plan-${Date.now()}`,
         ticket_id: ticketId,
         classification: parsed.classification,
         reasoning: parsed.reasoning,
-        steps: parsed.steps,
+        steps,
         parallel_groups: parsed.parallel_groups ?? [],
         human_gates: parsed.human_gates ?? [],
       };
@@ -392,5 +399,14 @@ Analyze this ticket and return an execution plan as JSON.`;
     // Return empty string if no key configured — the Anthropic SDK will
     // fall back to ANTHROPIC_API_KEY env var automatically
     return typeof key === "string" ? key : "";
+  }
+
+  private resolveModelForAgent(agentId: string): string {
+    return (
+      this.projectConfig.model_overrides?.[agentId]?.model ??
+      this.platformConfig.defaults.model_per_agent[agentId]?.model ??
+      this.platformConfig.defaults.model_per_agent.developer?.model ??
+      ""
+    );
   }
 }
