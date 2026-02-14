@@ -39,6 +39,7 @@ export class CodexSkillManager {
     const codexHomeDir = path.join(workspacePath, ".codex-home");
     const skillsDir = path.join(codexHomeDir, "skills");
     await fs.mkdir(skillsDir, { recursive: true });
+    await this.copyAuthState(codexHomeDir);
 
     if (skillNames.length === 0) {
       await this.writeManifest(codexHomeDir, []);
@@ -67,6 +68,20 @@ export class CodexSkillManager {
 
     await this.writeManifest(codexHomeDir, skillNames);
     return { codexHomeDir, skillNames };
+  }
+
+  private async copyAuthState(codexHomeDir: string): Promise<void> {
+    // Preserve Codex authentication/config when using a workspace-scoped CODEX_HOME.
+    const defaultHome = process.env["CODEX_HOME"] || path.join(process.env["HOME"] || "", ".codex");
+    const files = ["auth.json", "config.toml"];
+
+    for (const filename of files) {
+      const src = path.join(defaultHome, filename);
+      const dst = path.join(codexHomeDir, filename);
+      const exists = await fs.access(src).then(() => true).catch(() => false);
+      if (!exists) continue;
+      await fs.copyFile(src, dst);
+    }
   }
 
   private resolveSkillSource(configuredPath: string): string {

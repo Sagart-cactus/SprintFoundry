@@ -294,6 +294,11 @@ export class OrchestrationService {
     const budget = this.resolveBudget();
     const cliFlags = this.platformConfig.defaults.agent_cli_flags;
     const containerResources = this.platformConfig.defaults.container_resources;
+    const apiKey = this.resolveApiKey(modelConfig.provider, runtime);
+
+    console.log(
+      `[step ${step.step_number}] Debug auth: provider=${modelConfig.provider}, model=${modelConfig.model}, runtime=${runtime.provider}/${runtime.mode}, api_key_present=${apiKey.length > 0}`
+    );
 
     // Check total task budget
     if (run.total_tokens_used >= budget.per_task_total_tokens) {
@@ -321,7 +326,7 @@ export class OrchestrationService {
         context_inputs: step.context_inputs,
         workspacePath,
         modelConfig,
-        apiKey: this.resolveApiKey(modelConfig.provider, runtime),
+        apiKey,
         tokenBudget: budget.per_agent_tokens,
         timeoutMinutes: this.platformConfig.defaults.timeouts.agent_timeout_minutes,
         previousStepResults: this.gatherPreviousResults(run, step),
