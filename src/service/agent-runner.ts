@@ -23,6 +23,8 @@ import { CodexSkillManager } from "./runtime/codex-skill-manager.js";
 import { parseTokenUsage as parseRuntimeTokenUsage } from "./runtime/process-utils.js";
 
 export interface AgentRunConfig {
+  stepNumber: number;
+  stepAttempt: number;
   agent: AgentType;
   task: string;
   context_inputs: ContextInput[];
@@ -93,6 +95,8 @@ export class AgentRunner {
     const runtimeImpl = this.runtimeFactory.create(runtime);
     console.log(`[agent-runner] Spawning ${runtime.provider} runtime for ${config.agent}...`);
     const result = await runtimeImpl.runStep({
+      stepNumber: config.stepNumber,
+      stepAttempt: config.stepAttempt,
       agent: config.agent,
       task: config.task,
       context_inputs: config.context_inputs,

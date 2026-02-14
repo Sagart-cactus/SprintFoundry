@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Run Monitor v3 - Detail</title>
+    <link rel="stylesheet" href="/v3/styles.css" />
+  </head>
+  <body>
+    <header class="topbar run-topbar">
+      <div class="topbar-title">
+        <h1 id="run-title">Run Detail</h1>
+        <p><a href="/v3">Back to board</a></p>
+      </div>
+      <div class="topbar-controls">
+        <button id="refresh-btn" type="button">Refresh</button>
+      </div>
+    </header>
+
+    <main class="run-page">
+      <section class="run-summary" id="summary-bar"></section>
+
+      <section class="panel">
+        <button class="panel-toggle" id="plan-toggle" type="button" aria-expanded="true">Plan & Errors</button>
+        <div class="panel-body" id="plan-body"></div>
+      </section>
+
+      <section class="run-grid">
+        <section class="panel">
+          <h2>Steps</h2>
+          <div id="steps-grid" class="steps-grid"></div>
+        </section>
+
+        <section class="panel">
+          <h2>Timeline</h2>
+          <ol id="timeline-list" class="timeline-list"></ol>
+        </section>
+      </section>
+
+      <section class="panel logs-panel">
+        <h2>Logs</h2>
+        <div class="log-tabs" id="log-tabs">
+          <button type="button" class="log-tab active" data-kind="agent_stdout">Agent Out</button>
+          <button type="button" class="log-tab" data-kind="agent_stderr">Agent Err</button>
+          <button type="button" class="log-tab" data-kind="agent_result">Result JSON</button>
+        </div>
+        <div id="log-view" class="log-view"></div>
+      </section>
+    </main>
+
+    <footer class="statusbar">
+      <span id="status-line">Loading run...</span>
+      <span id="last-refreshed">Last refreshed: -</span>
+    </footer>
+
+    <script type="module" src="/v3/run.js"></script>
+  </body>
+</html>

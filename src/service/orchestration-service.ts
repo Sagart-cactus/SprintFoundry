@@ -321,6 +321,8 @@ export class OrchestrationService {
 
       // Spawn the agent container and run
       const result = await this.agentRunner.run({
+        stepNumber: step.step_number,
+        stepAttempt: currentRework + 1,
         agent: step.agent,
         task: step.task,
         context_inputs: step.context_inputs,

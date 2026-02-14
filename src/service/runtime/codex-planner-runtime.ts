@@ -43,10 +43,11 @@ Return ONLY valid JSON with schema:
 {
   "classification": "new_feature|bug_fix|ui_change|refactor|infrastructure|security_fix|documentation|product_question",
   "reasoning": "string",
-  "steps": [{ "step_number": 1, "agent": "developer", "task": "string", "context_inputs": [{"type":"ticket"}], "depends_on": [], "estimated_complexity": "low|medium|high" }],
+  "steps": [{ "step_number": 1, "agent": "developer", "model": "string", "task": "string", "context_inputs": [{"type":"ticket"}], "depends_on": [], "estimated_complexity": "low|medium|high" }],
   "parallel_groups": [],
   "human_gates": []
-}`;
+}
+Set "model" for each step to the agent model that should run that step.`;
     await fs.writeFile(taskPath, prompt, "utf-8");
 
     const runtime = this.resolvePlannerRuntime();
@@ -79,12 +80,16 @@ Return ONLY valid JSON with schema:
     const planRaw = await fs.readFile(outputPath, "utf-8");
     const cleaned = planRaw.replace(/```json\n?|```/g, "").trim();
     const parsed = JSON.parse(cleaned);
+    const steps = (parsed.steps as PlanStep[]).map((step) => ({
+      ...step,
+      model: this.resolveModelForAgent(step.agent),
+    }));
     return {
       plan_id: `plan-${Date.now()}`,
       ticket_id: ticket.id,
       classification: parsed.classification,
       reasoning: parsed.reasoning,
-      steps: parsed.steps,
+      steps,
       parallel_groups: parsed.parallel_groups ?? [],
       human_gates: parsed.human_gates ?? [],
     };
@@ -104,6 +109,7 @@ Return ONLY valid JSON with schema:
         {
           step_number: 900 + failedStep.step_number,
           agent: failureResult.rework_target ?? failedStep.agent,
+          model: this.resolveModelForAgent(failureResult.rework_target ?? failedStep.agent),
           task: `Fix issue from step ${failedStep.step_number}: ${failureResult.rework_reason ?? failureResult.issues.join("; ")}`,
           context_inputs: [
             { type: "ticket" },
@@ -132,5 +138,14 @@ Return ONLY valid JSON with schema:
       throw new Error("No OpenAI API key configured for codex planner");
     }
     return key ?? "";
+  }
+
+  private resolveModelForAgent(agentId: string): string {
+    return (
+      this.projectConfig.model_overrides?.[agentId]?.model ??
+      this.platformConfig.defaults.model_per_agent[agentId]?.model ??
+      this.platformConfig.defaults.model_per_agent.developer?.model ??
+      ""
+    );
   }
 }

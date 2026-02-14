@@ -1,0 +1,48 @@
+project_id: runtime-mixed-smoke
+name: Runtime Mixed Smoke
+
+stack: js
+
+agents:
+  - developer
+  - qa
+
+repo:
+  url: /tmp/agentsdlc-smoke-remote.git
+  default_branch: main
+
+api_keys:
+  anthropic: ${AGENTSDLC_ANTHROPIC_KEY}
+  openai: ${AGENTSDLC_OPENAI_KEY}
+
+model_overrides:
+  developer:
+    provider: anthropic
+    model: claude-sonnet-4-5-20250929
+  qa:
+    provider: openai
+    model: gpt-5.3-codex
+
+runtime_overrides:
+  developer:
+    provider: claude-code
+    mode: local_process
+  qa:
+    provider: codex
+    mode: local_process
+
+planner_runtime_override:
+  provider: claude-code
+  mode: local_process
+
+branch_strategy:
+  prefix: feat/
+  include_ticket_id: true
+  naming: kebab-case
+
+integrations:
+  ticket_source:
+    type: prompt
+    config: {}
+
+rules: []

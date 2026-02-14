@@ -7,15 +7,18 @@ import { promises as fs } from "node:fs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const publicDir = path.join(__dirname, "public");
+const publicV2Dir = path.join(__dirname, "public-v2");
+const publicV3Dir = path.join(__dirname, "public-v3");
 const runsRoot = process.env.AGENTSDLC_RUNS_ROOT ?? path.join(os.tmpdir(), "agentsdlc");
 const port = Number(process.env.MONITOR_PORT ?? 4310);
 
-const LOG_KIND_TO_FILE = {
-  planner_stdout: ".planner-runtime.stdout.log",
-  planner_stderr: ".planner-runtime.stderr.log",
-  agent_stdout: ".codex-runtime.stdout.log",
-  agent_stderr: ".codex-runtime.stderr.log",
-  agent_result: ".agent-result.json",
+const LOG_KIND_TO_FILES = {
+  planner_stdout: [".planner-runtime.stdout.log"],
+  planner_stderr: [".planner-runtime.stderr.log"],
+  // Prefer whichever runtime wrote most recently for agent logs.
+  agent_stdout: [".codex-runtime.stdout.log", ".claude-runtime.stdout.log"],
+  agent_stderr: [".codex-runtime.stderr.log", ".claude-runtime.stderr.log"],
+  agent_result: [".agent-result.json"],
 };
 
 function sendJson(res, status, body) {
@@ -155,17 +158,89 @@ async function loadRun(projectId, runId) {
   const summary = await loadRunSummary(projectId, runId, runPath);
   const events = await readEvents(runPath);
   const planEvent = events.find((e) => e.event_type === "task.plan_generated");
+  const step_models = await loadStepModels(runPath);
   return {
     ...summary,
     plan: planEvent?.data?.plan ?? null,
+    step_models,
   };
 }
 
+function extractModelNameFromDebug(payload) {
+  if (!payload || typeof payload !== "object") return "";
+  return (
+    payload.model ||
+    payload.openai_model ||
+    payload.anthropic_model ||
+    payload.google_model ||
+    payload.selected_model ||
+    payload.model_name ||
+    ""
+  );
+}
+
+async function loadStepModels(runPath) {
+  const entries = await fs.readdir(runPath, { withFileTypes: true }).catch(() => []);
+  const byStep = new Map();
+  const stepPattern = /\.(?:codex|claude)-runtime\.step-(\d+)\.attempt-(\d+)\.debug\.json$/;
+  const genericPattern = /\.(?:codex|claude)-runtime\.debug\.json$/;
+
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const filePath = path.join(runPath, entry.name);
+    const raw = await fs.readFile(filePath, "utf-8").catch(() => "");
+    if (!raw) continue;
+    let parsed = null;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      parsed = null;
+    }
+    if (!parsed) continue;
+
+    let stepNumber = null;
+    let attempt = 0;
+    const stepMatch = entry.name.match(stepPattern);
+    if (stepMatch) {
+      stepNumber = Number(stepMatch[1]);
+      attempt = Number(stepMatch[2]);
+    } else if (genericPattern.test(entry.name) && typeof parsed.step_number === "number") {
+      stepNumber = parsed.step_number;
+      attempt = typeof parsed.step_attempt === "number" ? parsed.step_attempt : 0;
+    }
+    if (typeof stepNumber !== "number" || Number.isNaN(stepNumber) || Number.isNaN(attempt)) continue;
+
+    const model = extractModelNameFromDebug(parsed);
+    if (!model) continue;
+    const existing = byStep.get(stepNumber);
+    if (!existing || attempt >= existing.attempt) {
+      byStep.set(stepNumber, { model, attempt });
+    }
+  }
+
+  const out = {};
+  for (const [step, value] of byStep.entries()) {
+    out[String(step)] = value.model;
+  }
+  return out;
+}
+
 async function readLogText(projectId, runId, kind, lines = 400) {
-  const file = LOG_KIND_TO_FILE[kind];
-  if (!file) return "";
+  const files = LOG_KIND_TO_FILES[kind];
+  if (!files || files.length === 0) return "";
   const runPath = safeJoin(runsRoot, projectId, runId);
-  const logPath = path.join(runPath, file);
+  const candidates = await Promise.all(
+    files.map(async (file) => {
+      const logPath = path.join(runPath, file);
+      const stat = await fs.stat(logPath).catch(() => null);
+      return stat ? { logPath, mtimeMs: stat.mtimeMs } : null;
+    })
+  );
+  const selected = candidates
+    .filter(Boolean)
+    .sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
+  if (!selected) return "";
+  const logPath = selected.logPath;
   const raw = await fs.readFile(logPath, "utf-8").catch(() => "");
   const allLines = raw.split("\n");
   return allLines.slice(Math.max(0, allLines.length - lines)).join("\n");
@@ -202,8 +277,8 @@ async function listFiles(projectId, runId, root = "") {
   return out;
 }
 
-async function serveStatic(res, pathname) {
-  const filePath = pathname === "/" ? path.join(publicDir, "index.html") : safeJoin(publicDir, pathname.slice(1));
+async function serveStatic(res, pathname, rootDir = publicDir) {
+  const filePath = pathname === "/" ? path.join(rootDir, "index.html") : safeJoin(rootDir, pathname.slice(1));
   const contentType = filePath.endsWith(".css")
     ? "text/css; charset=utf-8"
     : filePath.endsWith(".js")
@@ -223,6 +298,26 @@ const server = http.createServer(async (req, res) => {
   const pathname = reqUrl.pathname;
 
   try {
+    if (pathname === "/v2" || pathname.startsWith("/v2/")) {
+      const v2Path = pathname === "/v2" ? "/" : pathname.slice(3);
+      if (v2Path === "/run") {
+        await serveStatic(res, "/run.html", publicV2Dir);
+        return;
+      }
+      await serveStatic(res, v2Path, publicV2Dir);
+      return;
+    }
+
+    if (pathname === "/v3" || pathname.startsWith("/v3/")) {
+      const v3Path = pathname === "/v3" ? "/" : pathname.slice(3);
+      if (v3Path === "/run") {
+        await serveStatic(res, "/run.html", publicV3Dir);
+        return;
+      }
+      await serveStatic(res, v3Path, publicV3Dir);
+      return;
+    }
+
     if (pathname === "/api/runs") {
       const runs = await listRuns();
       sendJson(res, 200, { runs, runs_root: runsRoot });

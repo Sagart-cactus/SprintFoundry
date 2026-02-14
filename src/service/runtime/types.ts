@@ -16,6 +16,8 @@ import type {
 } from "../../shared/types.js";
 
 export interface RuntimeStepContext {
+  stepNumber: number;
+  stepAttempt: number;
   agent: AgentType;
   task: string;
   context_inputs: ContextInput[];

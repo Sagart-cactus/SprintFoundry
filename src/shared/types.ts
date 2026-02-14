@@ -62,6 +62,7 @@ export type TaskClassification =
 export interface PlanStep {
   step_number: number;
   agent: AgentType;
+  model?: string; // optional model hint selected for this step's agent
   task: string; // natural language task description
   context_inputs: ContextInput[];
   depends_on: number[]; // step numbers this depends on

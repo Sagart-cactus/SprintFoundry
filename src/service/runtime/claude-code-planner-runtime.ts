@@ -71,13 +71,17 @@ export class ClaudeCodePlannerRuntime implements PlannerRuntime {
     console.log(`[planner] Raw plan output (${planRaw.length} chars): ${planRaw.slice(0, 200)}...`);
     const cleaned = planRaw.replace(/```json\n?|```/g, "").trim();
     const parsed = JSON.parse(cleaned);
+    const steps = (parsed.steps as PlanStep[]).map((step) => ({
+      ...step,
+      model: this.resolveModelForAgent(step.agent),
+    }));
 
     return {
       plan_id: `plan-${Date.now()}`,
       ticket_id: ticket.id,
       classification: parsed.classification,
       reasoning: parsed.reasoning,
-      steps: parsed.steps,
+      steps,
       parallel_groups: parsed.parallel_groups ?? [],
       human_gates: parsed.human_gates ?? [],
     };
@@ -125,7 +129,7 @@ Issues: ${failureResult.issues.join("; ")}
 ${reworkHistory}
 
 Return ONLY a valid JSON array of 1-2 rework steps. No markdown fences.
-Each step: { "step_number": 900+N, "agent": "id", "task": "description", "context_inputs": [{"type":"ticket"},{"type":"step_output","step_number":N}], "depends_on": [], "estimated_complexity": "medium" }`;
+Each step: { "step_number": 900+N, "agent": "id", "model": "string", "task": "description", "context_inputs": [{"type":"ticket"},{"type":"step_output","step_number":N}], "depends_on": [], "estimated_complexity": "medium" }`;
 
     await fs.writeFile(taskPath, prompt, "utf-8");
 
@@ -164,6 +168,7 @@ Each step: { "step_number": 900+N, "agent": "id", "task": "description", "contex
           {
             step_number: 900 + failedStep.step_number,
             agent: failureResult.rework_target ?? failedStep.agent,
+            model: this.resolveModelForAgent(failureResult.rework_target ?? failedStep.agent),
             task: `Fix issue from step ${failedStep.step_number}: ${failureResult.rework_reason ?? failureResult.issues.join("; ")}`,
             context_inputs: [
               { type: "ticket" },
@@ -196,6 +201,15 @@ Each step: { "step_number": 900+N, "agent": "id", "task": "description", "contex
       this.platformConfig.defaults.model_per_agent.orchestrator?.model ??
       this.platformConfig.defaults.model_per_agent.developer?.model ??
       "claude-sonnet-4-5-20250929"
+    );
+  }
+
+  private resolveModelForAgent(agentId: string): string {
+    return (
+      this.projectConfig.model_overrides?.[agentId]?.model ??
+      this.platformConfig.defaults.model_per_agent[agentId]?.model ??
+      this.platformConfig.defaults.model_per_agent.developer?.model ??
+      ""
     );
   }
 
@@ -232,6 +246,7 @@ Schema:
     {
       "step_number": 1,
       "agent": "agent_id",
+      "model": "string",
       "task": "detailed natural language task description for the agent",
       "context_inputs": [
         { "type": "ticket" },
@@ -247,6 +262,7 @@ Schema:
     { "after_step": 1, "reason": "Review product spec before coding", "required": true }
   ]
 }
+Set "model" for each step to the agent model that should run that step.
 
 ## Planning Guidelines
 

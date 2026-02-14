@@ -42,6 +42,8 @@ function makeFakeProcess(
 
 function makeRunConfig(overrides?: Partial<AgentRunConfig>): AgentRunConfig {
   return {
+    stepNumber: overrides?.stepNumber ?? 1,
+    stepAttempt: overrides?.stepAttempt ?? 1,
     agent: overrides?.agent ?? "developer",
     task: overrides?.task ?? "Implement the feature",
     context_inputs: overrides?.context_inputs ?? [{ type: "ticket" }],
