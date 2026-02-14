@@ -1,0 +1,20 @@
+{
+  "status": "complete",
+  "summary": "Made v3 the default UI at GET /; /v2 now returns 404; deleted monitor/public-v2/ and monitor/public/ (legacy v1); updated README.md and docs/monitor.md to reflect new routing.",
+  "artifacts_created": [
+    "artifacts/handoff/dev-to-qa.md"
+  ],
+  "artifacts_modified": [
+    "monitor/server.mjs",
+    "README.md",
+    "docs/monitor.md"
+  ],
+  "issues": [],
+  "metadata": {
+    "files_created": 1,
+    "files_modified": 3,
+    "directories_deleted": 2,
+    "lines_added": 7,
+    "lines_removed": 14
+  }
+}
