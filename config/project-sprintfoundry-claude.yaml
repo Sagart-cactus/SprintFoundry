@@ -1,0 +1,33 @@
+project_id: sprintfoundry-claude
+name: SprintFoundry (Claude)
+
+stack: js
+
+agents:
+  - product
+  - architect
+  - developer
+  - qa
+  - security
+  - ui-ux
+  - devops
+
+repo:
+  url: git@github.com:Sagart-cactus/SprintFoundry.git
+  default_branch: main
+
+api_keys:
+  anthropic: ${AGENTSDLC_ANTHROPIC_KEY}
+
+branch_strategy:
+  prefix: feat/
+  include_ticket_id: true
+  naming: kebab-case
+
+integrations:
+  ticket_source:
+    type: linear
+    config:
+      api_key: ${LINEAR_API_KEY}
+
+rules: []
