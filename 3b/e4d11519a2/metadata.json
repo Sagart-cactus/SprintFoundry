@@ -1,0 +1,17 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "3be4d11519a2",
+  "strategy": "auto-commit",
+  "branch": "feat/overhaul-ui",
+  "checkpoints_count": 0,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/3b/e4d11519a2/0/metadata.json",
+      "transcript": "/3b/e4d11519a2/0/full.jsonl",
+      "context": "",
+      "content_hash": "/3b/e4d11519a2/0/content_hash.txt",
+      "prompt": ""
+    }
+  ]
+}
