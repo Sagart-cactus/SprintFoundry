@@ -1,20 +1,34 @@
 {
   "status": "complete",
-  "summary": "Made v3 the default UI at GET /; /v2 now returns 404; deleted monitor/public-v2/ and monitor/public/ (legacy v1); updated README.md and docs/monitor.md to reflect new routing.",
+  "summary": "13 live tests run against the refactored monitor server. All acceptance criteria pass: GET / returns v3 HTML (200), GET /v2 and /v2/* return 404 with correct message, GET /v3 still works as a legacy alias (200), all 5 API endpoints (/api/runs, /api/run, /api/events, /api/log, /api/files) respond correctly, monitor/public-v2/ and monitor/public/ (v1) directories are deleted, and monitor/server.mjs contains no stale v1/v2 route serving code. Two MINOR doc-only bugs found: docs/operations.md still lists /v2 as a live route (should say removed/404), and docs/README.md description of monitor.md still mentions /v2. No critical or major issues.",
   "artifacts_created": [
-    "artifacts/handoff/dev-to-qa.md"
+    "tests/api/monitor-routes.test.ts",
+    "artifacts/test-report.json",
+    "artifacts/bugs.md"
   ],
-  "artifacts_modified": [
-    "monitor/server.mjs",
-    "README.md",
-    "docs/monitor.md"
+  "artifacts_modified": [],
+  "issues": [
+    "MINOR: docs/operations.md:62-64 — UI routes section still lists /v2 as a valid route and labels / as (legacy). Should be updated to reflect /v2 is removed.",
+    "MINOR: docs/README.md:10 — description of monitor.md still mentions /v2 in the UI routes list."
   ],
-  "issues": [],
+  "rework_reason": null,
+  "rework_target": null,
   "metadata": {
-    "files_created": 1,
-    "files_modified": 3,
-    "directories_deleted": 2,
-    "lines_added": 7,
-    "lines_removed": 14
+    "tests_total": 13,
+    "tests_passed": 13,
+    "tests_failed": 0,
+    "manual_checks_total": 11,
+    "manual_checks_passed": 11,
+    "critical_count": 0,
+    "major_count": 0,
+    "minor_count": 2,
+    "acceptance_criteria": {
+      "AC1_get_root_serves_v3_html": "PASS",
+      "AC2_get_v2_returns_404": "PASS",
+      "AC3_no_stale_v1_v2_in_server_mjs": "PASS",
+      "AC4_all_api_endpoints_respond": "PASS",
+      "AC5_public_v2_dir_removed": "PASS",
+      "AC5_public_v1_dir_removed": "PASS"
+    }
   }
 }
