@@ -3,6 +3,7 @@ const runSelect = document.getElementById("run-select");
 const liveToggleBtn = document.getElementById("live-toggle");
 const manualSyncBtn = document.getElementById("manual-sync");
 const refreshBtn = document.getElementById("refresh-btn");
+const headerError = document.getElementById("header-error");
 
 const runLabel = document.getElementById("run-label");
 const runStatus = document.getElementById("run-status");
@@ -17,7 +18,18 @@ const jumpLatestBtn = document.getElementById("jump-latest-btn");
 const followNotice = document.getElementById("follow-notice");
 
 const activeStepEl = document.getElementById("active-step");
+const stepDetailsToggle = document.getElementById("step-details-toggle");
+const stepDetailsPanel = document.getElementById("step-details-panel");
+const stepArtifactsList = document.getElementById("step-artifacts-list");
+const stepChangeSummary = document.getElementById("step-change-summary");
+
 const nextActionEl = document.getElementById("next-action");
+const nextActionControls = document.getElementById("next-action-controls");
+const nextActionError = document.getElementById("next-action-error");
+
+const metricsGrid = document.getElementById("metrics-grid");
+const metricsNote = document.getElementById("metrics-note");
+
 const selectedEventEl = document.getElementById("selected-event");
 const contextHeading = document.getElementById("context-heading");
 
@@ -52,14 +64,31 @@ const state = {
   followLatest: true,
   lastEventTotal: 0,
   isLoading: false,
+  stepDetailsExpanded: false,
+  pendingActionId: null,
 };
+
+const EVENT_TYPE_META = {
+  "task.plan_generated": { icon: "[P]", label: "Plan generated" },
+  "task.plan_validated": { icon: "[V]", label: "Plan validated" },
+  "step.started": { icon: "[>]", label: "Step started" },
+  "step.completed": { icon: "[OK]", label: "Step completed" },
+  "ticket.updated": { icon: "[T]", label: "Ticket updated" },
+};
+
+const METRICS = [
+  { id: "duration", label: "Duration" },
+  { id: "tokens", label: "Tokens" },
+  { id: "agents_steps", label: "Agents/Steps" },
+  { id: "errors", label: "Errors" },
+];
 
 function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
-    .replaceAll("\"", "&quot;")
+    .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
 }
 
@@ -89,8 +118,16 @@ function shortText(text, n = 120) {
 }
 
 function eventSignature(evt) {
-  const payload = evt?.data ? JSON.stringify(evt.data) : "";
+  const payload = evt?.data ? safeJson(evt.data) : "";
   return `${evt?.timestamp ?? ""}|${evt?.event_type ?? ""}|${payload}`;
+}
+
+function safeJson(value) {
+  try {
+    return JSON.stringify(value ?? {});
+  } catch {
+    return "{}";
+  }
 }
 
 function deriveEventKey(events) {
@@ -118,9 +155,7 @@ function inferPhaseState(phaseName, runStatus) {
     if (normalized.includes("plan")) return "active";
     return "pending";
   }
-  if (runStatus === "pending") {
-    if (normalized.includes("plan")) return "pending";
-  }
+  if (runStatus === "unknown") return "unknown";
   return "pending";
 }
 
@@ -140,6 +175,45 @@ function deriveActiveStep(runData) {
   const pending = steps.find((s) => s.status === "pending");
   if (pending) return pending;
   return [...steps].reverse().find((s) => s.status === "completed" || s.status === "failed") ?? null;
+}
+
+function parseImpactedPaths(evt) {
+  const data = evt?.data ?? {};
+  const candidates = [data.files, data.paths, data.changed_files, data.impacted_files, data.artifacts];
+  const values = [];
+  for (const item of candidates) {
+    if (!Array.isArray(item)) continue;
+    for (const value of item) {
+      if (typeof value === "string") values.push(value);
+      if (value && typeof value.path === "string") values.push(value.path);
+    }
+  }
+  return values;
+}
+
+function deriveStepArtifacts(step) {
+  if (!step) return [];
+  const values = [];
+  const candidates = [step.artifacts, step.files, step.outputs, step.changed_files];
+  for (const item of candidates) {
+    if (!Array.isArray(item)) continue;
+    for (const value of item) {
+      if (typeof value === "string") values.push(value);
+      if (value && typeof value.path === "string") values.push(value.path);
+    }
+  }
+  return Array.from(new Set(values));
+}
+
+function deriveStepSummary(step) {
+  if (!step) return "No change summary.";
+  if (typeof step.change_summary === "string" && step.change_summary.trim()) {
+    return step.change_summary.trim();
+  }
+  if (typeof step.task === "string" && step.task.trim()) {
+    return shortText(step.task.trim(), 220);
+  }
+  return "No change summary.";
 }
 
 function deriveNextAction(runData, events) {
@@ -168,17 +242,75 @@ function deriveNextAction(runData, events) {
   return "Monitor the latest event stream for the next transition.";
 }
 
+function deriveNextActionControls(runData) {
+  const status = runData?.status ?? "unknown";
+
+  return [
+    {
+      id: "view-result",
+      label: "View Result JSON",
+      enabled: Boolean(runData),
+      reason: "",
+    },
+    {
+      id: "archive",
+      label: "Archive Run",
+      enabled: false,
+      reason:
+        status === "completed"
+          ? "Archive Run is unavailable in this environment."
+          : "Archive Run is unavailable while run is still executing.",
+    },
+    {
+      id: "close",
+      label: "Close Run",
+      enabled: false,
+      reason:
+        status === "completed" || status === "failed"
+          ? "Close Run is unavailable in this environment."
+          : "Close Run is unavailable while run is still executing.",
+    },
+  ];
+}
+
+function deriveMetrics(runData, events) {
+  const duration = fmtElapsed(runData?.started_at);
+  const tokenValue = (runData?.steps ?? [])
+    .map((s) => (typeof s.tokens === "number" ? s.tokens : null))
+    .filter((v) => typeof v === "number")
+    .reduce((sum, item) => sum + item, 0);
+  const tokenText = tokenValue > 0 ? String(tokenValue) : "-";
+
+  const agentSet = new Set((runData?.steps ?? []).map((s) => s.agent).filter(Boolean));
+  const stepCount = runData?.step_count || (runData?.steps ?? []).length || 0;
+  const agentStepText = stepCount > 0 ? `${agentSet.size}/${stepCount}` : "-";
+
+  const errorCount = events.filter((evt) => {
+    const type = String(evt?.event_type ?? "");
+    return type.includes("failed") || type.includes("error");
+  }).length;
+
+  return {
+    duration,
+    tokens: tokenText,
+    agents_steps: agentStepText,
+    errors: String(errorCount),
+    hasMissing: duration === "-" || tokenText === "-" || agentStepText === "-",
+  };
+}
+
 function eventPreview(evt) {
-  const d = evt?.data ?? {};
-  if (typeof d.message === "string") return shortText(d.message, 140);
-  if (typeof d.error === "string") return shortText(d.error, 140);
-  if (typeof d.task === "string") return shortText(d.task, 140);
-  if (typeof d.reason === "string") return shortText(d.reason, 140);
-  if (typeof d.agent === "string" && typeof d.step === "number") {
-    return `Step #${d.step} assigned to ${d.agent}`;
+  const data = evt?.data ?? {};
+  if (typeof data.message === "string") return shortText(data.message, 140);
+  if (typeof data.error === "string") return shortText(data.error, 140);
+  if (typeof data.task === "string") return shortText(data.task, 140);
+  if (typeof data.reason === "string") return shortText(data.reason, 140);
+  if (typeof data.agent === "string" && typeof data.step === "number") {
+    return `Step #${data.step} assigned to ${data.agent}`;
   }
-  const raw = JSON.stringify(d);
-  return raw && raw !== "{}" ? shortText(raw, 140) : "No payload";
+  const raw = safeJson(data);
+  if (!raw || raw === "{}") return "No payload";
+  return shortText(raw, 140);
 }
 
 function badgeClass(status) {
@@ -207,54 +339,6 @@ async function fetchText(url) {
   return res.text();
 }
 
-function renderRunSelectors() {
-  const projects = [...new Set(state.runs.map((r) => r.project_id))];
-  projectSelect.innerHTML = projects.map((p) => `<option value="${p}">${p}</option>`).join("");
-
-  if (!state.selectedProject || !projects.includes(state.selectedProject)) {
-    state.selectedProject = projects[0] ?? "";
-  }
-  projectSelect.value = state.selectedProject;
-
-  const runsForProject = state.runs.filter((r) => r.project_id === state.selectedProject);
-  runSelect.innerHTML = runsForProject
-    .map((r) => `<option value="${r.run_id}">${r.run_id} (${r.status})</option>`)
-    .join("");
-
-  if (!state.selectedRun || !runsForProject.some((r) => r.run_id === state.selectedRun)) {
-    state.selectedRun = runsForProject[0]?.run_id ?? "";
-  }
-  runSelect.value = state.selectedRun;
-}
-
-function renderHeader() {
-  const runData = state.runData;
-  const project = state.selectedProject || "-";
-  const run = state.selectedRun || "-";
-  runLabel.textContent = `${project}/${run}`;
-
-  const status = runData?.status ?? "unknown";
-  runStatus.className = badgeClass(status);
-  runStatus.textContent = status;
-  runElapsed.textContent = `Elapsed: ${fmtElapsed(runData?.started_at)}`;
-
-  liveToggleBtn.setAttribute("aria-pressed", String(state.liveUpdates));
-  liveToggleBtn.textContent = state.liveUpdates ? "Pause updates" : "Resume updates";
-}
-
-function renderPhases() {
-  const phases = derivePhases(state.runData);
-  const active = phases.find((p) => p.status === "active") ?? phases.find((p) => p.status === "failed");
-  currentPhase.textContent = `Current phase: ${active?.label ?? "-"}`;
-
-  phaseList.innerHTML = phases
-    .map((phase) => {
-      const cls = phase.status === "active" ? "active" : phase.status;
-      return `<li role="listitem" class="phase-item ${cls}" ${phase.status === "active" ? "aria-current=\"step\"" : ""}>${phase.label} · ${phase.status}</li>`;
-    })
-    .join("");
-}
-
 function patchChildrenInOrder(parent, desiredNodes) {
   let cursor = parent.firstChild;
   for (const node of desiredNodes) {
@@ -269,6 +353,74 @@ function patchChildrenInOrder(parent, desiredNodes) {
     parent.removeChild(cursor);
     cursor = next;
   }
+}
+
+function renderRunSelectors() {
+  const projects = [...new Set(state.runs.map((r) => r.project_id))];
+  projectSelect.innerHTML = projects.map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join("");
+
+  if (!state.selectedProject || !projects.includes(state.selectedProject)) {
+    state.selectedProject = projects[0] ?? "";
+  }
+  projectSelect.value = state.selectedProject;
+
+  const runsForProject = state.runs.filter((r) => r.project_id === state.selectedProject);
+  runSelect.innerHTML = runsForProject
+    .map((r) => `<option value="${escapeHtml(r.run_id)}">${escapeHtml(r.run_id)} (${escapeHtml(r.status)})</option>`)
+    .join("");
+
+  if (!state.selectedRun || !runsForProject.some((r) => r.run_id === state.selectedRun)) {
+    state.selectedRun = runsForProject[0]?.run_id ?? "";
+  }
+  runSelect.value = state.selectedRun;
+
+  const hasRun = Boolean(state.selectedProject && state.selectedRun);
+  runSelect.disabled = !runsForProject.length;
+  liveToggleBtn.disabled = !hasRun;
+  manualSyncBtn.disabled = !hasRun;
+  loadMoreBtn.disabled = !hasRun || !state.canLoadMoreEvents;
+}
+
+function renderHeader() {
+  const runData = state.runData;
+  const hasRun = Boolean(state.selectedProject && state.selectedRun);
+
+  if (!hasRun) {
+    runLabel.textContent = "No run selected";
+    runStatus.className = badgeClass("unknown");
+    runStatus.textContent = "unknown";
+    runElapsed.textContent = "Elapsed: -";
+  } else {
+    runLabel.textContent = `${state.selectedProject}/${state.selectedRun}`;
+    const status = runData?.status ?? "unknown";
+    runStatus.className = badgeClass(status);
+    runStatus.textContent = status;
+    runElapsed.textContent = `Elapsed: ${fmtElapsed(runData?.started_at)}`;
+  }
+
+  liveToggleBtn.setAttribute("aria-pressed", String(state.liveUpdates));
+  liveToggleBtn.textContent = state.liveUpdates ? "Pause updates" : "Resume updates";
+}
+
+function renderPhases() {
+  const phases = derivePhases(state.runData);
+  const active = phases.find((p) => p.status === "active") ?? phases.find((p) => p.status === "failed");
+  currentPhase.textContent = `Current phase: ${active?.label ?? "-"}`;
+
+  phaseList.innerHTML = phases
+    .map((phase, index) => {
+      const cls = phase.status;
+      const marker =
+        phase.status === "complete"
+          ? "done"
+          : phase.status === "active"
+            ? "live"
+            : phase.status === "failed"
+              ? "fail"
+              : "wait";
+      return `<li class="phase-item ${escapeHtml(cls)}" role="listitem" tabindex="0" aria-label="Phase ${index + 1} of ${phases.length}: ${escapeHtml(phase.label)}, ${escapeHtml(phase.status)}" ${phase.status === "active" ? 'aria-current="step"' : ""}><span class="phase-dot">${marker}</span>${escapeHtml(phase.label)} - ${escapeHtml(phase.status)}</li>`;
+    })
+    .join("");
 }
 
 function ensureSelectionStillExists(keys) {
@@ -286,6 +438,12 @@ function syncFollowNotice() {
   jumpLatestBtn.hidden = !paused;
 }
 
+function inferActiveEventKey(keys) {
+  if (!keys.length) return "";
+  const running = state.runData?.status === "executing" || state.runData?.status === "planning" || state.runData?.status === "pending";
+  return running ? keys.at(-1) ?? "" : "";
+}
+
 function createEventRow(evt, key) {
   const li = document.createElement("li");
   li.className = "event-row";
@@ -296,10 +454,12 @@ function createEventRow(evt, key) {
   summaryBtn.type = "button";
   summaryBtn.className = "event-summary";
   summaryBtn.dataset.eventKey = key;
+  summaryBtn.dataset.focusId = `${key}:summary`;
   summaryBtn.addEventListener("click", () => {
     state.selectedEventKey = key;
     renderSelectedEvent();
     renderEvents(false, false);
+    renderArtifacts();
   });
 
   const tools = document.createElement("div");
@@ -309,6 +469,7 @@ function createEventRow(evt, key) {
   toggle.type = "button";
   toggle.className = "payload-toggle";
   toggle.dataset.eventKey = key;
+  toggle.dataset.focusId = `${key}:toggle`;
   toggle.addEventListener("click", (event) => {
     event.stopPropagation();
     if (state.expandedPayload.has(key)) {
@@ -316,7 +477,7 @@ function createEventRow(evt, key) {
     } else {
       state.expandedPayload.add(key);
     }
-    renderEvents(false, false);
+    renderEvents(false, true);
   });
 
   const payload = document.createElement("pre");
@@ -324,34 +485,39 @@ function createEventRow(evt, key) {
   payload.id = `payload-${encodeURIComponent(key).replace(/%/g, "_")}`;
 
   tools.appendChild(toggle);
-  li.appendChild(summaryBtn);
-  li.appendChild(tools);
-  li.appendChild(payload);
-
-  updateEventRow(li, evt, key);
+  li.append(summaryBtn, tools, payload);
+  updateEventRow(li, evt, key, "");
   return li;
 }
 
-function updateEventRow(li, evt, key) {
+function updateEventRow(li, evt, key, activeKey) {
   const summaryBtn = li.querySelector(".event-summary");
   const toggle = li.querySelector(".payload-toggle");
   const payload = li.querySelector(".payload");
+
   const isSelected = key === state.selectedEventKey;
   const expanded = state.expandedPayload.has(key);
+  const isActive = key === activeKey;
   const preview = eventPreview(evt);
+  const meta = EVENT_TYPE_META[evt.event_type] ?? { icon: "[i]", label: "Event" };
 
   li.setAttribute("aria-selected", String(isSelected));
+  li.classList.toggle("is-active", isActive);
 
   summaryBtn.innerHTML = `
     <div class="event-head">
-      <span><span class="event-type">${escapeHtml(evt.event_type)}</span></span>
+      <span class="event-type-wrap">
+        <span class="event-icon" aria-hidden="true">${escapeHtml(meta.icon)}</span>
+        <span class="event-type">${escapeHtml(evt.event_type ?? "unknown")}</span>
+        ${isActive ? '<span class="event-state-pill">active</span>' : ""}
+      </span>
       <span class="meta">${escapeHtml(fmtTime(evt.timestamp))}</span>
     </div>
-    <div class="event-preview">${escapeHtml(preview)}</div>
+    <div class="event-preview">${escapeHtml(preview || "No payload")}</div>
   `;
   summaryBtn.setAttribute(
     "aria-label",
-    `${evt.event_type} at ${fmtTime(evt.timestamp)}. ${preview || "No payload preview"}`
+    `${meta.label}: ${evt.event_type ?? "unknown"} at ${fmtTime(evt.timestamp)}. ${preview || "No payload preview"}${isActive ? ". Active event" : ""}`
   );
 
   toggle.textContent = expanded ? "Hide payload" : "Show payload";
@@ -370,15 +536,16 @@ function renderEvents(restoreScrollForPrepend, preserveFocus) {
 
   const keys = deriveEventKey(state.events);
   ensureSelectionStillExists(keys);
+  const activeKey = inferActiveEventKey(keys);
 
-  const focusedKey = preserveFocus ? document.activeElement?.dataset?.eventKey ?? "" : "";
+  const focusedId = preserveFocus ? document.activeElement?.dataset?.focusId ?? "" : "";
   const existing = new Map(Array.from(eventsList.children).map((node) => [node.dataset.key, node]));
   const desiredNodes = [];
 
   state.events.forEach((evt, index) => {
     const key = keys[index];
     const row = existing.get(key) ?? createEventRow(evt, key);
-    updateEventRow(row, evt, key);
+    updateEventRow(row, evt, key, activeKey);
     desiredNodes.push(row);
   });
 
@@ -392,9 +559,9 @@ function renderEvents(restoreScrollForPrepend, preserveFocus) {
     eventsList.scrollTop = eventsList.scrollHeight;
   }
 
-  if (focusedKey) {
-    const target = eventsList.querySelector(`.event-summary[data-event-key="${CSS.escape(focusedKey)}"]`);
-    if (target) target.focus();
+  if (focusedId) {
+    const focusTarget = eventsList.querySelector(`[data-focus-id="${CSS.escape(focusedId)}"]`);
+    if (focusTarget) focusTarget.focus();
   }
 
   syncFollowNotice();
@@ -406,7 +573,7 @@ function renderSelectedEvent(moveFocus = false) {
   const evt = index >= 0 ? state.events[index] : null;
 
   if (!evt) {
-    selectedEventEl.innerHTML = "<h3>Selected Timeline Event</h3><p class=\"meta\">Select an event to inspect details.</p>";
+    selectedEventEl.innerHTML = '<h3>Selected Timeline Event</h3><p class="meta">Select an event to inspect details.</p>';
     return;
   }
 
@@ -426,51 +593,233 @@ function renderSelectedEvent(moveFocus = false) {
   }
 }
 
-function renderDerivedContext() {
+function renderStepDetails() {
   const activeStep = deriveActiveStep(state.runData);
-  const nextAction = deriveNextAction(state.runData, state.events);
+  const stepSummary = activeStep
+    ? `Step ${activeStep.step_number} of ${state.runData?.step_count ?? state.runData?.steps?.length ?? "-"} - ${activeStep.agent ?? "-"} (${activeStep.status ?? "pending"})`
+    : "No active step yet. Waiting for planner or executor transition.";
 
   if (!activeStep) {
-    activeStepEl.textContent = "No active step yet.";
-  } else {
-    activeStepEl.innerHTML = `#${escapeHtml(activeStep.step_number)} ${escapeHtml(activeStep.agent)} <span class="${badgeClass(activeStep.status)}">${escapeHtml(activeStep.status)}</span><div class="meta">${escapeHtml(shortText(activeStep.task || "", 150))}</div>`;
+    activeStepEl.textContent = stepSummary;
+    stepDetailsToggle.disabled = true;
+    stepDetailsToggle.setAttribute("aria-expanded", "false");
+    stepDetailsPanel.hidden = true;
+    state.stepDetailsExpanded = false;
+    stepArtifactsList.innerHTML = "";
+    stepChangeSummary.textContent = "No change summary.";
+    return;
   }
 
-  nextActionEl.textContent = nextAction;
+  activeStepEl.innerHTML = `${escapeHtml(stepSummary)} <span class="${badgeClass(activeStep.status)}">${escapeHtml(activeStep.status)}</span>`;
+  stepDetailsToggle.disabled = false;
+  stepDetailsToggle.setAttribute("aria-expanded", String(state.stepDetailsExpanded));
+  stepDetailsPanel.hidden = !state.stepDetailsExpanded;
+
+  const artifacts = deriveStepArtifacts(activeStep);
+  stepArtifactsList.innerHTML = artifacts.length
+    ? artifacts.map((path) => `<li>${escapeHtml(path)}</li>`).join("")
+    : '<li class="meta">No artifacts recorded for this step.</li>';
+  stepChangeSummary.textContent = deriveStepSummary(activeStep);
 }
 
-function parseImpactedPaths(evt) {
-  const d = evt?.data ?? {};
-  const candidates = [d.files, d.paths, d.changed_files, d.impacted_files, d.artifacts];
-  const values = [];
-  for (const item of candidates) {
-    if (Array.isArray(item)) {
-      for (const value of item) {
-        if (typeof value === "string") values.push(value);
-      }
-    }
+function renderNextActions() {
+  nextActionEl.textContent = deriveNextAction(state.runData, state.events);
+  nextActionError.hidden = true;
+
+  const controls = deriveNextActionControls(state.runData);
+  nextActionControls.innerHTML = controls
+    .map((action) => {
+      const isBusy = state.pendingActionId === action.id;
+      const reasonId = `reason-${action.id}`;
+      const disabled = !action.enabled || isBusy;
+      const reasonText = !action.enabled ? action.reason : "";
+      return `
+        <div class="next-action-control">
+          <button type="button" data-action-id="${escapeHtml(action.id)}" ${disabled ? "disabled" : ""} ${
+            reasonText ? `aria-describedby="${reasonId}"` : ""
+          }>${isBusy ? "Working..." : escapeHtml(action.label)}</button>
+          ${reasonText ? `<p id="${reasonId}" class="control-reason">${escapeHtml(reasonText)}</p>` : ""}
+        </div>
+      `;
+    })
+    .join("");
+
+  nextActionControls.setAttribute("aria-busy", String(Boolean(state.pendingActionId)));
+}
+
+function renderMetrics() {
+  const metrics = deriveMetrics(state.runData, state.events);
+
+  metricsGrid.innerHTML = METRICS.map((metric) => {
+    const value = metrics[metric.id] ?? "-";
+    return `<div><dt>${escapeHtml(metric.label)}</dt><dd>${escapeHtml(value)}</dd></div>`;
+  }).join("");
+
+  metricsNote.hidden = !metrics.hasMissing;
+}
+
+function inferArtifactCategory(pathValue) {
+  const pathLower = String(pathValue || "").toLowerCase();
+  if (pathLower.endsWith(".agent-result.json") || pathLower.includes("result")) return "final_result";
+  if (pathLower.includes("planner") || pathLower.includes("stderr") || pathLower.includes("stdout") || pathLower.endsWith(".log")) {
+    return pathLower.includes("agent") ? "agent_log" : "system_log";
   }
-  return values;
+  if (pathLower.endsWith(".json") || pathLower.endsWith(".md") || pathLower.endsWith(".txt") || pathLower.endsWith(".yaml")) {
+    return "output";
+  }
+  return "other";
+}
+
+function artifactCategoryLabel(category) {
+  if (category === "system_log") return "System log";
+  if (category === "agent_log") return "Agent log";
+  if (category === "output") return "Output";
+  if (category === "final_result") return "Final result";
+  return "Other";
+}
+
+function fileIcon(pathValue) {
+  const pathLower = String(pathValue || "").toLowerCase();
+  if (pathLower.endsWith(".json")) return "[{}]";
+  if (pathLower.endsWith(".md")) return "[md]";
+  if (pathLower.endsWith(".log") || pathLower.includes("stderr") || pathLower.includes("stdout")) return "[log]";
+  if (pathLower.endsWith(".yaml") || pathLower.endsWith(".yml")) return "[yml]";
+  return "[file]";
+}
+
+function artifactPreviewKind(pathValue) {
+  const pathLower = String(pathValue || "").toLowerCase();
+  if (pathLower.endsWith(".planner-runtime.stdout.log")) return "planner_stdout";
+  if (pathLower.endsWith(".planner-runtime.stderr.log")) return "planner_stderr";
+  if (pathLower.endsWith(".codex-runtime.stdout.log")) return "agent_stdout";
+  if (pathLower.endsWith(".codex-runtime.stderr.log")) return "agent_stderr";
+  if (pathLower.endsWith(".agent-result.json")) return "agent_result";
+  return "";
+}
+
+function createArtifactRow(file) {
+  const item = document.createElement("li");
+  item.className = "artifact-item";
+  item.dataset.path = file.path;
+
+  const top = document.createElement("div");
+  top.className = "artifact-top";
+
+  const icon = document.createElement("span");
+  icon.className = "artifact-icon";
+  icon.setAttribute("aria-hidden", "true");
+
+  const path = document.createElement("span");
+  path.className = "artifact-path";
+
+  const tag = document.createElement("span");
+  tag.className = "artifact-tag";
+
+  const touched = document.createElement("span");
+  touched.className = "artifact-touched";
+
+  top.append(icon, path, tag, touched);
+
+  const meta = document.createElement("div");
+  meta.className = "artifact-meta meta";
+
+  const actions = document.createElement("div");
+  actions.className = "artifact-actions";
+
+  const previewBtn = document.createElement("button");
+  previewBtn.type = "button";
+  previewBtn.className = "artifact-btn";
+  previewBtn.dataset.action = "preview";
+
+  const downloadBtn = document.createElement("button");
+  downloadBtn.type = "button";
+  downloadBtn.className = "artifact-btn";
+  downloadBtn.dataset.action = "download";
+
+  const copyBtn = document.createElement("button");
+  copyBtn.type = "button";
+  copyBtn.className = "artifact-btn";
+  copyBtn.dataset.action = "copy";
+
+  actions.append(previewBtn, downloadBtn, copyBtn);
+  item.append(top, meta, actions);
+  return item;
+}
+
+function updateArtifactRow(item, file, impactedSet) {
+  const top = item.querySelector(".artifact-top");
+  const icon = top.children[0];
+  const path = top.children[1];
+  const tag = top.children[2];
+  const touched = top.children[3];
+
+  const meta = item.querySelector(".artifact-meta");
+  const previewBtn = item.querySelector(".artifact-btn[data-action='preview']");
+  const downloadBtn = item.querySelector(".artifact-btn[data-action='download']");
+  const copyBtn = item.querySelector(".artifact-btn[data-action='copy']");
+
+  const category = inferArtifactCategory(file.path);
+  const previewKind = artifactPreviewKind(file.path);
+
+  icon.textContent = fileIcon(file.path);
+  path.textContent = file.path;
+  path.title = file.path;
+
+  tag.className = `artifact-tag ${category}`;
+  tag.textContent = artifactCategoryLabel(category);
+
+  const touchedBySelection = impactedSet.has(file.path);
+  touched.textContent = touchedBySelection ? "Touched by selected event" : "";
+
+  meta.textContent = `${Math.max(1, Math.round((file.size ?? 0) / 1024))}KB | ${fmtTime(file.mtime_ms)}`;
+
+  previewBtn.textContent = "Preview";
+  previewBtn.disabled = !previewKind;
+  previewBtn.setAttribute("aria-label", `Preview ${file.path}`);
+  previewBtn.dataset.path = file.path;
+
+  downloadBtn.textContent = "Download";
+  downloadBtn.disabled = true;
+  downloadBtn.setAttribute("aria-label", `Download ${file.path}`);
+
+  copyBtn.textContent = "Copy path";
+  copyBtn.disabled = false;
+  copyBtn.setAttribute("aria-label", `Copy path for ${file.path}`);
+
+  previewBtn.title = previewKind ? "Preview in logs/result panel" : "Preview not available for this file type.";
+  downloadBtn.title = "Download is unavailable in this environment.";
 }
 
 function renderArtifacts() {
+  const previousScrollTop = artifactsList.scrollTop;
+  const focusedPath = document.activeElement?.dataset?.path ?? "";
+
   const keys = deriveEventKey(state.events);
-  const idx = keys.indexOf(state.selectedEventKey);
-  const selectedEvent = idx >= 0 ? state.events[idx] : null;
-  const impacted = new Set(parseImpactedPaths(selectedEvent));
+  const selectedIndex = keys.indexOf(state.selectedEventKey);
+  const selectedEvent = selectedIndex >= 0 ? state.events[selectedIndex] : null;
+  const impactedSet = new Set(parseImpactedPaths(selectedEvent));
 
   if (!state.files.length) {
     artifactsList.innerHTML = '<li class="artifact-item meta">No artifacts captured for this run.</li>';
     return;
   }
 
-  artifactsList.innerHTML = state.files
-    .slice(0, 60)
-    .map((f) => {
-      const touched = impacted.has(f.path) ? " • touched by selection" : "";
-      return `<li class="artifact-item"><div>${f.path}${touched}</div><div class="meta">${Math.round(f.size / 1024)}KB • ${fmtTime(f.mtime_ms)}</div></li>`;
-    })
-    .join("");
+  const existing = new Map(Array.from(artifactsList.children).map((node) => [node.dataset.path, node]));
+  const desired = [];
+
+  for (const file of state.files.slice(0, 80)) {
+    const row = existing.get(file.path) ?? createArtifactRow(file);
+    updateArtifactRow(row, file, impactedSet);
+    desired.push(row);
+  }
+
+  patchChildrenInOrder(artifactsList, desired);
+  artifactsList.scrollTop = Math.min(previousScrollTop, artifactsList.scrollHeight);
+
+  if (focusedPath) {
+    const node = artifactsList.querySelector(`[data-path="${CSS.escape(focusedPath)}"]`);
+    if (node) node.focus();
+  }
 }
 
 function switchSecondaryPanel(panelName) {
@@ -483,6 +832,12 @@ function switchSecondaryPanel(panelName) {
 
   Object.entries(secondaryPanels).forEach(([name, panel]) => {
     panel.hidden = name !== panelName;
+  });
+}
+
+function setActiveLogTab(kind) {
+  logTabButtons.forEach((button) => {
+    button.classList.toggle("active", button.dataset.kind === kind);
   });
 }
 
@@ -499,8 +854,65 @@ async function loadLog(kind = state.selectedLogKind) {
   }
 }
 
+async function handleArtifactAction(event) {
+  const button = event.target.closest(".artifact-btn");
+  if (!button) return;
+
+  const action = button.dataset.action;
+  const pathValue = button.dataset.path || button.closest(".artifact-item")?.dataset.path;
+  if (!pathValue) return;
+
+  if (action === "copy") {
+    try {
+      await navigator.clipboard.writeText(pathValue);
+      setLiveAnnouncement("Path copied.");
+    } catch {
+      setLiveAnnouncement("Unable to copy path.");
+    }
+    return;
+  }
+
+  if (action === "download") {
+    nextActionError.hidden = false;
+    nextActionError.textContent = "Action failed. The run state did not change. Try again.";
+    return;
+  }
+
+  if (action === "preview") {
+    const kind = artifactPreviewKind(pathValue);
+    if (!kind) return;
+
+    if (kind === "agent_result") {
+      switchSecondaryPanel("result");
+      await loadLog("agent_result");
+      return;
+    }
+
+    switchSecondaryPanel("logs");
+    state.selectedLogKind = kind;
+    setActiveLogTab(kind);
+    await loadLog(kind);
+  }
+}
+
+async function handleNextActionClick(event) {
+  const button = event.target.closest("button[data-action-id]");
+  if (!button) return;
+
+  const actionId = button.dataset.actionId;
+  if (actionId === "view-result") {
+    switchSecondaryPanel("result");
+    await loadLog("agent_result");
+    return;
+  }
+
+  nextActionError.hidden = false;
+  nextActionError.textContent = "Action failed. The run state did not change. Try again.";
+}
+
 async function refreshRunData(options = {}) {
   const { preserveScrollForPrepend = false, moveContextFocus = false, preserveTimelineFocus = true } = options;
+
   if (!state.selectedProject || !state.selectedRun) {
     statusLine.textContent = "Select a project and run to load monitor data.";
     return;
@@ -519,9 +931,12 @@ async function refreshRunData(options = {}) {
   state.files = filesData.files ?? [];
   state.canLoadMoreEvents = state.events.length >= state.eventsLimit;
 
+  renderRunSelectors();
   renderHeader();
   renderPhases();
-  renderDerivedContext();
+  renderStepDetails();
+  renderNextActions();
+  renderMetrics();
   renderSelectedEvent(moveContextFocus);
   renderEvents(preserveScrollForPrepend, preserveTimelineFocus);
   renderArtifacts();
@@ -537,7 +952,7 @@ async function refreshRunData(options = {}) {
   }
   state.lastEventTotal = state.events.length;
 
-  statusLine.textContent = `Loaded ${state.selectedProject}/${state.selectedRun} • last event ${runData.last_event_type ?? "-"}`;
+  statusLine.textContent = `Loaded ${state.selectedProject}/${state.selectedRun} | last event ${runData.last_event_type ?? "-"}`;
 }
 
 async function loadRunsAndRefresh(options = {}) {
@@ -545,19 +960,27 @@ async function loadRunsAndRefresh(options = {}) {
   state.isLoading = true;
 
   try {
+    headerError.hidden = true;
     const data = await fetchJson("/api/runs");
     state.runs = data.runs ?? [];
     renderRunSelectors();
 
     if (!state.selectedProject || !state.selectedRun) {
+      renderHeader();
+      renderPhases();
+      renderStepDetails();
+      renderNextActions();
+      renderMetrics();
+      eventsList.innerHTML = "";
+      artifactsList.innerHTML = '<li class="artifact-item meta">No artifacts captured for this run.</li>';
       statusLine.textContent = `No runs found under ${data.runs_root}`;
       state.isLoading = false;
       return;
     }
 
     await refreshRunData(options);
-    statusLine.textContent = `${state.runs.length} runs available • synced ${fmtTime(new Date().toISOString())}`;
   } catch (err) {
+    headerError.hidden = false;
     statusLine.textContent = `Error: ${err instanceof Error ? err.message : String(err)}`;
   }
 
@@ -569,6 +992,7 @@ projectSelect.addEventListener("change", async () => {
   state.selectedRun = "";
   state.eventsLimit = 160;
   state.followLatest = true;
+  state.expandedPayload.clear();
   renderRunSelectors();
   await refreshRunData({ moveContextFocus: false, preserveTimelineFocus: false });
 });
@@ -577,6 +1001,7 @@ runSelect.addEventListener("change", async () => {
   state.selectedRun = runSelect.value;
   state.eventsLimit = 160;
   state.followLatest = true;
+  state.expandedPayload.clear();
   await refreshRunData({ moveContextFocus: false, preserveTimelineFocus: false });
 });
 
@@ -616,19 +1041,35 @@ eventsList.addEventListener("scroll", () => {
   syncFollowNotice();
 });
 
-secondaryTabButtons.forEach((btn) => {
-  btn.addEventListener("click", () => {
-    switchSecondaryPanel(btn.dataset.panel);
+secondaryTabButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    switchSecondaryPanel(button.dataset.panel);
   });
 });
 
-logTabButtons.forEach((btn) => {
-  btn.addEventListener("click", async () => {
-    logTabButtons.forEach((b) => b.classList.remove("active"));
-    btn.classList.add("active");
-    state.selectedLogKind = btn.dataset.kind;
+logTabButtons.forEach((button) => {
+  button.addEventListener("click", async () => {
+    state.selectedLogKind = button.dataset.kind;
+    setActiveLogTab(state.selectedLogKind);
     await loadLog(state.selectedLogKind);
   });
+});
+
+artifactsList.addEventListener("click", (event) => {
+  handleArtifactAction(event).catch((err) => {
+    statusLine.textContent = `Error: ${err instanceof Error ? err.message : String(err)}`;
+  });
+});
+
+nextActionControls.addEventListener("click", (event) => {
+  handleNextActionClick(event).catch((err) => {
+    statusLine.textContent = `Error: ${err instanceof Error ? err.message : String(err)}`;
+  });
+});
+
+stepDetailsToggle.addEventListener("click", () => {
+  state.stepDetailsExpanded = !state.stepDetailsExpanded;
+  renderStepDetails();
 });
 
 setInterval(async () => {
@@ -638,3 +1079,4 @@ setInterval(async () => {
 
 await loadRunsAndRefresh();
 switchSecondaryPanel("artifacts");
+setActiveLogTab(state.selectedLogKind);
