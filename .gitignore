@@ -3,7 +3,6 @@ dist/
 .DS_Store
 .env
 .claude/
-.entire/
 config/project.yaml
 .agentsdlc/
 mnt/user-data/outputs/
