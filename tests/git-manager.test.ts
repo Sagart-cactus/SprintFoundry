@@ -137,24 +137,50 @@ describe("GitManager", () => {
     expect(slug.length).toBeLessThanOrEqual(50);
   });
 
-  it("commitAndPush calls git add, commit, push", async () => {
-    const git = new GitManager(makeRepoConfig(), makeBranchStrategy());
+  it("commitAndPush calls git add, unstages excluded, commits, and pushes", async () => {
+    // Default mock returns status 0 for all calls except where overridden
+    // Calls: git add -A, N × git reset HEAD (excluded files), git diff --staged --name-only,
+    //        git diff --staged --quiet (status 1 = has changes), git commit, git push
+    (mockSpawnSync as any).mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "diff" && args[1] === "--staged" && args[2] === "--quiet") {
+        return { status: 1, stdout: "", stderr: "" }; // has changes
+      }
+      if (args[0] === "diff" && args[1] === "--staged" && args[2] === "--name-only") {
+        return { status: 0, stdout: "", stderr: "" }; // no runtime files staged
+      }
+      return { status: 0, stdout: "", stderr: "" };
+    });
 
+    const git = new GitManager(makeRepoConfig(), makeBranchStrategy());
     await git.commitAndPush("/workspace", "feat: add CSV export");
 
-    expect(mockSpawnSync).toHaveBeenCalledTimes(3);
+    const calls = (mockSpawnSync as any).mock.calls;
+    const commands = calls.map((c: any[]) => c[1]);
 
-    const calls = (mockSpawnSync as any).mock.calls.map((c: any[]) => c[1]);
-    expect(calls[0]).toEqual(["add", "-A"]);
-    expect(calls[1]).toEqual(["commit", "-m", "feat: add CSV export"]);
-    expect(calls[2]).toEqual(["push", "-u", "origin", "HEAD"]);
+    // First call should be git add -A
+    expect(commands[0]).toEqual(["add", "-A"]);
+    // Should contain git reset HEAD -- calls for excluded files
+    const resetCalls = commands.filter((c: string[]) => c[0] === "reset" && c[1] === "HEAD");
+    expect(resetCalls.length).toBeGreaterThan(0);
+    // Should end with commit and push
+    const commitCall = commands.find((c: string[]) => c[0] === "commit");
+    expect(commitCall).toEqual(["commit", "-m", "feat: add CSV export"]);
+    const pushCall = commands.find((c: string[]) => c[0] === "push");
+    expect(pushCall).toEqual(["push", "-u", "origin", "HEAD"]);
   });
 
-  it("createPullRequest calls gh pr create", async () => {
-    (mockSpawnSync as any).mockReturnValueOnce({
-      status: 0,
-      stdout: "https://github.com/test/repo/pull/1\n",
-      stderr: "",
+  it("createPullRequest pushes branch then calls gh pr create", async () => {
+    (mockSpawnSync as any).mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "gh") {
+        return { status: 0, stdout: "https://github.com/test/repo/pull/1\n", stderr: "" };
+      }
+      if (args[0] === "diff" && args[1] === "--staged" && args[2] === "--quiet") {
+        return { status: 0, stdout: "", stderr: "" }; // no remaining changes
+      }
+      if (args[0] === "diff" && args[1] === "--staged" && args[2] === "--name-only") {
+        return { status: 0, stdout: "", stderr: "" };
+      }
+      return { status: 0, stdout: "", stderr: "" };
     });
 
     const git = new GitManager(makeRepoConfig(), makeBranchStrategy());
@@ -173,24 +199,31 @@ describe("GitManager", () => {
     const prUrl = await git.createPullRequest("/workspace", run);
 
     expect(prUrl).toBe("https://github.com/test/repo/pull/1");
-    const call = (mockSpawnSync as any).mock.calls[0] as any[];
-    expect(call[0]).toBe("gh");
-    expect(call[1]).toContain("pr");
-    expect(call[1]).toContain("create");
+
+    const calls = (mockSpawnSync as any).mock.calls;
+    const commands = calls.map((c: any[]) => ({ cmd: c[0], args: c[1] }));
+    // Should push before gh pr create
+    const pushIdx = commands.findIndex((c: any) => c.cmd === "git" && c.args[0] === "push");
+    const ghIdx = commands.findIndex((c: any) => c.cmd === "gh");
+    expect(pushIdx).toBeGreaterThan(-1);
+    expect(ghIdx).toBeGreaterThan(pushIdx);
+    expect(commands[ghIdx].args).toContain("pr");
+    expect(commands[ghIdx].args).toContain("create");
   });
 
-  it("createPullRequest falls back to commitAndPush on gh failure", async () => {
-    (mockSpawnSync as any)
-      .mockReturnValueOnce({
-        status: 1,
-        stdout: "",
-        stderr: "gh not found",
-      })
-      .mockReturnValue({
-        status: 0,
-        stdout: "",
-        stderr: "",
-      });
+  it("createPullRequest returns manual message when gh pr create fails", async () => {
+    (mockSpawnSync as any).mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "gh") {
+        return { status: 1, stdout: "", stderr: "gh not found" };
+      }
+      if (args[0] === "diff" && args[1] === "--staged" && args[2] === "--quiet") {
+        return { status: 0, stdout: "", stderr: "" }; // no remaining changes
+      }
+      if (args[0] === "diff" && args[1] === "--staged" && args[2] === "--name-only") {
+        return { status: 0, stdout: "", stderr: "" };
+      }
+      return { status: 0, stdout: "", stderr: "" };
+    });
 
     const git = new GitManager(makeRepoConfig(), makeBranchStrategy());
 
@@ -205,8 +238,14 @@ describe("GitManager", () => {
     const result = await git.createPullRequest("/workspace", run);
 
     expect(result).toContain("Branch pushed");
-    // Should have called git add/commit/push after gh failure
-    expect(mockSpawnSync).toHaveBeenCalledTimes(4); // 1 failed gh + 3 git commands
+    expect(result).toContain("Create PR manually");
+
+    // Branch should have been pushed before gh attempt
+    const calls = (mockSpawnSync as any).mock.calls;
+    const pushIdx = calls.findIndex((c: any[]) => c[0] === "git" && c[1][0] === "push");
+    const ghIdx = calls.findIndex((c: any[]) => c[0] === "gh");
+    expect(pushIdx).toBeGreaterThan(-1);
+    expect(ghIdx).toBeGreaterThan(pushIdx);
   });
 
   it("buildPRBody includes step summaries and stats", () => {
@@ -245,14 +284,16 @@ describe("GitManager", () => {
 
   // ---- commitStepCheckpoint ----
 
-  it("commitStepCheckpoint: happy path — stages changes, detects diff, commits and returns true", async () => {
-    // First call: git add -A (status 0)
-    // Second call: git diff --staged --quiet (status 1 = changes present)
-    // Third call: git commit -m ... (status 0)
-    (mockSpawnSync as any)
-      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" }) // git add -A
-      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "" }) // git diff --staged --quiet (exit 1 = has changes)
-      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" }); // git commit
+  it("commitStepCheckpoint: happy path — stages changes, unstages excluded, commits, pushes and returns true", async () => {
+    (mockSpawnSync as any).mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "diff" && args[1] === "--staged" && args[2] === "--quiet") {
+        return { status: 1, stdout: "", stderr: "" }; // has changes
+      }
+      if (args[0] === "diff" && args[1] === "--staged" && args[2] === "--name-only") {
+        return { status: 0, stdout: "", stderr: "" }; // no runtime files
+      }
+      return { status: 0, stdout: "", stderr: "" };
+    });
 
     const git = new GitManager(makeRepoConfig(), makeBranchStrategy());
     const result = await git.commitStepCheckpoint("/workspace", "run-abc123", 1, "developer");
@@ -260,50 +301,132 @@ describe("GitManager", () => {
     expect(result).toBe(true);
 
     const calls = (mockSpawnSync as any).mock.calls;
-    expect(calls[0][1]).toEqual(["add", "-A"]);
-    expect(calls[1][1]).toEqual(["diff", "--staged", "--quiet"]);
-    expect(calls[2][1]).toEqual(["commit", "-m", "chore(agentsdlc): run run-abc123 step 1 developer"]);
+    const commands = calls.map((c: any[]) => c[1]);
+    expect(commands[0]).toEqual(["add", "-A"]);
+    // Should have reset calls for excluded files
+    const resetCalls = commands.filter((c: string[]) => c[0] === "reset" && c[1] === "HEAD");
+    expect(resetCalls.length).toBeGreaterThan(0);
+    // Should commit then push
+    const commitCall = commands.find((c: string[]) => c[0] === "commit");
+    expect(commitCall).toEqual(["commit", "-m", "chore(agentsdlc): run run-abc123 step 1 developer"]);
+    const pushCall = commands.find((c: string[]) => c[0] === "push");
+    expect(pushCall).toEqual(["push", "-u", "origin", "HEAD"]);
   });
 
   it("commitStepCheckpoint: commit message includes runId, stepNumber, and agentId", async () => {
-    (mockSpawnSync as any)
-      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" }) // git add -A
-      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "" }) // diff = has changes
-      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" }); // git commit
+    (mockSpawnSync as any).mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "diff" && args[1] === "--staged" && args[2] === "--quiet") {
+        return { status: 1, stdout: "", stderr: "" };
+      }
+      if (args[0] === "diff" && args[1] === "--staged" && args[2] === "--name-only") {
+        return { status: 0, stdout: "", stderr: "" };
+      }
+      return { status: 0, stdout: "", stderr: "" };
+    });
 
     const git = new GitManager(makeRepoConfig(), makeBranchStrategy());
     await git.commitStepCheckpoint("/workspace", "run-xyz-99", 42, "qa");
 
-    const commitCall = (mockSpawnSync as any).mock.calls[2];
-    expect(commitCall[1]).toContain("commit");
-    expect(commitCall[1]).toContain("-m");
+    const calls = (mockSpawnSync as any).mock.calls;
+    const commitCall = calls.find((c: any[]) => c[1][0] === "commit");
+    expect(commitCall).toBeDefined();
     const commitMsg = commitCall[1][commitCall[1].indexOf("-m") + 1];
     expect(commitMsg).toBe("chore(agentsdlc): run run-xyz-99 step 42 qa");
   });
 
   it("commitStepCheckpoint: no-diff skip — returns false without creating a commit", async () => {
-    // git add succeeds, git diff --staged --quiet exits 0 = no changes
-    (mockSpawnSync as any)
-      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" }) // git add -A
-      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" }); // git diff --staged --quiet (exit 0 = no changes)
+    (mockSpawnSync as any).mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "diff" && args[1] === "--staged" && args[2] === "--quiet") {
+        return { status: 0, stdout: "", stderr: "" }; // no changes
+      }
+      if (args[0] === "diff" && args[1] === "--staged" && args[2] === "--name-only") {
+        return { status: 0, stdout: "", stderr: "" };
+      }
+      return { status: 0, stdout: "", stderr: "" };
+    });
 
     const git = new GitManager(makeRepoConfig(), makeBranchStrategy());
     const result = await git.commitStepCheckpoint("/workspace", "run-noop", 3, "developer");
 
     expect(result).toBe(false);
 
-    // git commit should NOT have been called
     const calls = (mockSpawnSync as any).mock.calls;
-    expect(calls.length).toBe(2); // only add + diff, no commit
     const commandNames = calls.map((c: any[]) => c[1][0]);
     expect(commandNames).not.toContain("commit");
   });
 
+  it("commitStepCheckpoint: unstages orchestration scaffold files (CLAUDE.md, AGENTS.md, etc.)", async () => {
+    (mockSpawnSync as any).mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "diff" && args[1] === "--staged" && args[2] === "--quiet") {
+        return { status: 1, stdout: "", stderr: "" };
+      }
+      if (args[0] === "diff" && args[1] === "--staged" && args[2] === "--name-only") {
+        return { status: 0, stdout: "", stderr: "" };
+      }
+      return { status: 0, stdout: "", stderr: "" };
+    });
+
+    const git = new GitManager(makeRepoConfig(), makeBranchStrategy());
+    await git.commitStepCheckpoint("/workspace", "run-excl", 1, "developer");
+
+    const calls = (mockSpawnSync as any).mock.calls;
+    const resetPaths = calls
+      .filter((c: any[]) => c[1][0] === "reset" && c[1][1] === "HEAD")
+      .map((c: any[]) => c[1][3]); // ["reset", "HEAD", "--", <path>]
+
+    expect(resetPaths).toContain("CLAUDE.md");
+    expect(resetPaths).toContain("AGENTS.md");
+    expect(resetPaths).toContain(".agent-task.md");
+    expect(resetPaths).toContain(".agent-result.json");
+    expect(resetPaths).toContain(".agent-profile.md");
+    expect(resetPaths).toContain(".agentsdlc");
+    expect(resetPaths).toContain("artifacts");
+    expect(resetPaths).toContain(".entire");
+  });
+
+  it("commitStepCheckpoint: unstages step-specific runtime debug/log files", async () => {
+    (mockSpawnSync as any).mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "diff" && args[1] === "--staged" && args[2] === "--quiet") {
+        return { status: 1, stdout: "", stderr: "" };
+      }
+      if (args[0] === "diff" && args[1] === "--staged" && args[2] === "--name-only") {
+        return {
+          status: 0,
+          stdout: ".claude-runtime.step-1.attempt-1.debug.json\n.codex-runtime.step-2.attempt-1.stderr.log\nsrc/index.ts\n",
+          stderr: "",
+        };
+      }
+      return { status: 0, stdout: "", stderr: "" };
+    });
+
+    const git = new GitManager(makeRepoConfig(), makeBranchStrategy());
+    await git.commitStepCheckpoint("/workspace", "run-rt", 1, "developer");
+
+    const calls = (mockSpawnSync as any).mock.calls;
+    const resetPaths = calls
+      .filter((c: any[]) => c[1][0] === "reset" && c[1][1] === "HEAD")
+      .map((c: any[]) => c[1][3]);
+
+    // Runtime files should be unstaged
+    expect(resetPaths).toContain(".claude-runtime.step-1.attempt-1.debug.json");
+    expect(resetPaths).toContain(".codex-runtime.step-2.attempt-1.stderr.log");
+    // Real source files should NOT be unstaged
+    expect(resetPaths).not.toContain("src/index.ts");
+  });
+
   it("commitStepCheckpoint: throws when git commit fails (non-zero exit)", async () => {
-    (mockSpawnSync as any)
-      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" }) // git add -A
-      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "" }) // diff = has changes
-      .mockReturnValueOnce({ status: 128, stdout: "", stderr: "fatal: not a git repository" }); // commit fails
+    (mockSpawnSync as any).mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "diff" && args[1] === "--staged" && args[2] === "--quiet") {
+        return { status: 1, stdout: "", stderr: "" };
+      }
+      if (args[0] === "diff" && args[1] === "--staged" && args[2] === "--name-only") {
+        return { status: 0, stdout: "", stderr: "" };
+      }
+      if (args[0] === "commit") {
+        return { status: 128, stdout: "", stderr: "fatal: not a git repository" };
+      }
+      return { status: 0, stdout: "", stderr: "" };
+    });
 
     const git = new GitManager(makeRepoConfig(), makeBranchStrategy());
     await expect(
@@ -325,10 +448,21 @@ describe("GitManager", () => {
   });
 
   it("commitStepCheckpoint: throws when spawnSync returns error object", async () => {
-    (mockSpawnSync as any)
-      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" }) // git add -A
-      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "" }) // diff = has changes
-      .mockReturnValueOnce({ error: new Error("ENOENT: git not found"), status: null, stdout: "" }); // git commit: system error
+    let callCount = 0;
+    (mockSpawnSync as any).mockImplementation((_cmd: string, args: string[]) => {
+      callCount++;
+      if (callCount === 1) return { status: 0, stdout: "", stderr: "" }; // git add
+      if (args[0] === "diff" && args[1] === "--staged" && args[2] === "--name-only") {
+        return { status: 0, stdout: "", stderr: "" };
+      }
+      if (args[0] === "diff" && args[1] === "--staged" && args[2] === "--quiet") {
+        return { status: 1, stdout: "", stderr: "" };
+      }
+      if (args[0] === "commit") {
+        return { error: new Error("ENOENT: git not found"), status: null, stdout: "" };
+      }
+      return { status: 0, stdout: "", stderr: "" };
+    });
 
     const git = new GitManager(makeRepoConfig(), makeBranchStrategy());
     await expect(
@@ -337,11 +471,17 @@ describe("GitManager", () => {
   });
 
   it("commitStepCheckpoint: PR creation still works after per-step commits (gh pr create path)", async () => {
-    // Simulate: per-step commits already present; createPullRequest via gh CLI
-    (mockSpawnSync as any).mockReturnValueOnce({
-      status: 0,
-      stdout: "https://github.com/test/repo/pull/99\n",
-      stderr: "",
+    (mockSpawnSync as any).mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "gh") {
+        return { status: 0, stdout: "https://github.com/test/repo/pull/99\n", stderr: "" };
+      }
+      if (args[0] === "diff" && args[1] === "--staged" && args[2] === "--quiet") {
+        return { status: 0, stdout: "", stderr: "" }; // no remaining changes (already committed by checkpoints)
+      }
+      if (args[0] === "diff" && args[1] === "--staged" && args[2] === "--name-only") {
+        return { status: 0, stdout: "", stderr: "" };
+      }
+      return { status: 0, stdout: "", stderr: "" };
     });
 
     const git = new GitManager(makeRepoConfig(), makeBranchStrategy());
@@ -358,11 +498,12 @@ describe("GitManager", () => {
 
     const prUrl = await git.createPullRequest("/workspace", run);
 
-    // Should succeed via gh pr create — no extra commits needed
     expect(prUrl).toBe("https://github.com/test/repo/pull/99");
-    const call = (mockSpawnSync as any).mock.calls[0];
-    expect(call[0]).toBe("gh");
-    expect(call[1]).toContain("pr");
-    expect(call[1]).toContain("create");
+    // gh pr create should have been called after push
+    const calls = (mockSpawnSync as any).mock.calls;
+    const ghCall = calls.find((c: any[]) => c[0] === "gh");
+    expect(ghCall).toBeDefined();
+    expect(ghCall[1]).toContain("pr");
+    expect(ghCall[1]).toContain("create");
   });
 });
