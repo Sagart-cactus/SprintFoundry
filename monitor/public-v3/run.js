@@ -379,7 +379,7 @@ function renderPlanPanel(runData, events) {
           <pre>${escapeHtml(plan?.reasoning || "No reasoning captured")}</pre>
         </details>
       </div>
-      <div class="plan-card error">
+      <div class="plan-card${failures.length || plannerErrLines.length ? " error" : ""}">
         <h3>Errors</h3>
         ${
           failures.length || plannerErrLines.length
@@ -483,6 +483,15 @@ function eventPreview(event) {
   );
 }
 
+function timelineDotClass(eventType) {
+  const t = String(eventType || "").toLowerCase();
+  if (t.includes("completed")) return "dot-completed";
+  if (t.includes("failed") || t.includes("error")) return "dot-failed";
+  if (t.includes("rework")) return "dot-rework";
+  if (t.includes("started")) return "dot-started";
+  return "dot-system";
+}
+
 function renderTimeline(events, runData) {
   const ascending = events.slice(-180);
   if (!ascending.length) {
@@ -495,9 +504,10 @@ function renderTimeline(events, runData) {
       const stepNum = evt?.data?.step;
       const step = typeof stepNum === "number" ? (runData.steps ?? []).find((s) => s.step_number === stepNum) : null;
       const context = typeof stepNum === "number" ? `step ${stepNum}${step?.agent ? ` · ${step.agent}` : ""}` : "system";
+      const dotClass = timelineDotClass(evt.event_type);
       return `
         <li class="timeline-item">
-          <span class="timeline-dot"></span>
+          <span class="timeline-dot ${dotClass}"></span>
           <div class="timeline-content">
             <div class="timeline-head">
               <strong>${escapeHtml(stepHeading(evt, runData))}</strong>
