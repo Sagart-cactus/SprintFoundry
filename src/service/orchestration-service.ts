@@ -300,7 +300,7 @@ export class OrchestrationService {
       `[step ${step.step_number}] Debug auth: provider=${modelConfig.provider}, model=${modelConfig.model}, runtime=${runtime.provider}/${runtime.mode}, api_key_present=${apiKey.length > 0}`
     );
 
-    // Check total task budget
+    // Check total task budget (tokens)
     if (run.total_tokens_used >= budget.per_task_total_tokens) {
       stepExec.status = "failed";
       await this.emitEvent(run.run_id, "agent.token_limit_exceeded", {
@@ -309,6 +309,34 @@ export class OrchestrationService {
         limit: budget.per_task_total_tokens,
       });
       return "failed";
+    }
+
+    // Check total task cost cap
+    if (budget.per_task_max_cost_usd > 0 && run.total_cost_usd >= budget.per_task_max_cost_usd) {
+      stepExec.status = "failed";
+      await this.emitEvent(run.run_id, "agent.token_limit_exceeded", {
+        step: step.step_number,
+        total_cost: run.total_cost_usd,
+        cost_limit: budget.per_task_max_cost_usd,
+        reason: "per_task_max_cost_usd exceeded",
+      });
+      return "failed";
+    }
+
+    // Check total task timeout
+    const taskTimeoutMinutes = this.platformConfig.defaults.timeouts.task_timeout_minutes;
+    if (taskTimeoutMinutes > 0) {
+      const elapsedMinutes = (Date.now() - run.created_at.getTime()) / 60_000;
+      if (elapsedMinutes >= taskTimeoutMinutes) {
+        stepExec.status = "failed";
+        await this.emitEvent(run.run_id, "task.failed", {
+          step: step.step_number,
+          elapsed_minutes: Math.round(elapsedMinutes),
+          timeout_minutes: taskTimeoutMinutes,
+          reason: "task_timeout_minutes exceeded",
+        });
+        return "failed";
+      }
     }
 
     try {
@@ -344,6 +372,7 @@ export class OrchestrationService {
 
       stepExec.tokens_used = result.tokens_used;
       stepExec.cost_usd = result.cost_usd;
+      stepExec.container_id = result.container_id;
       stepExec.result = result.agentResult;
       stepExec.completed_at = new Date();
 

@@ -261,8 +261,10 @@ async function listFiles(projectId, runId, root = "") {
   const out = [];
 
   async function walk(current) {
+    if (out.length >= 1000) return;
     const ents = await fs.readdir(current, { withFileTypes: true }).catch(() => []);
     for (const ent of ents) {
+      if (out.length >= 1000) return;
       const abs = path.join(current, ent.name);
       const rel = path.relative(runPath, abs).replace(/\\/g, "/");
       if (ent.isDirectory()) {
@@ -276,7 +278,6 @@ async function listFiles(projectId, runId, root = "") {
           size: stat.size,
           mtime_ms: stat.mtimeMs,
         });
-        if (out.length >= 1000) return;
       }
     }
   }
@@ -453,6 +454,11 @@ const server = http.createServer(async (req, res) => {
       error: err instanceof Error ? err.message : String(err),
     });
   }
+});
+
+server.on("error", (err) => {
+  console.error(`[monitor] Server error: ${err.message}`);
+  process.exitCode = 1;
 });
 
 server.listen(port, "127.0.0.1", () => {

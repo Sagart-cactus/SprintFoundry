@@ -285,8 +285,14 @@ export class GitManager {
     return url.replace("https://", `https://${token}@`);
   }
 
+  private redactArgs(args: string[]): string[] {
+    const token = this.repoConfig.token;
+    if (!token) return args;
+    return args.map((arg) => arg.includes(token) ? arg.replace(token, "***") : arg);
+  }
+
   private exec(args: string[], cwd: string): string {
-    console.log(`[git] Running: ${args.join(" ")}`);
+    console.log(`[git] Running: ${this.redactArgs(args).join(" ")}`);
     const [command, ...commandArgs] = args;
     const result = spawnSync(command, commandArgs, {
       cwd,
