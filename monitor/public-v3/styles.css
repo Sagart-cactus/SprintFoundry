@@ -834,6 +834,106 @@ button {
   cursor: not-allowed;
 }
 
+/* Search input */
+input[type="text"] {
+  height: 38px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: 10px;
+  padding: 0 12px;
+  color: var(--text);
+  font-size: 13px;
+  min-width: 160px;
+}
+
+input[type="text"]:focus {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand), transparent 80%);
+}
+
+/* Collapsible lane headers */
+.lane-header {
+  cursor: pointer;
+  user-select: none;
+}
+
+.lane-header::before {
+  content: "\25BE";
+  display: inline-block;
+  margin-right: 6px;
+  transition: transform 0.15s ease;
+}
+
+.lane-header[aria-expanded="false"]::before {
+  transform: rotate(-90deg);
+}
+
+.lane-count {
+  font-weight: 400;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Stale run cards */
+.run-card.stale {
+  opacity: 0.55;
+  border-left-color: #a0adb8;
+}
+
+.run-card.stale:hover {
+  opacity: 0.8;
+}
+
+.stale-badge {
+  color: #6b7785;
+  border-color: #c0c9d2;
+  background: #eef1f4;
+  font-style: italic;
+}
+
+/* Hidden runs toggle */
+.hidden-toggle {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: center;
+}
+
+.hidden-toggle:hover {
+  background: var(--surface-soft);
+  color: var(--text);
+}
+
+/* Timeline dot color variants */
+.timeline-dot.dot-completed {
+  background: var(--ok);
+}
+
+.timeline-dot.dot-failed,
+.timeline-dot.dot-error {
+  background: var(--err);
+}
+
+.timeline-dot.dot-rework {
+  background: var(--warn);
+}
+
+.timeline-dot.dot-started {
+  background: #2e7dd6;
+}
+
+.timeline-dot.dot-system {
+  background: #8a99a8;
+}
+
 @media (max-width: 1020px) {
   .run-grid {
     grid-template-columns: 1fr;

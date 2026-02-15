@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Run Monitor v3</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔬</text></svg>" />
     <link rel="stylesheet" href="/v3/styles.css" />
   </head>
   <body>
@@ -13,6 +14,10 @@
         <p>AI run execution dashboard</p>
       </div>
       <div class="topbar-controls">
+        <label class="control">
+          <span>Search</span>
+          <input id="search-input" type="text" placeholder="Filter runs..." aria-label="Search runs" />
+        </label>
         <label class="control">
           <span>Project</span>
           <select id="project-filter" aria-label="Filter by project"></select>
