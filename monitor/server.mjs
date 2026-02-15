@@ -21,6 +21,15 @@ const LOG_KIND_TO_FILES = {
   agent_result: [".agent-result.json"],
 };
 
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
+    req.on("error", reject);
+  });
+}
+
 function sendJson(res, status, body) {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(body));
@@ -90,6 +99,8 @@ function inferStatus(events) {
     const t = events[i]?.event_type;
     if (t === "task.completed") return "completed";
     if (t === "task.failed") return "failed";
+    if (t === "human_gate.requested") return "waiting_human_review";
+    if (t === "human_gate.approved" || t === "human_gate.rejected") return "executing";
     if (t === "step.started") return "executing";
     if (t === "task.plan_generated") return "planning";
     if (t === "task.created") return "pending";
@@ -374,6 +385,68 @@ const server = http.createServer(async (req, res) => {
       }
       const files = await listFiles(project, run, root);
       sendJson(res, 200, { files });
+      return;
+    }
+
+    if (pathname === "/api/reviews") {
+      const project = reqUrl.searchParams.get("project");
+      const run = reqUrl.searchParams.get("run");
+      if (!project || !run) {
+        sendJson(res, 400, { error: "Missing project/run query params" });
+        return;
+      }
+      const runPath = safeJoin(runsRoot, project, run);
+      const reviewDir = path.join(runPath, ".agentsdlc", "reviews");
+      const entries = await fs.readdir(reviewDir).catch(() => []);
+      const reviews = [];
+      for (const entry of entries) {
+        if (!entry.endsWith(".pending.json")) continue;
+        const raw = await fs.readFile(path.join(reviewDir, entry), "utf-8").catch(() => "");
+        if (!raw) continue;
+        try {
+          reviews.push(JSON.parse(raw));
+        } catch { /* skip malformed */ }
+      }
+      sendJson(res, 200, { reviews });
+      return;
+    }
+
+    if (pathname === "/api/review/decide" && req.method === "POST") {
+      const body = await readBody(req);
+      let payload;
+      try {
+        payload = JSON.parse(body);
+      } catch {
+        sendJson(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      const { project, run: runId, review_id, decision, feedback } = payload;
+      if (!project || !runId || !review_id) {
+        sendJson(res, 400, { error: "Missing project, run, or review_id" });
+        return;
+      }
+      if (decision !== "approved" && decision !== "rejected") {
+        sendJson(res, 400, { error: "decision must be 'approved' or 'rejected'" });
+        return;
+      }
+      if (!/^review-\d+$/.test(review_id)) {
+        sendJson(res, 400, { error: "Invalid review_id format" });
+        return;
+      }
+      const runPath = safeJoin(runsRoot, project, runId);
+      const reviewDir = path.join(runPath, ".agentsdlc", "reviews");
+      await fs.mkdir(reviewDir, { recursive: true });
+      const decisionPath = path.join(reviewDir, `${review_id}.decision.json`);
+      await fs.writeFile(
+        decisionPath,
+        JSON.stringify({
+          status: decision,
+          reviewer_feedback: feedback ?? "",
+          decided_at: new Date().toISOString(),
+        }, null, 2),
+        "utf-8"
+      );
+      sendJson(res, 200, { ok: true, path: decisionPath });
       return;
     }
 

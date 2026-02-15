@@ -1,6 +1,7 @@
 const runTitle = document.getElementById("run-title");
 const refreshBtn = document.getElementById("refresh-btn");
 const summaryBar = document.getElementById("summary-bar");
+const reviewPanel = document.getElementById("review-panel");
 const planToggle = document.getElementById("plan-toggle");
 const planBody = document.getElementById("plan-body");
 const stepsGrid = document.getElementById("steps-grid");
@@ -24,6 +25,7 @@ const state = {
   stepMeta: new Map(),
   plannerStdout: "",
   plannerStderr: "",
+  reviews: [],
 };
 
 function escapeHtml(value) {
@@ -166,6 +168,9 @@ function eventLabel(rawType) {
   if (t === "step.failed") return "Step failed";
   if (t === "task.completed") return "Run completed";
   if (t === "task.failed") return "Run failed";
+  if (t === "human_gate.requested") return "Human gate requested";
+  if (t === "human_gate.approved") return "Human gate approved";
+  if (t === "human_gate.rejected") return "Human gate rejected";
   return String(rawType || "event").replaceAll(/[._]/g, " ");
 }
 
@@ -247,6 +252,72 @@ function renderSummary(runData) {
     <span class="sum-chip">Updated ${escapeHtml(relative(runData.last_event_ts))}</span>
   `;
 }
+
+function renderReviewPanel(reviews) {
+  if (!reviews.length) {
+    reviewPanel.innerHTML = "";
+    return;
+  }
+
+  reviewPanel.innerHTML = reviews
+    .map((review) => {
+      const artifacts = Array.isArray(review.artifacts_to_review) ? review.artifacts_to_review : [];
+      return `
+        <div class="review-card">
+          <div class="review-header">
+            <span class="review-badge">Human Gate</span>
+            <span class="review-meta">After step ${escapeHtml(String(review.after_step ?? "?"))} · ${escapeHtml(review.review_id || "")}</span>
+          </div>
+          <div class="review-summary">${escapeHtml(review.summary || "No summary provided.")}</div>
+          ${artifacts.length ? `
+            <details class="review-artifacts">
+              <summary>Artifacts to review (${artifacts.length})</summary>
+              <ul>${artifacts.map((a) => `<li>${escapeHtml(a)}</li>`).join("")}</ul>
+            </details>
+          ` : ""}
+          <textarea class="review-feedback" data-review-id="${escapeHtml(review.review_id)}" placeholder="Optional feedback..." rows="2"></textarea>
+          <div class="review-actions">
+            <button type="button" class="review-btn approve" data-review-id="${escapeHtml(review.review_id)}" data-decision="approved">Approve</button>
+            <button type="button" class="review-btn reject" data-review-id="${escapeHtml(review.review_id)}" data-decision="rejected">Reject</button>
+          </div>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+async function submitReviewDecision(reviewId, decision) {
+  const textarea = reviewPanel.querySelector(`textarea[data-review-id="${CSS.escape(reviewId)}"]`);
+  const feedback = textarea?.value ?? "";
+  const btn = reviewPanel.querySelector(`button[data-review-id="${CSS.escape(reviewId)}"][data-decision="${CSS.escape(decision)}"]`);
+  if (btn) { btn.disabled = true; btn.textContent = "Submitting..."; }
+  try {
+    const resp = await fetch("/api/review/decide", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project, run, review_id: reviewId, decision, feedback }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ error: "Unknown error" }));
+      alert(`Review failed: ${err.error || "Unknown error"}`);
+      return;
+    }
+    await refresh();
+  } catch (err) {
+    alert(`Review failed: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = decision === "approved" ? "Approve" : "Reject"; }
+  }
+}
+
+reviewPanel.addEventListener("click", (event) => {
+  const btn = event.target.closest(".review-btn");
+  if (!btn) return;
+  const reviewId = btn.dataset.reviewId;
+  const decision = btn.dataset.decision;
+  if (!reviewId || !decision) return;
+  void submitReviewDecision(reviewId, decision);
+});
 
 function plannerItems(raw) {
   return parseJsonLines(raw).slice(-30);
@@ -676,7 +747,15 @@ async function refresh() {
     state.plannerStderr = plannerStderr;
     state.stepMeta = buildStepMeta(runData, state.events);
 
+    if (runData.status === "waiting_human_review") {
+      const reviewRes = await fetchJson(`/api/reviews?project=${encodeURIComponent(project)}&run=${encodeURIComponent(run)}`).catch(() => ({ reviews: [] }));
+      state.reviews = Array.isArray(reviewRes.reviews) ? reviewRes.reviews : [];
+    } else {
+      state.reviews = [];
+    }
+
     renderSummary(runData);
+    renderReviewPanel(state.reviews);
     renderPlanPanel(runData, state.events);
     renderSteps(runData, state.stepMeta);
     renderTimeline(state.events, runData);

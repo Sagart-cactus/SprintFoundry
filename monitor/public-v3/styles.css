@@ -180,6 +180,12 @@ button {
   background: #edf5ff;
 }
 
+.badge.waiting_human_review {
+  color: #7a4200;
+  border-color: color-mix(in srgb, var(--warn), white 60%);
+  background: #fff8ed;
+}
+
 .run-card h3 {
   margin: 0;
   font-size: 15px;
@@ -294,6 +300,17 @@ button {
   border-color: #c8d9ea;
   color: #1f4d7a;
   background: #edf5ff;
+}
+
+.sum-chip.status.waiting_human_review {
+  border-color: color-mix(in srgb, var(--warn), white 60%);
+  color: #7a4200;
+  background: #fff8ed;
+  font-weight: 700;
+}
+
+.run-card.waiting_human_review {
+  border-left-color: var(--warn);
 }
 
 .panel-toggle {
@@ -686,6 +703,135 @@ button {
 
 .json-null {
   color: #888;
+}
+
+/* Review / Human Gate Panel */
+.review-card {
+  border: 2px solid var(--warn);
+  border-radius: var(--radius);
+  background: #fffbf5;
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+  box-shadow: 0 4px 16px rgba(217, 127, 0, 0.10);
+}
+
+.review-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.review-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #7a4200;
+  background: #ffecc8;
+  border: 1px solid color-mix(in srgb, var(--warn), white 50%);
+}
+
+.review-meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.review-summary {
+  font-size: 13px;
+  line-height: 1.5;
+  color: #2b3e4e;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow: auto;
+  border: 1px solid #e8dcc8;
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--surface);
+}
+
+.review-artifacts {
+  font-size: 12px;
+}
+
+.review-artifacts summary {
+  cursor: pointer;
+  color: #385673;
+  font-weight: 600;
+}
+
+.review-artifacts ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.review-artifacts li {
+  margin-bottom: 3px;
+  font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+}
+
+.review-feedback {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid #d8e0e6;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-family: inherit;
+  font-size: 13px;
+  resize: vertical;
+  background: var(--surface);
+}
+
+.review-feedback:focus {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand), transparent 80%);
+}
+
+.review-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.review-btn {
+  flex: 1;
+  height: 40px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  border: 1px solid;
+}
+
+.review-btn.approve {
+  color: #fff;
+  background: var(--ok);
+  border-color: var(--ok);
+}
+
+.review-btn.approve:hover {
+  background: #178a48;
+}
+
+.review-btn.reject {
+  color: var(--err);
+  background: #fff0f0;
+  border-color: color-mix(in srgb, var(--err), white 60%);
+}
+
+.review-btn.reject:hover {
+  background: #ffe0e0;
+}
+
+.review-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 @media (max-width: 1020px) {
