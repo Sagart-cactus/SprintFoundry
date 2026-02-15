@@ -353,14 +353,7 @@ export class OrchestrationService {
 
       // Handle result
       if (result.agentResult.status === "complete") {
-        stepExec.status = "completed";
-        await this.emitEvent(run.run_id, "step.completed", {
-          step: step.step_number,
-          tokens: result.tokens_used,
-          artifacts: result.agentResult.artifacts_created,
-        });
-
-        // Create a git checkpoint commit for this step
+        // Create a git checkpoint commit before emitting step.completed
         try {
           const committed = await this.git.commitStepCheckpoint(
             workspacePath,
@@ -386,6 +379,13 @@ export class OrchestrationService {
           run.error = `Git checkpoint commit failed at step ${step.step_number}: ${message}`;
           return "failed";
         }
+
+        stepExec.status = "completed";
+        await this.emitEvent(run.run_id, "step.completed", {
+          step: step.step_number,
+          tokens: result.tokens_used,
+          artifacts: result.agentResult.artifacts_created,
+        });
 
         return "completed";
       }

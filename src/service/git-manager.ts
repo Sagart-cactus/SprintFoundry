@@ -67,7 +67,11 @@ export class GitManager {
     message: string
   ): Promise<void> {
     this.exec(["git", "add", "-A"], workspacePath);
-    this.exec(["git", "commit", "-m", message], workspacePath);
+    // Only commit if there are staged changes (step checkpoints may have already committed everything)
+    const diffResult = this.execRaw(["git", "diff", "--staged", "--quiet"], workspacePath);
+    if (diffResult.status !== 0) {
+      this.exec(["git", "commit", "-m", message], workspacePath);
+    }
     this.exec(["git", "push", "-u", "origin", "HEAD"], workspacePath);
   }
 
@@ -140,14 +144,14 @@ export class GitManager {
 
   private tryEnableEntire(cwd: string): void {
     try {
-      const [command, ...args] = ["entire", "enable", "--strategy", "auto-commit"];
+      const [command, ...args] = ["entire", "enable", "--strategy", "manual-commit"];
       const result = spawnSync(command, args, {
         cwd,
         encoding: "utf-8",
         timeout: 10_000,
       });
       if (result.status === 0) {
-        console.log(`[git] Entire enabled with auto-commit strategy`);
+        console.log(`[git] Entire enabled with manual strategy`);
       } else {
         console.log(`[git] Entire not available, skipping`);
       }
