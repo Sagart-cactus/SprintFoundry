@@ -456,6 +456,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(port, "127.0.0.1", () => {
-  console.log(`[monitor] Run Monitor listening at http://127.0.0.1:${port}`);
+  const actualPort = server.address()?.port ?? port;
+  console.log(`[monitor] Run Monitor listening at http://127.0.0.1:${actualPort}`);
   console.log(`[monitor] Watching runs under: ${runsRoot}`);
 });

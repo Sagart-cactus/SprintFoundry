@@ -17,8 +17,7 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const serverMjs = path.resolve(__dirname, "../../monitor/server.mjs");
-const TEST_PORT = 14399;
-const BASE = `http://127.0.0.1:${TEST_PORT}`;
+let BASE = "";
 
 function get(url: string): Promise<{ status: number; body: string; contentType: string }> {
   return new Promise((resolve, reject) => {
@@ -41,12 +40,15 @@ let serverProcess: ChildProcess;
 beforeAll(async () => {
   await new Promise<void>((resolve, reject) => {
     serverProcess = spawn("node", [serverMjs], {
-      env: { ...process.env, MONITOR_PORT: String(TEST_PORT) },
+      env: { ...process.env, MONITOR_PORT: "0" },
       stdio: ["ignore", "pipe", "pipe"],
     });
     const timeout = setTimeout(() => reject(new Error("Server start timeout")), 5000);
     serverProcess.stdout?.on("data", (data: Buffer) => {
-      if (data.toString().includes("listening")) {
+      const output = data.toString();
+      const match = output.match(/listening at http:\/\/([\d.]+):(\d+)/);
+      if (match) {
+        BASE = `http://${match[1]}:${match[2]}`;
         clearTimeout(timeout);
         resolve();
       }
