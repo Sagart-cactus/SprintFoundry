@@ -27,6 +27,7 @@ function prettyStatus(status) {
   if (s === "completed") return "Completed";
   if (s === "failed") return "Failed";
   if (s === "pending") return "Pending";
+  if (s === "waiting_human_review") return "Awaiting Review";
   return "Unknown";
 }
 
@@ -34,7 +35,7 @@ function laneOf(status) {
   const s = String(status ?? "").toLowerCase();
   if (s === "failed") return "failed";
   if (s === "completed") return "completed";
-  return "active";
+  return "active"; // executing, planning, pending, waiting_human_review
 }
 
 function fmtRelative(ts) {

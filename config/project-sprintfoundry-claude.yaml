@@ -29,5 +29,8 @@ integrations:
     type: linear
     config:
       api_key: ${LINEAR_API_KEY}
+      token: ${GITHUB_TOKEN}
+      owner: Sagart-cactus
+      repo: SprintFoundry
 
 rules: []
