@@ -23,11 +23,11 @@ Run root path:
 
 Project/run folders are discovered under that root.
 
-## UI Versions
+## UI
 
-- `/` -> legacy monitor (`monitor/public`)
-- `/v2` -> card + detail redesign (`monitor/public-v2`)
-- `/v3` -> latest board/detail observability UI (`monitor/public-v3`)
+- `/` -> v3 board/detail observability UI (`monitor/public-v3`)
+- `/v3` -> same as `/` (legacy alias, kept for convenience)
+- `/v2` -> removed; returns 404
 
 ## API Endpoints
 

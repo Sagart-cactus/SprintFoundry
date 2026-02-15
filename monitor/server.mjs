@@ -6,8 +6,6 @@ import { promises as fs } from "node:fs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const publicDir = path.join(__dirname, "public");
-const publicV2Dir = path.join(__dirname, "public-v2");
 const publicV3Dir = path.join(__dirname, "public-v3");
 const runsRoot = process.env.AGENTSDLC_RUNS_ROOT ?? path.join(os.tmpdir(), "agentsdlc");
 const port = Number(process.env.MONITOR_PORT ?? 4310);
@@ -288,7 +286,7 @@ async function listFiles(projectId, runId, root = "") {
   return out;
 }
 
-async function serveStatic(res, pathname, rootDir = publicDir) {
+async function serveStatic(res, pathname, rootDir = publicV3Dir) {
   const filePath = pathname === "/" ? path.join(rootDir, "index.html") : safeJoin(rootDir, pathname.slice(1));
   const contentType = filePath.endsWith(".css")
     ? "text/css; charset=utf-8"
@@ -310,12 +308,10 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (pathname === "/v2" || pathname.startsWith("/v2/")) {
-      const v2Path = pathname === "/v2" ? "/" : pathname.slice(3);
-      if (v2Path === "/run") {
-        await serveStatic(res, "/run.html", publicV2Dir);
-        return;
-      }
-      await serveStatic(res, v2Path, publicV2Dir);
+      // /v2 is removed. Returning 404 rather than redirecting to / so that
+      // any stale bookmarks or scripts that check for a 2xx response fail
+      // loudly, making it obvious the old path is gone.
+      sendText(res, 404, "Not found — /v2 has been removed. Use / instead.");
       return;
     }
 
@@ -450,7 +446,8 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    await serveStatic(res, pathname);
+    // Default route: serve the v3 UI from /
+    await serveStatic(res, pathname, publicV3Dir);
   } catch (err) {
     sendJson(res, 500, {
       error: err instanceof Error ? err.message : String(err),
@@ -459,6 +456,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(port, "127.0.0.1", () => {
-  console.log(`[monitor] Run Monitor listening at http://127.0.0.1:${port}`);
+  const actualPort = server.address()?.port ?? port;
+  console.log(`[monitor] Run Monitor listening at http://127.0.0.1:${actualPort}`);
   console.log(`[monitor] Watching runs under: ${runsRoot}`);
 });

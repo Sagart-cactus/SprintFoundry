@@ -15,7 +15,7 @@ Start monitor:
 
 ```bash
 npm run monitor
-# then open http://127.0.0.1:4310/v3
+# then open http://127.0.0.1:4310/
 ```
 
 ## CLI
@@ -54,7 +54,7 @@ Execution is CLI/process driven (`claude`, `codex`) with optional container mode
 ## Repo Structure
 
 - `src/` — orchestration service, runtime adapters, shared types
-- `monitor/` — monitor server and static UIs (`/`, `/v2`, `/v3`)
+- `monitor/` — monitor server and v3 UI (`/`)
 - `config/` — platform and project config
 - `containers/` — agent container images
 - `plugins/` — optional plugin/skill catalogs
