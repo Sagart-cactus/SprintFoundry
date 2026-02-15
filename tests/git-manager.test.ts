@@ -188,9 +188,10 @@ describe("GitManager", () => {
     const run = {
       run_id: "run-1",
       ticket: makeTicket(),
+      plan: { classification: "new_feature" },
       steps: [
-        { agent: "developer", result: { summary: "Implemented CSV export" } },
-        { agent: "qa", result: { summary: "Tests passing" } },
+        { step_number: 1, agent: "developer", result: { summary: "Implemented CSV export", artifacts_created: [], artifacts_modified: [], issues: [] } },
+        { step_number: 2, agent: "qa", result: { summary: "Tests passing", artifacts_created: [], artifacts_modified: [], issues: [] } },
       ],
       total_tokens_used: 10000,
       total_cost_usd: 1.5,
@@ -248,14 +249,34 @@ describe("GitManager", () => {
     expect(ghIdx).toBeGreaterThan(pushIdx);
   });
 
-  it("buildPRBody includes step summaries and stats", () => {
+  it("buildPRBody includes ticket details, agent results, and stats", () => {
     const git = new GitManager(makeRepoConfig(), makeBranchStrategy());
 
     const run = {
+      run_id: "run-abc123",
       ticket: makeTicket({ id: "TEST-5", title: "CSV Export" }),
+      plan: { classification: "new_feature" },
       steps: [
-        { agent: "developer", result: { summary: "Implemented feature" } },
-        { agent: "qa", result: { summary: "All tests pass" } },
+        {
+          step_number: 1,
+          agent: "developer",
+          result: {
+            summary: "Implemented feature",
+            artifacts_created: ["src/export.ts"],
+            artifacts_modified: ["src/reports.ts"],
+            issues: [],
+          },
+        },
+        {
+          step_number: 2,
+          agent: "qa",
+          result: {
+            summary: "All tests pass",
+            artifacts_created: ["tests/export.test.ts"],
+            artifacts_modified: [],
+            issues: [],
+          },
+        },
       ],
       total_tokens_used: 50000,
       total_cost_usd: 2.5,
@@ -263,11 +284,30 @@ describe("GitManager", () => {
 
     const body = (git as any).buildPRBody(run);
 
+    // Ticket info
     expect(body).toContain("TEST-5");
     expect(body).toContain("CSV Export");
+    expect(body).toContain("new feature");
+    expect(body).toContain("P1");
+
+    // Description & acceptance criteria
+    expect(body).toContain("## Description");
+    expect(body).toContain("## Acceptance Criteria");
+    expect(body).toContain("- [ ] Export button on reports page");
+
+    // Agent results
     expect(body).toContain("developer");
     expect(body).toContain("Implemented feature");
-    expect(body).toContain("2.50");
+    expect(body).toContain("`src/export.ts` (new)");
+    expect(body).toContain("`src/reports.ts` (modified)");
+
+    // Stats
+    expect(body).toContain("$2.50");
+    expect(body).toContain("run-abc123");
+
+    // Uses real newlines (not escaped \\n)
+    expect(body).not.toContain("\\n");
+    expect(body).toContain("\n");
   });
 
   it("exec passes SSH key env when configured", async () => {
@@ -488,9 +528,10 @@ describe("GitManager", () => {
     const run = {
       run_id: "run-pr-compat",
       ticket: makeTicket({ id: "TEST-99", title: "Per-step commits test" }),
+      plan: { classification: "bug_fix" },
       steps: [
-        { agent: "developer", result: { summary: "Implemented feature" } },
-        { agent: "qa", result: { summary: "Tests pass" } },
+        { step_number: 1, agent: "developer", result: { summary: "Implemented feature", artifacts_created: [], artifacts_modified: [], issues: [] } },
+        { step_number: 2, agent: "qa", result: { summary: "Tests pass", artifacts_created: [], artifacts_modified: [], issues: [] } },
       ],
       total_tokens_used: 5000,
       total_cost_usd: 0.5,
