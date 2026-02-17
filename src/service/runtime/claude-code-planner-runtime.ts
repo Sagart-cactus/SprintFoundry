@@ -111,7 +111,7 @@ export class ClaudeCodePlannerRuntime implements PlannerRuntime {
         ).join("\n\n")}`
       : "";
 
-    const prompt = `You are the orchestrator for AgentSDLC. A step has failed and you need to plan minimal rework steps.
+    const prompt = `You are the orchestrator for SprintFoundry. A step has failed and you need to plan minimal rework steps.
 
 ## Available Agents
 ${filteredAgents.map((a) => `- ${a.name} (id: "${a.type}", role: "${a.role}"): ${a.capabilities.slice(0, 3).join(", ")}`).join("\n")}
@@ -218,7 +218,7 @@ Each step: { "step_number": 900+N, "agent": "id", "model": "string", "task": "de
     agentDefinitions: AgentDefinition[],
     rules: (PlatformRule | ProjectRule)[]
   ): string {
-    return `You are the orchestrator for AgentSDLC, an AI-powered software development platform.
+    return `You are the orchestrator for SprintFoundry, an AI-powered software development platform.
 Your job is to analyze incoming tickets and create execution plans that assign work to specialized agents.
 
 ## Available Agents

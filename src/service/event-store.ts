@@ -1,5 +1,5 @@
 // ============================================================
-// AgentSDLC — Event Store
+// SprintFoundry — Event Store
 // Stores TaskEvent records for audit logging and replay
 // Persists to JSONL files (global log + per-run workspace log)
 // ============================================================
@@ -13,6 +13,7 @@ export class EventStore {
   private globalLogPath: string | null = null;
   private runLogPath: string | null = null;
   private initialized = false;
+  private pendingBuffer: TaskEvent[] = [];
 
   constructor(private eventsDir?: string) {}
 
@@ -36,6 +37,15 @@ export class EventStore {
     }
 
     this.initialized = true;
+
+    // Flush any events that were buffered before initialization
+    if (this.pendingBuffer.length > 0) {
+      const buffered = this.pendingBuffer;
+      this.pendingBuffer = [];
+      for (const event of buffered) {
+        await this.persistEvent(event);
+      }
+    }
   }
 
   async store(event: TaskEvent): Promise<void> {
@@ -47,7 +57,16 @@ export class EventStore {
       `[event] ${event.event_type} | run=${event.run_id} | ${JSON.stringify(event.data)}`
     );
 
-    // Persist to JSONL files
+    // Buffer events until initialized so no audit trail is lost
+    if (!this.initialized) {
+      this.pendingBuffer.push(event);
+      return;
+    }
+
+    await this.persistEvent(event);
+  }
+
+  private async persistEvent(event: TaskEvent): Promise<void> {
     const line = JSON.stringify(event) + "\n";
 
     const writes: Promise<void>[] = [];

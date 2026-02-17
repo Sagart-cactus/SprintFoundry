@@ -1,4 +1,4 @@
-# AgentSDLC Plugins
+# SprintFoundry Plugins
 
 This directory contains plugins that extend agent capabilities. Plugins are passed to Claude Code via the `--plugin-dir` flag.
 

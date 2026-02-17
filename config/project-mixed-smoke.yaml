@@ -8,12 +8,12 @@ agents:
   - qa
 
 repo:
-  url: /tmp/agentsdlc-smoke-remote.git
+  url: /tmp/sprintfoundry-smoke-remote.git
   default_branch: main
 
 api_keys:
-  anthropic: ${AGENTSDLC_ANTHROPIC_KEY}
-  openai: ${AGENTSDLC_OPENAI_KEY}
+  anthropic: ${SPRINTFOUNDRY_ANTHROPIC_KEY}
+  openai: ${SPRINTFOUNDRY_OPENAI_KEY}
 
 model_overrides:
   developer:

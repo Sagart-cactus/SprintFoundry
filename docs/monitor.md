@@ -18,8 +18,8 @@ MONITOR_PORT=4311 npm run monitor
 
 Run root path:
 
-- env override: `AGENTSDLC_RUNS_ROOT`
-- default: `${os.tmpdir()}/agentsdlc`
+- env override: `SPRINTFOUNDRY_RUNS_ROOT`
+- default: `${os.tmpdir()}/sprintfoundry`
 
 Project/run folders are discovered under that root.
 

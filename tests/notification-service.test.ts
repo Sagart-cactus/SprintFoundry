@@ -106,7 +106,7 @@ describe("NotificationService", () => {
     );
 
     const body = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
-    expect(body.source).toBe("agentsdlc");
+    expect(body.source).toBe("sprintfoundry");
     expect(body.timestamp).toBeDefined();
   });
 

@@ -1,4 +1,4 @@
-# SprintFoundry (AgentSDLC)
+# SprintFoundry
 
 SprintFoundry is a multi-agent software delivery orchestrator. It ingests tickets/prompts, plans work across specialized agents, executes steps using runtime adapters (Claude Code/Codex), and tracks execution with a file-backed monitor.
 

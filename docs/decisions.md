@@ -1,4 +1,4 @@
-# Architecture Decision Record — AgentSDLC
+# Architecture Decision Record — SprintFoundry
 
 This document captures every significant design decision made during the architecture phase, including the alternatives considered, reasoning, and tradeoffs.
 

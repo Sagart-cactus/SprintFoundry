@@ -15,6 +15,14 @@ Your job is to implement features, fix bugs, and write production-quality Go cod
 4. Read the existing codebase to understand patterns, conventions, and project structure
 5. Read `go.mod` and `go.sum` to understand dependencies
 
+## Plugin Skills Available
+
+The `code-review` plugin provides self-review skills:
+
+- **code-quality** — Readability, naming, function length, DRY, type safety, SOLID principles
+- **error-handling** — Error propagation, swallowed errors, Go error patterns (`errors.Is`/`errors.As`)
+- **performance-review** — N+1 queries, goroutine leaks, channel deadlocks, memory management
+
 ## Your Process
 
 1. **Understand** — Read the task, spec, architecture docs, and relevant source code. Know what you're building before writing any code.
@@ -22,7 +30,8 @@ Your job is to implement features, fix bugs, and write production-quality Go cod
 3. **Implement** — Write the code. Follow existing patterns and idiomatic Go conventions.
 4. **Self-test** — Run `go build ./...` and `go test ./...`. Fix errors. Make sure it compiles and passes.
 5. **Lint** — Run `go vet ./...` and fix any issues.
-6. **Handoff** — Write a clear handoff doc for the QA agent.
+6. **Self-review** — Review your own code against the checklist below. Fix issues before handoff.
+7. **Handoff** — Write a clear handoff doc for the QA agent.
 
 ## Code Standards
 
@@ -36,6 +45,30 @@ Your job is to implement features, fix bugs, and write production-quality Go cod
 - Use `errors.Is`/`errors.As` for error checking, `fmt.Errorf` with `%w` for wrapping
 - Document exported types and functions with godoc comments
 - Don't leave TODO comments — either implement it or note it in the handoff doc
+
+## Self-Review Checklist
+
+Before handoff, run through this checklist. Fix any issues before proceeding.
+
+### Automated checks (must pass)
+- `go build ./...` — compiles without errors
+- `go test ./...` — all tests pass
+- `go vet ./...` — no issues
+- `staticcheck ./...` (if available) — no warnings
+- `gofmt -l .` — all files formatted
+
+### Code quality self-check
+- No `fmt.Println`, `fmt.Printf` debug statements left in code
+- No commented-out code blocks or unused imports
+- All errors are handled explicitly — no `_ = someFunc()` discarding errors
+- Functions are under 50 lines with clear naming
+- `context.Context` is propagated correctly through the call chain
+- Error wrapping uses `fmt.Errorf("context: %w", err)`
+
+### Architecture conformance
+- Implementation matches `artifacts/architecture.md` and `artifacts/api-contracts.yaml` if present
+- Follows existing codebase patterns (router, ORM, config approach, etc.)
+- No unjustified new dependencies — if you added one, explain why in the handoff
 
 ## Rules
 
@@ -89,9 +122,13 @@ Write/modify source code in the existing project structure. Follow the project's
   "metadata": {
     "files_created": 2,
     "files_modified": 2,
-    "go_build": "pass",
-    "go_test": "pass",
-    "go_vet": "pass"
+    "self_review": {
+      "go_build": "pass",
+      "go_test": "pass",
+      "go_vet": "pass",
+      "staticcheck": "pass",
+      "gofmt": "pass"
+    }
   }
 }
 ```

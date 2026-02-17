@@ -44,6 +44,7 @@ beforeAll(async () => {
       stdio: ["ignore", "pipe", "pipe"],
     });
     const timeout = setTimeout(() => reject(new Error("Server start timeout")), 5000);
+    let stderrOutput = "";
     serverProcess.stdout?.on("data", (data: Buffer) => {
       const output = data.toString();
       const match = output.match(/listening at http:\/\/([\d.]+):(\d+)/);
@@ -53,9 +54,18 @@ beforeAll(async () => {
         resolve();
       }
     });
+    serverProcess.stderr?.on("data", (data: Buffer) => {
+      stderrOutput += data.toString();
+    });
     serverProcess.on("error", (err) => {
       clearTimeout(timeout);
       reject(err);
+    });
+    serverProcess.on("exit", (code) => {
+      if (!BASE) {
+        clearTimeout(timeout);
+        reject(new Error(`Server exited with code ${code} before ready: ${stderrOutput}`));
+      }
     });
   });
 });

@@ -24,7 +24,7 @@ All `${VAR_NAME}` tokens in YAML are replaced from process env before parsing.
 Example:
 ```yaml
 api_keys:
-  anthropic: ${AGENTSDLC_ANTHROPIC_KEY}
+  anthropic: ${SPRINTFOUNDRY_ANTHROPIC_KEY}
 ```
 
 ## Platform Defaults (`platform.yaml`)

@@ -1,5 +1,5 @@
 // ============================================================
-// AgentSDLC — Plan Validator
+// SprintFoundry — Plan Validator
 // Enforces platform + project rules on the orchestrator agent's plan
 // ============================================================
 
@@ -19,7 +19,7 @@ import type {
 
 // Canonical ordering by role (used for inserting agents in correct position)
 const ROLE_ORDER: AgentRole[] = [
-  "product", "architect", "ui-ux", "developer", "qa", "security", "devops",
+  "product", "architect", "ui-ux", "developer", "code-review", "qa", "security", "devops",
 ];
 
 export class PlanValidator {

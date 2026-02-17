@@ -1,6 +1,6 @@
 # SprintFoundry Documentation
 
-This folder contains the current, code-aligned documentation for SprintFoundry (AgentSDLC).
+This folder contains the current, code-aligned documentation for SprintFoundry.
 
 ## Start Here
 

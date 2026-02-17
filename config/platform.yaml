@@ -1,5 +1,5 @@
 # ============================================================
-# AgentSDLC — Platform Configuration (defaults)
+# SprintFoundry — Platform Configuration (defaults)
 # These are system-wide defaults. Projects can override.
 # ============================================================
 
@@ -18,6 +18,9 @@ defaults:
       provider: anthropic
       model: claude-sonnet-4-5-20250929
     qa:
+      provider: anthropic
+      model: claude-sonnet-4-5-20250929
+    code-review:
       provider: anthropic
       model: claude-sonnet-4-5-20250929
     security:
@@ -65,6 +68,9 @@ defaults:
     qa:
       provider: claude-code
       mode: local_process
+    code-review:
+      provider: claude-code
+      mode: local_process
     security:
       provider: claude-code
       mode: local_process
@@ -88,17 +94,24 @@ defaults:
 
   # Codex runtime skill injection (workspace-scoped, optional)
   codex_skills_enabled: false
-  codex_skill_catalog: {}
-  # Example:
-  # codex_skill_catalog:
-  #   web-design-guidelines:
-  #     path: vendor/codex-skills/web-design-guidelines
-  #
-  # codex_skills_per_agent:
-  #   ui-ux: [web-design-guidelines]
+  codex_skill_catalog:
+    code-quality:
+      path: plugins/code-review/skills/code-quality
+    error-handling:
+      path: plugins/code-review/skills/error-handling
+    performance-review:
+      path: plugins/code-review/skills/performance-review
+    testing-standards:
+      path: plugins/code-review/skills/testing-standards
+    architecture-alignment:
+      path: plugins/code-review/skills/architecture-alignment
+  codex_skills_per_agent:
+    code-review: [code-quality, error-handling, performance-review, testing-standards, architecture-alignment]
+    developer: [code-quality, error-handling, performance-review]
+    go-developer: [code-quality, error-handling, performance-review]
 
 # Global events directory for JSONL persistence
-events_dir: .agentsdlc/events
+events_dir: .sprintfoundry/events
 
 # ----- Mandatory Platform Rules -----
 # These cannot be overridden by projects or the orchestrator agent
@@ -133,6 +146,26 @@ rules:
       agent: security
     enforced: true
 
+  - id: code-review-on-p0
+    description: "Code review agent must run for P0 tickets"
+    condition:
+      type: priority_is
+      values: ["p0"]
+    action:
+      type: require_role
+      role: code-review
+    enforced: true
+
+  - id: code-review-on-complex
+    description: "Code review agent suggested for complex tickets"
+    condition:
+      type: label_contains
+      value: "complex"
+    action:
+      type: require_role
+      role: code-review
+    enforced: false
+
   - id: human-gate-p0
     description: "P0 features always require human approval before merge"
     condition:
@@ -155,7 +188,7 @@ agent_definitions:
       writes product specs, user stories, and acceptance criteria.
       Use when the ticket is vague, is a new feature without clear spec,
       or when product decisions need to be made.
-    container_image: agentsdlc/agent-product:latest
+    container_image: sprintfoundry/agent-product:latest
     capabilities:
       - Analyze feature requests and bug reports
       - Write product requirement documents
@@ -177,7 +210,7 @@ agent_definitions:
       API contracts, and system design. Use when the ticket requires
       new infrastructure, new data models, new integrations, or when
       the technical approach is non-obvious.
-    container_image: agentsdlc/agent-architect:latest
+    container_image: sprintfoundry/agent-architect:latest
     capabilities:
       - Design system architecture
       - Create data models and ER diagrams
@@ -200,11 +233,12 @@ agent_definitions:
     stack: js
     plugins:
       - js-nextjs
+      - code-review
     description: >
       Implements features, fixes bugs, writes production code.
       The primary code-writing agent for JavaScript/TypeScript projects.
       Can handle frontend, backend, database migrations, and full-stack work.
-    container_image: agentsdlc/agent-developer:latest
+    container_image: sprintfoundry/agent-developer:latest
     capabilities:
       - Write production TypeScript/JavaScript code
       - Build React/Next.js frontend components
@@ -224,11 +258,13 @@ agent_definitions:
     name: Go Developer Agent
     role: developer
     stack: go
+    plugins:
+      - code-review
     description: >
       Implements features, fixes bugs, writes production code for Go projects.
       Handles HTTP servers, CLI tools, gRPC services, and database work.
       Follows idiomatic Go patterns and conventions.
-    container_image: agentsdlc/agent-go-developer:latest
+    container_image: sprintfoundry/agent-go-developer:latest
     capabilities:
       - Write production Go code
       - Build HTTP servers (net/http, chi, echo)
@@ -244,6 +280,29 @@ agent_definitions:
       - relevant source files
       - architecture docs (if available)
 
+  - type: code-review
+    name: Code Review Agent
+    role: code-review
+    plugins:
+      - code-review
+    description: >
+      Senior staff engineer performing fresh-eyes code review.
+      Finds bugs, quality issues, and architecture violations before QA.
+      Optional for routine tasks but mandatory for P0 tickets and complex features.
+    container_image: sprintfoundry/agent-code-review:latest
+    capabilities:
+      - Code quality review
+      - Error handling verification
+      - Performance anti-pattern detection
+      - Architecture alignment
+      - Test quality assessment
+    output_artifacts:
+      - artifacts/code-review-report.md
+      - artifacts/handoff/review-to-dev.md
+    required_inputs:
+      - source code
+      - developer handoff
+
   - type: qa
     name: QA Agent
     role: qa
@@ -252,7 +311,7 @@ agent_definitions:
       Writes and runs tests, validates code against requirements.
       Always runs after the developer agent. Reports bugs and
       can trigger rework. For JavaScript/TypeScript projects.
-    container_image: agentsdlc/agent-qa:latest
+    container_image: sprintfoundry/agent-qa:latest
     capabilities:
       - Write unit tests (vitest)
       - Write integration/API tests
@@ -277,7 +336,7 @@ agent_definitions:
       Writes and runs tests for Go projects, validates code against requirements.
       Uses the standard testing package, httptest, and benchmarks.
       Reports bugs and can trigger rework.
-    container_image: agentsdlc/agent-go-qa:latest
+    container_image: sprintfoundry/agent-go-qa:latest
     capabilities:
       - Write unit tests (testing package)
       - Write HTTP tests (httptest)
@@ -302,7 +361,7 @@ agent_definitions:
       Scans code for security vulnerabilities, reviews auth flows,
       checks for data leakage, dependency vulnerabilities.
       Required for auth/payment changes, recommended for all features.
-    container_image: agentsdlc/agent-security:latest
+    container_image: sprintfoundry/agent-security:latest
     capabilities:
       - Static analysis security scanning
       - Dependency vulnerability checking
@@ -326,7 +385,7 @@ agent_definitions:
       Designs user interfaces, creates component specifications,
       generates wireframes as React previews. Use when the ticket
       involves new UI, redesigns, or significant UX changes.
-    container_image: agentsdlc/agent-ui-ux:latest
+    container_image: sprintfoundry/agent-ui-ux:latest
     capabilities:
       - Create wireframes and user flows
       - Design component specifications
@@ -349,7 +408,7 @@ agent_definitions:
       Handles deployment configuration, CI/CD pipelines,
       infrastructure-as-code. Use for infrastructure tickets
       or when deployment setup is needed.
-    container_image: agentsdlc/agent-devops:latest
+    container_image: sprintfoundry/agent-devops:latest
     capabilities:
       - Create/modify CI/CD pipelines
       - Write Dockerfiles and compose files

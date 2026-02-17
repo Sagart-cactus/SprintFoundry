@@ -1,5 +1,5 @@
 // ============================================================
-// AgentSDLC — Notification Service
+// SprintFoundry — Notification Service
 // Sends notifications via Slack webhook, email, or generic webhook
 // ============================================================
 
@@ -72,7 +72,7 @@ export class NotificationService {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message,
-          source: "agentsdlc",
+          source: "sprintfoundry",
           timestamp: new Date().toISOString(),
         }),
       });

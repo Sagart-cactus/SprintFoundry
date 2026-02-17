@@ -239,8 +239,8 @@ describe("AgentRunner", () => {
     expect(cost).toBe(3.0); // default $3 per 1M
   });
 
-  it("spawnLocalClaudeCode called when AGENTSDLC_USE_CONTAINERS unset", async () => {
-    delete process.env.AGENTSDLC_USE_CONTAINERS;
+  it("spawnLocalClaudeCode called when SPRINTFOUNDRY_USE_CONTAINERS unset", async () => {
+    delete process.env.SPRINTFOUNDRY_USE_CONTAINERS;
 
     const proc = makeFakeProcess(
       JSON.stringify({ usage: { total_tokens: 500 } })
@@ -297,7 +297,7 @@ describe("AgentRunner", () => {
   });
 
   it("timeout kills the process", async () => {
-    delete process.env.AGENTSDLC_USE_CONTAINERS;
+    delete process.env.SPRINTFOUNDRY_USE_CONTAINERS;
 
     // Create a process that never closes (we'll trigger timeout)
     const proc = new EventEmitter() as any;
@@ -319,7 +319,7 @@ describe("AgentRunner", () => {
   });
 
   it("run rejects when local claude exits with non-zero code", async () => {
-    delete process.env.AGENTSDLC_USE_CONTAINERS;
+    delete process.env.SPRINTFOUNDRY_USE_CONTAINERS;
 
     const proc = makeFakeProcess("error output", 1);
     (mockSpawn as any).mockReturnValueOnce(proc);
@@ -348,7 +348,7 @@ describe("AgentRunner", () => {
   });
 
   it("uses codex runtime when project runtime override is set", async () => {
-    delete process.env.AGENTSDLC_USE_CONTAINERS;
+    delete process.env.SPRINTFOUNDRY_USE_CONTAINERS;
 
     const proc = makeFakeProcess(JSON.stringify({ usage: { total_tokens: 321 } }));
     (mockSpawn as any).mockReturnValueOnce(proc);

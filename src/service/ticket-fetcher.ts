@@ -1,5 +1,5 @@
 // ============================================================
-// AgentSDLC — Ticket Fetcher
+// SprintFoundry — Ticket Fetcher
 // Fetches ticket details from Linear, GitHub, or Jira
 // ============================================================
 

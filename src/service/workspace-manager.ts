@@ -1,5 +1,5 @@
 // ============================================================
-// AgentSDLC — Workspace Manager
+// SprintFoundry — Workspace Manager
 // Creates and cleans up workspace directories per run
 // ============================================================
 
@@ -12,7 +12,7 @@ export class WorkspaceManager {
   private baseDir: string;
 
   constructor(private projectConfig: ProjectConfig) {
-    this.baseDir = path.join(os.tmpdir(), "agentsdlc", projectConfig.project_id);
+    this.baseDir = path.join(os.tmpdir(), "sprintfoundry", projectConfig.project_id);
   }
 
   async create(runId: string): Promise<string> {

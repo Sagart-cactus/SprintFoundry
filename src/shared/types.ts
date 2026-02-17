@@ -1,5 +1,5 @@
 // ============================================================
-// AgentSDLC — Core Type Definitions
+// SprintFoundry — Core Type Definitions
 // ============================================================
 
 // ----- Agent Types -----
@@ -13,6 +13,7 @@ export type AgentRole =
   | "product"
   | "architect"
   | "developer"
+  | "code-review"
   | "qa"
   | "security"
   | "ui-ux"

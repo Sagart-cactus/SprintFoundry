@@ -8,6 +8,10 @@ export class ClaudeCodeRuntime implements AgentRuntime {
   async runStep(config: RuntimeStepContext): Promise<RuntimeStepResult> {
     await fs.mkdir(config.workspacePath, { recursive: true });
     if (config.runtime.mode === "container") {
+      console.warn(
+        "[sprintfoundry] Container mode is deprecated and will be removed in v0.3.0. " +
+        "Use local_process instead."
+      );
       return this.runContainer(config);
     }
     return this.runLocal(config);
@@ -73,7 +77,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
   }
 
   private async runContainer(config: RuntimeStepContext): Promise<RuntimeStepResult> {
-    const containerName = `agentsdlc-${config.agent}-${Date.now()}`;
+    const containerName = `sprintfoundry-${config.agent}-${Date.now()}`;
     const resources = config.containerResources ?? {};
     const flags = config.cliFlags ?? {};
     const image = config.runtime.image ?? config.containerImage;

@@ -55,7 +55,7 @@ Run IDs are generated as:
 - `run-${Date.now()}-${random}`
 
 Workspace path pattern:
-- `${os.tmpdir()}/agentsdlc/<project_id>/<run_id>`
+- `${os.tmpdir()}/sprintfoundry/<project_id>/<run_id>`
 
 ## Runtime Model
 

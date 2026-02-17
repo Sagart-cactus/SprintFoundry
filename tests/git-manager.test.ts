@@ -348,7 +348,7 @@ describe("GitManager", () => {
     expect(resetCalls.length).toBeGreaterThan(0);
     // Should commit then push
     const commitCall = commands.find((c: string[]) => c[0] === "commit");
-    expect(commitCall).toEqual(["commit", "-m", "chore(agentsdlc): run run-abc123 step 1 developer"]);
+    expect(commitCall).toEqual(["commit", "-m", "chore(sprintfoundry): run run-abc123 step 1 developer"]);
     const pushCall = commands.find((c: string[]) => c[0] === "push");
     expect(pushCall).toEqual(["push", "-u", "origin", "HEAD"]);
   });
@@ -371,7 +371,7 @@ describe("GitManager", () => {
     const commitCall = calls.find((c: any[]) => c[1][0] === "commit");
     expect(commitCall).toBeDefined();
     const commitMsg = commitCall[1][commitCall[1].indexOf("-m") + 1];
-    expect(commitMsg).toBe("chore(agentsdlc): run run-xyz-99 step 42 qa");
+    expect(commitMsg).toBe("chore(sprintfoundry): run run-xyz-99 step 42 qa");
   });
 
   it("commitStepCheckpoint: no-diff skip — returns false without creating a commit", async () => {
@@ -419,7 +419,7 @@ describe("GitManager", () => {
     expect(resetPaths).toContain(".agent-task.md");
     expect(resetPaths).toContain(".agent-result.json");
     expect(resetPaths).toContain(".agent-profile.md");
-    expect(resetPaths).toContain(".agentsdlc");
+    expect(resetPaths).toContain(".sprintfoundry");
     expect(resetPaths).toContain("artifacts");
     expect(resetPaths).toContain(".entire");
   });
