@@ -41,6 +41,7 @@
   "license": "MIT",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
+    "@inquirer/prompts": "^7.0.0",
     "commander": "^13.1.0",
     "dockerode": "^4.0.4",
     "yaml": "^2.7.0"
