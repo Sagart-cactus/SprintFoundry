@@ -77,7 +77,7 @@ Port already in use for monitor:
 - start with a different `MONITOR_PORT`
 
 No runs visible in monitor:
-- verify runs root path defaults to `${TMPDIR}/agentsdlc`
+- verify runs root path defaults to `${TMPDIR}/sprintfoundry`
 - check `.events.jsonl` exists in run workspace
 
 Planner/runtime failures:
@@ -94,6 +94,6 @@ Git auth failures:
 ## Cleanup
 
 Run workspaces are created under:
-- `${TMPDIR}/agentsdlc/<project_id>/run-*`
+- `${TMPDIR}/sprintfoundry/<project_id>/run-*`
 
 Safe to remove old run directories when no active runs depend on them.

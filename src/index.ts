@@ -6,11 +6,15 @@ import * as path from "path";
 import type { TaskSource } from "./shared/types.js";
 import { OrchestrationService } from "./service/orchestration-service.js";
 import { loadConfig } from "./service/config-loader.js";
+import { migrateEnvVars } from "./service/env-compat.js";
+
+// Migrate deprecated AGENTSDLC_* env vars to SPRINTFOUNDRY_*
+migrateEnvVars();
 
 const program = new Command();
 
 program
-  .name("agentsdlc")
+  .name("sprintfoundry")
   .description("AI-powered multi-agent software development lifecycle")
   .version("0.1.0");
 
@@ -39,7 +43,7 @@ program
 
     const ticketId = opts.ticket ?? `prompt-${Date.now()}`;
 
-    console.log(`Starting AgentSDLC run...`);
+    console.log(`Starting SprintFoundry run...`);
     console.log(`  Source: ${source}`);
     console.log(`  Ticket: ${ticketId}`);
     console.log(`  Project: ${project.name} (${project.project_id})`);
@@ -103,7 +107,7 @@ program
       process.exit(1);
     }
 
-    const reviewDir = path.join(opts.workspace, ".agentsdlc", "reviews");
+    const reviewDir = path.join(opts.workspace, ".sprintfoundry", "reviews");
     await fs.mkdir(reviewDir, { recursive: true });
     const decisionPath = path.join(reviewDir, `${opts.reviewId}.decision.json`);
     await fs.writeFile(

@@ -1,4 +1,4 @@
-# AgentSDLC
+# SprintFoundry
 
 A multi-agent orchestration platform for end-to-end AI-powered software development. Takes tickets from Linear/GitHub/Jira and orchestrates specialized AI agents (Product, Architecture, Developer, QA, Security, UI/UX) to deliver tested, reviewed code as pull requests.
 
@@ -110,5 +110,5 @@ pnpm dev -- --source github --ticket 42
 pnpm dev -- --prompt "Add CSV export to the reports page"
 
 # Run in container mode (requires Docker)
-AGENTSDLC_USE_CONTAINERS=true pnpm dev -- --source linear --ticket LIN-423
+SPRINTFOUNDRY_USE_CONTAINERS=true pnpm dev -- --source linear --ticket LIN-423
 ```

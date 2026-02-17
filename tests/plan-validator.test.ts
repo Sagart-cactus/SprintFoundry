@@ -270,6 +270,99 @@ describe("PlanValidator", () => {
     expect(productStep).toBeDefined();
   });
 
+  // ---- Code Review Agent Tests ----
+
+  it("injects code-review agent for P0 tickets", () => {
+    const validator = createValidator();
+    const plan = makePlan({
+      steps: [
+        makeStep({ step_number: 1, agent: "developer", task: "Write code" }),
+        makeStep({ step_number: 2, agent: "qa", task: "Test code", depends_on: [1] }),
+      ],
+    });
+    const ticket = makeTicket({ priority: "p0" });
+
+    const result = validator.validate(plan, ticket);
+
+    const codeReviewStep = result.steps.find((s) => s.agent === "code-review");
+    expect(codeReviewStep).toBeDefined();
+    expect(codeReviewStep!.task).toContain("[AUTO-INJECTED BY RULE]");
+  });
+
+  it("code-review step has correct role ordering via dependencies", () => {
+    const validator = createValidator();
+    // Plan without qa so code-review is inserted by P0 rule and qa by always-qa rule
+    const plan = makePlan({
+      steps: [
+        makeStep({ step_number: 1, agent: "developer", task: "Write code" }),
+      ],
+    });
+    const ticket = makeTicket({ priority: "p0" });
+
+    const result = validator.validate(plan, ticket);
+
+    // Both code-review and qa should be injected
+    const crStep = result.steps.find((s) => s.agent === "code-review");
+    const qaStep = result.steps.find((s) => s.agent === "qa" || s.agent === "go-qa");
+    expect(crStep).toBeDefined();
+    expect(qaStep).toBeDefined();
+
+    // Code-review should depend on the developer step
+    expect(crStep!.depends_on).toContain(1);
+    // Both should come after developer by step number
+    expect(crStep!.step_number).toBeGreaterThan(1);
+    expect(qaStep!.step_number).toBeGreaterThan(1);
+  });
+
+  it("does not inject code-review for non-P0 when rule is enforced only for P0", () => {
+    const validator = createValidator();
+    const plan = makePlan({
+      steps: [
+        makeStep({ step_number: 1, agent: "developer", task: "Write code" }),
+        makeStep({ step_number: 2, agent: "qa", task: "Test code", depends_on: [1] }),
+      ],
+    });
+    const ticket = makeTicket({ priority: "p2" });
+
+    const result = validator.validate(plan, ticket);
+
+    const codeReviewStep = result.steps.find((s) => s.agent === "code-review");
+    expect(codeReviewStep).toBeUndefined();
+  });
+
+  it("does not double-inject code-review when already in plan", () => {
+    const validator = createValidator();
+    const plan = makePlan({
+      steps: [
+        makeStep({ step_number: 1, agent: "developer", task: "Write code" }),
+        makeStep({ step_number: 2, agent: "code-review", task: "Review code", depends_on: [1] }),
+        makeStep({ step_number: 3, agent: "qa", task: "Test code", depends_on: [2] }),
+      ],
+    });
+    const ticket = makeTicket({ priority: "p0" });
+
+    const result = validator.validate(plan, ticket);
+
+    const codeReviewSteps = result.steps.filter((s) => s.agent === "code-review");
+    expect(codeReviewSteps.length).toBe(1);
+  });
+
+  it("code-review step depends on developer step", () => {
+    const validator = createValidator();
+    const plan = makePlan({
+      steps: [
+        makeStep({ step_number: 1, agent: "developer", task: "Write code" }),
+      ],
+    });
+    const ticket = makeTicket({ priority: "p0" });
+
+    const result = validator.validate(plan, ticket);
+
+    const codeReviewStep = result.steps.find((s) => s.agent === "code-review");
+    expect(codeReviewStep).toBeDefined();
+    expect(codeReviewStep!.depends_on).toContain(1);
+  });
+
   it("classification_is condition does NOT match wrong classification", () => {
     const validator = createValidator({
       rules: [

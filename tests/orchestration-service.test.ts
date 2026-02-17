@@ -617,7 +617,7 @@ describe("OrchestrationService", () => {
     } as const;
 
     setTimeout(async () => {
-      const dir = path.join(workspace, ".agentsdlc", "reviews");
+      const dir = path.join(workspace, ".sprintfoundry", "reviews");
       await fs.mkdir(dir, { recursive: true });
       await fs.writeFile(
         path.join(dir, "review-123.decision.json"),
@@ -812,6 +812,133 @@ describe("OrchestrationService", () => {
     // createPullRequest still called and succeeds
     expect(mockGitManager.createPullRequest).toHaveBeenCalledTimes(1);
     expect(run.pr_url).toBe("https://github.com/test/repo/pull/42");
+  });
+
+  // ---- Code Review Agent Tests ----
+
+  it("executes code-review step after developer and before QA", async () => {
+    const plan = makePlan({
+      steps: [
+        makeStep({ step_number: 1, agent: "developer", task: "Write code" }),
+        makeStep({ step_number: 2, agent: "code-review", task: "Review code", depends_on: [1] }),
+        makeStep({ step_number: 3, agent: "qa", task: "Test code", depends_on: [2] }),
+      ],
+    });
+    mockOrchestratorAgent.generatePlan.mockResolvedValue(plan);
+    mockAgentRunner.run.mockResolvedValue({
+      agentResult: makeResult(),
+      tokens_used: 100,
+      cost_usd: 0.01,
+      duration_seconds: 5,
+      container_id: "local-1",
+    });
+
+    const run = await service.handleTask("p1", "prompt", "Build feature");
+
+    expect(run.status).toBe("completed");
+    // Verify execution order: developer, code-review, qa (may have additional injected steps)
+    const agents = mockAgentRunner.run.mock.calls.map((c: any[]) => c[0].agent);
+    const devIdx = agents.indexOf("developer");
+    const crIdx = agents.indexOf("code-review");
+    const qaIdx = agents.indexOf("qa");
+    expect(devIdx).toBeLessThan(crIdx);
+    expect(crIdx).toBeLessThan(qaIdx);
+  });
+
+  it("code-review needs_rework triggers developer rework", async () => {
+    const plan = makePlan({
+      steps: [
+        makeStep({ step_number: 1, agent: "developer", task: "Write code" }),
+        makeStep({ step_number: 2, agent: "code-review", task: "Review code", depends_on: [1] }),
+        makeStep({ step_number: 3, agent: "qa", task: "Test code", depends_on: [2] }),
+      ],
+    });
+    mockOrchestratorAgent.generatePlan.mockResolvedValue(plan);
+
+    let crCallCount = 0;
+    mockAgentRunner.run.mockImplementation(async (config: any) => {
+      if (config.agent === "developer") {
+        return {
+          agentResult: makeResult(),
+          tokens_used: 100,
+          cost_usd: 0.01,
+          duration_seconds: 5,
+          container_id: "local-1",
+        };
+      }
+      if (config.agent === "code-review") {
+        crCallCount++;
+        if (crCallCount === 1) {
+          return {
+            agentResult: makeReworkResult({
+              rework_target: "developer",
+              rework_reason: "MUST_FIX items found",
+            }),
+            tokens_used: 100,
+            cost_usd: 0.01,
+            duration_seconds: 5,
+            container_id: "local-2",
+          };
+        }
+        return {
+          agentResult: makeResult({ summary: "Code review passed" }),
+          tokens_used: 100,
+          cost_usd: 0.01,
+          duration_seconds: 5,
+          container_id: "local-3",
+        };
+      }
+      // qa
+      return {
+        agentResult: makeResult(),
+        tokens_used: 100,
+        cost_usd: 0.01,
+        duration_seconds: 5,
+        container_id: "local-4",
+      };
+    });
+
+    mockOrchestratorAgent.planRework.mockResolvedValue({
+      steps: [
+        makeStep({ step_number: 901, agent: "developer", task: "Fix review findings" }),
+      ],
+    });
+
+    const run = await service.handleTask("p1", "prompt", "Build feature");
+
+    expect(run.status).toBe("completed");
+    expect(mockOrchestratorAgent.planRework).toHaveBeenCalledTimes(1);
+  });
+
+  it("quality gate runs after developer-role steps", async () => {
+    const plan = makePlan({
+      steps: [
+        makeStep({ step_number: 1, agent: "developer", task: "Write code" }),
+        makeStep({ step_number: 2, agent: "qa", task: "Test code", depends_on: [1] }),
+      ],
+    });
+    mockOrchestratorAgent.generatePlan.mockResolvedValue(plan);
+    mockAgentRunner.run.mockResolvedValue({
+      agentResult: makeResult(),
+      tokens_used: 100,
+      cost_usd: 0.01,
+      duration_seconds: 5,
+      container_id: "local-1",
+    });
+
+    // Spy on runQualityGate
+    const qualityGateSpy = vi.spyOn(service as any, "runQualityGate").mockResolvedValue({
+      passed: true,
+      failures: [],
+    });
+
+    const run = await service.handleTask("p1", "prompt", "Build feature");
+
+    expect(run.status).toBe("completed");
+    // Quality gate should have been called for the developer step
+    expect(qualityGateSpy).toHaveBeenCalled();
+    const callArgs = qualityGateSpy.mock.calls[0] as any[];
+    expect(callArgs[1].agent).toBe("developer");
   });
 
   it("waitForReviewDecision times out and rejects", async () => {

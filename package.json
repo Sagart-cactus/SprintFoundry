@@ -1,12 +1,19 @@
 {
-  "name": "agentsdlc",
+  "name": "sprintfoundry",
   "version": "0.1.0",
   "description": "Multi-agent orchestration platform for AI-powered software development",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "agentsdlc": "dist/index.js"
+    "sprintfoundry": "dist/index.js"
   },
+  "files": [
+    "dist/",
+    "config/platform.yaml",
+    "src/agents/",
+    "src/agents-codex/",
+    "plugins/"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/index.ts",
@@ -17,6 +24,21 @@
     "test": "vitest run",
     "test:watch": "vitest"
   },
+  "keywords": [
+    "ai",
+    "agents",
+    "orchestration",
+    "claude",
+    "codex",
+    "multi-agent",
+    "software-development",
+    "code-review"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Sagart-cactus/sprintfoundry"
+  },
+  "license": "MIT",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
     "commander": "^13.1.0",

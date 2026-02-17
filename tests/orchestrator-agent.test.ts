@@ -265,6 +265,62 @@ describe("OrchestratorAgent", () => {
     expect(agent).toBeDefined();
   });
 
+  // ---- Code Review Agent Tests ----
+
+  it("system prompt includes code-review agent in definitions", async () => {
+    const planJson = JSON.stringify({
+      classification: "bug_fix",
+      reasoning: "fix",
+      steps: [],
+      parallel_groups: [],
+      human_gates: [],
+    });
+    mockCreate.mockResolvedValueOnce(makeApiResponse(planJson));
+
+    const agent = new OrchestratorAgent(
+      makePlatformConfig(),
+      makeProjectConfig()
+    );
+    await agent.generatePlan(
+      makeTicket(),
+      defaultAgentDefinitions(),
+      defaultPlatformRules(),
+      "/tmp/test-workspace"
+    );
+
+    const callArgs = mockCreate.mock.calls[0][0];
+    expect(callArgs.system).toContain("Code Review Agent");
+    expect(callArgs.system).toContain("code-review");
+    expect(callArgs.system).toContain("Code quality review");
+  });
+
+  it("planning guidelines mention code-review for complex/P0 tasks", async () => {
+    const planJson = JSON.stringify({
+      classification: "bug_fix",
+      reasoning: "fix",
+      steps: [],
+      parallel_groups: [],
+      human_gates: [],
+    });
+    mockCreate.mockResolvedValueOnce(makeApiResponse(planJson));
+
+    const agent = new OrchestratorAgent(
+      makePlatformConfig(),
+      makeProjectConfig()
+    );
+    await agent.generatePlan(
+      makeTicket(),
+      defaultAgentDefinitions(),
+      defaultPlatformRules(),
+      "/tmp/test-workspace"
+    );
+
+    const callArgs = mockCreate.mock.calls[0][0];
+    expect(callArgs.system).toContain("Code review agent");
+    expect(callArgs.system).toContain("P0 tickets");
+    expect(callArgs.system).toContain("developer → code-review → qa");
+  });
+
   it("model resolution: project override → platform default → hardcoded", async () => {
     const planJson = JSON.stringify({
       classification: "bug_fix",

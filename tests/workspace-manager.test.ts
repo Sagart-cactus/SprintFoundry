@@ -13,7 +13,7 @@ describe("WorkspaceManager", () => {
     // Use a unique project_id so each test gets its own base dir under os.tmpdir()
     const projectId = `test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     manager = new WorkspaceManager(makeProjectConfig({ project_id: projectId }));
-    baseDir = path.join(os.tmpdir(), "agentsdlc", projectId);
+    baseDir = path.join(os.tmpdir(), "sprintfoundry", projectId);
   });
 
   it("create() makes an empty workspace directory", async () => {

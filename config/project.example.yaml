@@ -1,5 +1,5 @@
 # ============================================================
-# AgentSDLC — Project Configuration
+# SprintFoundry — Project Configuration
 # Copy this file to config/project.yaml and customize
 # ============================================================
 
@@ -30,11 +30,11 @@ repo:
 
 # ----- API Keys (BYOK) -----
 # You can also set these as environment variables:
-#   AGENTSDLC_ANTHROPIC_KEY, AGENTSDLC_OPENAI_KEY, etc.
+#   SPRINTFOUNDRY_ANTHROPIC_KEY, SPRINTFOUNDRY_OPENAI_KEY, etc.
 api_keys:
-  anthropic: ${AGENTSDLC_ANTHROPIC_KEY}
-  # openai: ${AGENTSDLC_OPENAI_KEY}
-  # google: ${AGENTSDLC_GOOGLE_KEY}
+  anthropic: ${SPRINTFOUNDRY_ANTHROPIC_KEY}
+  # openai: ${SPRINTFOUNDRY_OPENAI_KEY}
+  # google: ${SPRINTFOUNDRY_GOOGLE_KEY}
 
 # ----- Model Overrides (optional) -----
 # Override the default model for specific agents
@@ -153,7 +153,7 @@ rules:
 #   default_branch: main
 #
 # api_keys:
-#   anthropic: ${AGENTSDLC_ANTHROPIC_KEY}
+#   anthropic: ${SPRINTFOUNDRY_ANTHROPIC_KEY}
 #
 # branch_strategy:
 #   prefix: feat/

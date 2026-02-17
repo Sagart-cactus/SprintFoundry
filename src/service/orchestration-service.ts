@@ -1,8 +1,9 @@
 // ============================================================
-// AgentSDLC — Orchestration Service
+// SprintFoundry — Orchestration Service
 // The "hard shell" — enforces guardrails, manages execution
 // ============================================================
 
+import { execSync } from "child_process";
 import * as fs from "fs/promises";
 import * as path from "path";
 import type {
@@ -416,6 +417,36 @@ export class OrchestrationService {
           artifacts: result.agentResult.artifacts_created,
         });
 
+        // Run quality gate after developer-role steps
+        const agentRole = this.platformConfig.agent_definitions.find(
+          (d) => d.type === step.agent
+        )?.role;
+        if (agentRole === "developer") {
+          const gateResult = await this.runQualityGate(workspacePath, step);
+          if (!gateResult.passed) {
+            stepExec.status = "needs_rework";
+            stepExec.result = {
+              ...result.agentResult,
+              status: "needs_rework",
+              rework_reason: `Quality gate failed: ${gateResult.failures.join("; ")}`,
+              rework_target: step.agent,
+            };
+            await this.emitEvent(run.run_id, "step.rework_triggered", {
+              step: step.step_number,
+              reason: "quality_gate_failed",
+              failures: gateResult.failures,
+            });
+
+            if (currentRework >= maxRework) {
+              stepExec.status = "failed";
+              return "failed";
+            }
+
+            reworkCounts.set(step.step_number, currentRework + 1);
+            return this.executeStep(run, step, workspacePath, reworkCounts);
+          }
+        }
+
         return "completed";
       }
 
@@ -528,6 +559,49 @@ export class OrchestrationService {
     }
   }
 
+  // ---- Quality Gate ----
+
+  async runQualityGate(
+    workspacePath: string,
+    step: PlanStep
+  ): Promise<{ passed: boolean; failures: string[] }> {
+    const failures: string[] = [];
+
+    // Detect stack from workspace
+    const hasPackageJson = await fs.access(path.join(workspacePath, "package.json")).then(() => true, () => false);
+    const hasGoMod = await fs.access(path.join(workspacePath, "go.mod")).then(() => true, () => false);
+
+    const run = (cmd: string): boolean => {
+      try {
+        execSync(cmd, {
+          cwd: workspacePath,
+          encoding: "utf-8",
+          timeout: 120_000,
+          stdio: "pipe",
+        });
+        return true;
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        failures.push(`${cmd}: ${msg.slice(0, 200)}`);
+        return false;
+      }
+    };
+
+    if (hasPackageJson) {
+      run("npm run lint --if-present");
+      run("npx tsc --noEmit");
+      run("npm run build --if-present");
+    }
+
+    if (hasGoMod) {
+      run("go build ./...");
+      run("go vet ./...");
+      run("go test ./...");
+    }
+
+    return { passed: failures.length === 0, failures };
+  }
+
   // ---- Helper Methods ----
 
   private createRun(ticketId: string): TaskRun {
@@ -618,7 +692,13 @@ export class OrchestrationService {
       return this.platformConfig.defaults.runtime_per_agent[role];
     }
 
-    const useContainer = process.env.AGENTSDLC_USE_CONTAINERS === "true";
+    const useContainer = process.env.SPRINTFOUNDRY_USE_CONTAINERS === "true";
+    if (useContainer) {
+      console.warn(
+        "[sprintfoundry] Container mode is deprecated and will be removed in v0.3.0. " +
+        "Use local_process instead."
+      );
+    }
     return {
       provider: "claude-code",
       mode: useContainer ? "container" : "local_process",
@@ -674,7 +754,7 @@ export class OrchestrationService {
   }
 
   private getReviewDir(workspacePath: string): string {
-    return path.join(workspacePath, ".agentsdlc", "reviews");
+    return path.join(workspacePath, ".sprintfoundry", "reviews");
   }
 
   private getPendingReviewPath(workspacePath: string, reviewId: string): string {

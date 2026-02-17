@@ -17,7 +17,7 @@ repo:
   default_branch: main
 
 api_keys:
-  anthropic: ${AGENTSDLC_ANTHROPIC_KEY}
+  anthropic: ${SPRINTFOUNDRY_ANTHROPIC_KEY}
 
 branch_strategy:
   prefix: feat/

@@ -1,5 +1,5 @@
 // ============================================================
-// AgentSDLC — Agent Runner
+// SprintFoundry — Agent Runner
 // Spawns agent containers, manages execution, captures results
 // ============================================================
 
@@ -349,7 +349,7 @@ export class AgentRunner {
       return this.platformConfig.defaults.runtime_per_agent[role];
     }
 
-    const useContainer = process.env.AGENTSDLC_USE_CONTAINERS === "true";
+    const useContainer = process.env.SPRINTFOUNDRY_USE_CONTAINERS === "true";
     return {
       provider: "claude-code",
       mode: useContainer ? "container" : "local_process",
@@ -363,7 +363,7 @@ export class AgentRunner {
     taskPrompt: string
   ): Promise<{ tokens_used: number; container_id: string }> {
     // Determine execution mode: container or local
-    const useContainer = process.env.AGENTSDLC_USE_CONTAINERS === "true";
+    const useContainer = process.env.SPRINTFOUNDRY_USE_CONTAINERS === "true";
 
     if (useContainer) {
       return this.spawnContainer(config, taskPrompt);
@@ -448,7 +448,7 @@ export class AgentRunner {
       throw new Error(`No agent definition found for: ${config.agent}`);
     }
 
-    const containerName = `agentsdlc-${config.agent}-${Date.now()}`;
+    const containerName = `sprintfoundry-${config.agent}-${Date.now()}`;
     const resources = config.containerResources ?? {};
     const flags = config.cliFlags ?? {};
 

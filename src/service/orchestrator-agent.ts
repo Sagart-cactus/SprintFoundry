@@ -1,5 +1,5 @@
 // ============================================================
-// AgentSDLC — Orchestrator Agent
+// SprintFoundry — Orchestrator Agent
 // The "soft core" — uses Claude to classify tickets and generate plans
 // ============================================================
 
@@ -189,7 +189,7 @@ Return ONLY valid JSON, no markdown fences.
     agentDefinitions: AgentDefinition[],
     rules: (PlatformRule | ProjectRule)[]
   ): string {
-    return `You are the orchestrator for AgentSDLC, an AI-powered software development platform.
+    return `You are the orchestrator for SprintFoundry, an AI-powered software development platform.
 Your job is to analyze incoming tickets and create execution plans that assign work to specialized agents.
 
 ## Available Agents
@@ -243,15 +243,20 @@ Set "model" for each step to the agent model that should run that step.
 4. Architecture agent is only needed for significant new infrastructure or non-obvious technical decisions.
 5. UI/UX agent is only needed for visual design work, not for every frontend change.
 6. Security agent is needed for auth, payments, PII handling, and when labels indicate security concerns.
-7. Always specify which files/directories are relevant as context_inputs. Don't just say "the codebase".
-8. Task descriptions should be specific and actionable, not vague.
-9. Mark steps that can run in parallel in parallel_groups.
-10. Add human_gates sparingly \u2014 only when the decision is significant enough to warrant pausing.
-11. Use the agent IDs exactly as listed above (e.g. "go-developer" not "developer" for Go projects).`;
+7. **Code review agent** sits between developer and QA: developer \u2192 code-review \u2192 qa. Include it for:
+   - P0 tickets (mandatory — platform rule enforces this)
+   - Complex features or large refactors
+   - Tickets labeled "complex" (suggested by platform rule)
+   - Skip it for simple bug fixes or documentation-only changes.
+8. Always specify which files/directories are relevant as context_inputs. Don't just say "the codebase".
+9. Task descriptions should be specific and actionable, not vague.
+10. Mark steps that can run in parallel in parallel_groups.
+11. Add human_gates sparingly \u2014 only when the decision is significant enough to warrant pausing.
+12. Use the agent IDs exactly as listed above (e.g. "go-developer" not "developer" for Go projects).`;
   }
 
   private buildReworkSystemPrompt(agentDefinitions: AgentDefinition[]): string {
-    return `You are the orchestrator for AgentSDLC. A step in the execution plan has failed and you need to plan minimal rework steps.
+    return `You are the orchestrator for SprintFoundry. A step in the execution plan has failed and you need to plan minimal rework steps.
 
 ## Available Agents
 

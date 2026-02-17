@@ -1,5 +1,5 @@
 // ============================================================
-// AgentSDLC — Event Store
+// SprintFoundry — Event Store
 // Stores TaskEvent records for audit logging and replay
 // Persists to JSONL files (global log + per-run workspace log)
 // ============================================================
