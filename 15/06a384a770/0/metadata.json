@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "1506a384a770",
+  "session_id": "8393a577-de44-4604-83a7-96c1941b580f",
+  "strategy": "auto-commit",
+  "created_at": "2026-02-14T17:13:35.236632Z",
+  "branch": "feat/overhaul-ui",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "config/project-sprintfoundry-claude.yaml"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "0019fce5-5c67-48a0-af44-4342038a7443",
+  "checkpoint_transcript_start": 93,
+  "transcript_lines_at_start": 93,
+  "token_usage": {
+    "input_tokens": 9,
+    "cache_creation_tokens": 21257,
+    "cache_read_tokens": 233309,
+    "output_tokens": 929,
+    "api_call_count": 7
+  }
+}
