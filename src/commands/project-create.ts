@@ -49,11 +49,11 @@ function getAgentChoices(stack: string): { name: string; value: string; checked:
 }
 
 function parseRepoOwnerAndName(url: string): { owner: string; repo: string } | null {
-  // SSH: git@github.com:org/repo.git
-  const sshMatch = url.match(/github\.com[:/]([^/]+)\/([^/.]+)/);
+  // SSH: git@github.com:org/repo.git  or  git@github.com:org/service.api.git
+  const sshMatch = url.match(/github\.com[:/]([^/]+)\/(.+?)(?:\.git)?$/);
   if (sshMatch) return { owner: sshMatch[1], repo: sshMatch[2] };
-  // HTTPS: https://github.com/org/repo.git
-  const httpsMatch = url.match(/github\.com\/([^/]+)\/([^/.]+)/);
+  // HTTPS: https://github.com/org/repo.git  or  https://github.com/org/service.api.git
+  const httpsMatch = url.match(/github\.com\/([^/]+)\/(.+?)(?:\.git)?$/);
   if (httpsMatch) return { owner: httpsMatch[1], repo: httpsMatch[2] };
   return null;
 }
