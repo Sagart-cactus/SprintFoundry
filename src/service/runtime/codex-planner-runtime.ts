@@ -54,6 +54,7 @@ Set "model" for each step to the agent model that should run that step.`;
     const apiKey = this.resolveOpenAiKey(runtime.mode);
     const runtimeArgs = runtime.args ?? [];
     const hasSandboxFlag = runtimeArgs.includes("--sandbox") || runtimeArgs.includes("-s");
+    const hasBypassFlag = runtimeArgs.includes("--dangerously-bypass-approvals-and-sandbox");
     await runProcess(runtime.command ?? "codex", [
       ...runtimeArgs,
       "exec",
@@ -61,7 +62,7 @@ Set "model" for each step to the agent model that should run that step.`;
       "--json",
       "--output-last-message",
       ".planner-plan.raw.txt",
-      ...(hasSandboxFlag ? [] : ["--sandbox", "workspace-write"]),
+      ...(hasSandboxFlag || hasBypassFlag ? [] : ["--sandbox", "workspace-write"]),
     ], {
       cwd: workspacePath,
       env: {

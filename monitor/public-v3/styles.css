@@ -1205,6 +1205,22 @@ input[type="text"]:focus {
   border-color: color-mix(in srgb, var(--err), white 60%);
 }
 
+.feed-card.rework-step {
+  border-color: color-mix(in srgb, var(--warn), white 55%);
+  border-left: 3px solid var(--warn);
+}
+
+.rework-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: color-mix(in srgb, var(--warn), var(--text) 40%);
+  background: color-mix(in srgb, var(--warn), white 85%);
+  border: 1px solid color-mix(in srgb, var(--warn), white 55%);
+  border-radius: 999px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+
 .feed-card.completed {
   border-color: color-mix(in srgb, var(--ok), white 70%);
 }
@@ -1317,6 +1333,41 @@ input[type="text"]:focus {
 }
 
 /* Step timeline events (inline per card) */
+.feed-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.45;
+  margin: 10px 0 2px;
+}
+
+.feed-alert--token {
+  background: color-mix(in srgb, var(--err), white 88%);
+  border-left: 3px solid var(--err);
+  color: color-mix(in srgb, var(--err), var(--text) 50%);
+}
+
+.feed-alert--rework {
+  background: color-mix(in srgb, var(--warn), white 88%);
+  border-left: 3px solid var(--warn);
+  color: color-mix(in srgb, var(--warn), var(--text) 50%);
+}
+
+.feed-alert-icon {
+  font-style: normal;
+  flex-shrink: 0;
+  line-height: 1.45;
+}
+
+.pill--rework {
+  background: color-mix(in srgb, var(--warn), white 80%);
+  border-color: color-mix(in srgb, var(--warn), white 50%);
+  color: color-mix(in srgb, var(--warn), var(--text) 60%);
+}
+
 .feed-events {
   margin-top: 10px;
   padding-top: 8px;

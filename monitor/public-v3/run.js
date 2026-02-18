@@ -27,6 +27,10 @@ const state = {
   agentStderr: "",
   agentResult: "",
   reviews: [],
+  // Per-step logs: stepNumber → { stdout, stderr }
+  stepLogs: new Map(),
+  // Step numbers whose logs are final (completed/failed) — skip re-fetching
+  completedStepNums: new Set(),
 };
 
 // ── Helpers (unchanged) ──
@@ -181,6 +185,8 @@ function eventLabel(rawType) {
   if (t === "human_gate.requested") return "Human gate requested";
   if (t === "human_gate.approved") return "Human gate approved";
   if (t === "human_gate.rejected") return "Human gate rejected";
+  if (t === "agent.token_limit_exceeded") return "Token limit exceeded";
+  if (t === "step.rework_triggered") return "Rework triggered";
   return String(rawType || "event").replaceAll(/[._]/g, " ");
 }
 
@@ -211,6 +217,8 @@ function buildStepMeta(runData, events) {
       model: runData?.step_models?.[String(step.step_number)] || "",
       errors: [],
       outputs: new Set(),
+      tokenLimitExceeded: null,
+      reworkEvents: [],
     });
   }
 
@@ -218,11 +226,14 @@ function buildStepMeta(runData, events) {
     const stepNum = evt?.data?.step;
     if (typeof stepNum !== "number") continue;
     if (!byStep.has(stepNum)) {
-      byStep.set(stepNum, { startedAt: null, completedAt: null, model: "", errors: [], outputs: new Set() });
+      byStep.set(stepNum, { startedAt: null, completedAt: null, model: "", errors: [], outputs: new Set(), tokenLimitExceeded: null, reworkEvents: [] });
     }
     const meta = byStep.get(stepNum);
     if (evt.event_type === "step.started") meta.startedAt = evt.timestamp || meta.startedAt;
     if (evt.event_type === "step.completed" || evt.event_type === "step.failed") meta.completedAt = evt.timestamp || meta.completedAt;
+
+    if (evt.event_type === "agent.token_limit_exceeded") meta.tokenLimitExceeded = evt.data ?? true;
+    if (evt.event_type === "step.rework_triggered") meta.reworkEvents.push(evt.data ?? {});
 
     const model = inferModel(evt.data);
     if (model) meta.model = model;
@@ -297,7 +308,13 @@ function renderAgentOut(raw, stepNumber) {
       const id =
         pickString(item?.item, ["id"]) ||
         pickString(item, ["id", "event_id"]) ||
-        `${pickString(item, ["type", "event_type"]) || "row"}-${step || "x"}-${index}`;
+        // Stable fallback: hash item content so ID doesn't shift as new output arrives
+        (() => {
+          const raw = JSON.stringify(item);
+          let h = 0;
+          for (let i = 0; i < Math.min(raw.length, 256); i++) h = (Math.imul(31, h) + raw.charCodeAt(i)) | 0;
+          return `${pickString(item, ["type", "event_type"]) || "row"}-${step || "x"}-${(h >>> 0).toString(16)}`;
+        })();
       const blockId = `log-json-${id}`;
       const expanded = state.expandedLogIds.has(blockId);
       return `
@@ -673,27 +690,58 @@ function renderFeed(runData, events, stepMeta) {
       const ran = durationBetween(started, completed);
       const planStep = planByStep.get(step.step_number);
       const model = meta.model || planStep?.model || "";
-      const errCount = errorCountForStep(state.agentStderr, step.step_number);
-      const outCount = agentOutCountForStep(state.agentStdout, step.step_number);
+      // Use per-step logs (served directly from step-specific files on the server).
+      // Falls back to the shared latest log filtered by step number for backward compat.
+      const stepLog = state.stepLogs.get(step.step_number);
+      const stepStdout = stepLog?.stdout ?? state.agentStdout;
+      const stepStderr = stepLog?.stderr ?? state.agentStderr;
+      const stepNumFilter = stepLog ? null : step.step_number; // null = no filter needed (content is already step-specific)
+
+      const errCount = errorCountForStep(stepStderr, stepNumFilter);
+      const outCount = agentOutCountForStep(stepStdout, stepNumFilter);
       const stepEvents = stepEventsForStep(events, step.step_number);
       const isPending = !started && step.status !== "completed" && step.status !== "failed" && step.status !== "running";
 
       const outSectionId = `feed-out-${step.step_number}`;
       const errSectionId = `feed-err-${step.step_number}`;
       const resultSectionId = `feed-result-${step.step_number}`;
-      const summary = extractStepSummary(state.agentResult, step.step_number);
 
+      // Extract summary from completed event (works for all steps including rework).
+      const completedEvent = [...events].reverse().find(
+        (e) => e.event_type === "step.completed" && e.data?.step === step.step_number
+      );
+      const summary = completedEvent?.data?.result?.summary ||
+        extractStepSummary(state.agentResult, step.step_number);
+
+      const tokenAlert = meta.tokenLimitExceeded
+        ? `<div class="feed-alert feed-alert--token">
+            <span class="feed-alert-icon">⛔</span>
+            <span><strong>Token / budget limit exceeded</strong>${meta.tokenLimitExceeded.reason ? ` — ${escapeHtml(meta.tokenLimitExceeded.reason)}` : meta.tokenLimitExceeded.cost_limit ? ` — cost cap $${escapeHtml(String(meta.tokenLimitExceeded.cost_limit))} reached` : " — run halted before this step"}</span>
+          </div>`
+        : "";
+
+      const reworkAlerts = meta.reworkEvents.map((r, i) =>
+        `<div class="feed-alert feed-alert--rework">
+          <span class="feed-alert-icon">↺</span>
+          <span><strong>Rework triggered${r.rework_count != null ? ` (attempt ${escapeHtml(String(r.rework_count))})` : ""}</strong>${r.reason ? ` — ${escapeHtml(String(r.reason))}` : ""}</span>
+        </div>`
+      ).join("");
+
+      const isRework = step.is_rework || step.step_number >= 900;
       return `
-        <article class="feed-card ${escapeHtml(step.status || "pending")}" id="step-card-${escapeHtml(String(step.step_number))}" data-step="${escapeHtml(String(step.step_number))}">
+        <article class="feed-card ${escapeHtml(step.status || "pending")}${isRework ? " rework-step" : ""}" id="step-card-${escapeHtml(String(step.step_number))}" data-step="${escapeHtml(String(step.step_number))}">
           <header class="feed-card-header">
             <span class="step-dot ${escapeHtml(step.status || "pending")}"></span>
             <strong>Step ${escapeHtml(String(step.step_number))} · ${escapeHtml(step.agent || "agent")}</strong>
+            ${isRework ? '<span class="rework-label">↺ Rework</span>' : ""}
             <div class="header-pills">
               ${model ? `<span class="header-pill model-chip">${escapeHtml(model)}</span>` : ""}
               ${ran != null ? `<span class="header-pill">${escapeHtml(fmtDuration(ran))}</span>` : ""}
               ${step.tokens ? `<span class="header-pill">${escapeHtml(humanTokens(step.tokens))} tokens</span>` : ""}
+              ${meta.reworkEvents.length ? `<span class="header-pill pill--rework">↺ ${escapeHtml(String(meta.reworkEvents.length))} rework</span>` : ""}
             </div>
           </header>
+          ${tokenAlert}${reworkAlerts}
           <div class="feed-block">
             <span class="feed-block-label">Input</span>
             <p class="feed-task">${escapeHtml(step.task || "-")}</p>
@@ -709,15 +757,15 @@ function renderFeed(runData, events, stepMeta) {
               ` : ""}
               <details class="feed-section" data-detail-id="${escapeHtml(outSectionId)}" ${state.expandedFeedSections.has(outSectionId) ? "open" : ""}>
                 <summary>Agent Output (${escapeHtml(String(outCount))})</summary>
-                <div class="feed-section-body">${renderAgentOut(state.agentStdout, step.step_number)}</div>
+                <div class="feed-section-body">${renderAgentOut(stepStdout, stepNumFilter)}</div>
               </details>
               <details class="feed-section ${errCount ? "has-errors" : ""}" data-detail-id="${escapeHtml(errSectionId)}" ${state.expandedFeedSections.has(errSectionId) ? "open" : ""}>
                 <summary>Errors (${escapeHtml(String(errCount))})</summary>
-                <div class="feed-section-body">${renderAgentErr(state.agentStderr, step.step_number)}</div>
+                <div class="feed-section-body">${renderAgentErr(stepStderr, stepNumFilter)}</div>
               </details>
               <details class="feed-section" data-detail-id="${escapeHtml(resultSectionId)}" ${state.expandedFeedSections.has(resultSectionId) ? "open" : ""}>
                 <summary>Result JSON</summary>
-                <div class="feed-section-body">${renderResult(state.agentResult, step.step_number)}</div>
+                <div class="feed-section-body">${renderResult(completedEvent?.data?.result ? JSON.stringify(completedEvent.data.result) : state.agentResult, completedEvent?.data?.result ? null : step.step_number)}</div>
               </details>
               ${stepEvents.length ? `
                 <div class="feed-events">
@@ -768,6 +816,31 @@ function renderFeed(runData, events, stepMeta) {
   runFeed.innerHTML = stepCards + plannerStream;
 }
 
+// ── Per-step log fetching ──
+
+async function fetchStepLogs(steps) {
+  const toFetch = steps.filter((s) => {
+    if (s.status === "pending") return false;
+    if (state.completedStepNums.has(s.step_number)) return false;
+    return true;
+  });
+  if (!toFetch.length) return;
+
+  await Promise.all(
+    toFetch.map(async (step) => {
+      const base = `/api/log?project=${encodeURIComponent(project)}&run=${encodeURIComponent(run)}&step=${step.step_number}&lines=1400`;
+      const [stdout, stderr] = await Promise.all([
+        fetchText(`${base}&kind=agent_stdout`).catch(() => ""),
+        fetchText(`${base}&kind=agent_stderr`).catch(() => ""),
+      ]);
+      state.stepLogs.set(step.step_number, { stdout, stderr });
+      if (step.status === "completed" || step.status === "failed") {
+        state.completedStepNums.add(step.step_number);
+      }
+    })
+  );
+}
+
 // ── Data fetching & refresh ──
 
 async function refresh() {
@@ -796,6 +869,8 @@ async function refresh() {
     state.agentResult = agentResult;
     state.stepMeta = buildStepMeta(runData, state.events);
 
+    await fetchStepLogs(runData.steps ?? []);
+
     if (runData.status === "waiting_human_review") {
       const reviewRes = await fetchJson(`/api/reviews?project=${encodeURIComponent(project)}&run=${encodeURIComponent(run)}`).catch(() => ({ reviews: [] }));
       state.reviews = Array.isArray(reviewRes.reviews) ? reviewRes.reviews : [];
@@ -803,11 +878,37 @@ async function refresh() {
       state.reviews = [];
     }
 
+    // Snapshot scroll positions before wiping innerHTML
+    const savedWindowScrollY = window.scrollY;
+    const savedSectionScrolls = new Map();
+    runFeed.querySelectorAll("details[data-detail-id]").forEach((el) => {
+      if (!(el instanceof HTMLDetailsElement) || !el.open) return;
+      const body = el.querySelector(".feed-section-body");
+      if (body && body.scrollTop > 0) {
+        savedSectionScrolls.set(el.dataset.detailId, body.scrollTop);
+      }
+    });
+
     renderSidebarMeta(runData);
     renderSidebarSteps(runData);
     renderSidebarPlan(runData, state.events);
     renderReviewPanel(state.reviews);
     renderFeed(runData, state.events, state.stepMeta);
+
+    // Restore scroll positions after DOM has been repainted
+    requestAnimationFrame(() => {
+      window.scrollTo(0, savedWindowScrollY);
+      if (savedSectionScrolls.size > 0) {
+        runFeed.querySelectorAll("details[data-detail-id]").forEach((el) => {
+          if (!(el instanceof HTMLDetailsElement) || !el.open) return;
+          const saved = savedSectionScrolls.get(el.dataset.detailId);
+          if (saved != null) {
+            const body = el.querySelector(".feed-section-body");
+            if (body) body.scrollTop = saved;
+          }
+        });
+      }
+    });
 
     statusLine.textContent = `Loaded ${project}/${run}`;
     lastRefreshed.textContent = `Last refreshed: ${new Date().toLocaleTimeString()}`;
