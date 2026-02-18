@@ -1,0 +1,38 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "a432aa44ba38",
+  "strategy": "auto-commit",
+  "branch": "feat/spr-5-default-monitor-to-v3-remove-v1-and-v2-routes-asse",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".agent-result.json",
+    "README.md",
+    "artifacts/handoff/dev-to-qa.md",
+    "docs/monitor.md",
+    "monitor/public-v2/app.js",
+    "monitor/public-v2/index.html",
+    "monitor/public-v2/run.html",
+    "monitor/public-v2/run.js",
+    "monitor/public-v2/styles.css",
+    "monitor/public/app.js",
+    "monitor/public/index.html",
+    "monitor/public/styles.css",
+    "monitor/server.mjs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/a4/32aa44ba38/0/metadata.json",
+      "transcript": "/a4/32aa44ba38/0/full.jsonl",
+      "context": "",
+      "content_hash": "/a4/32aa44ba38/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 27,
+    "cache_creation_tokens": 24214,
+    "cache_read_tokens": 880583,
+    "output_tokens": 159,
+    "api_call_count": 25
+  }
+}
