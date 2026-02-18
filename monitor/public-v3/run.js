@@ -1,13 +1,11 @@
 const runTitle = document.getElementById("run-title");
+const runStatusBadge = document.getElementById("run-status-badge");
 const refreshBtn = document.getElementById("refresh-btn");
-const summaryBar = document.getElementById("summary-bar");
 const reviewPanel = document.getElementById("review-panel");
-const planToggle = document.getElementById("plan-toggle");
-const planBody = document.getElementById("plan-body");
-const stepsGrid = document.getElementById("steps-grid");
-const timelineList = document.getElementById("timeline-list");
-const logTabs = Array.from(document.querySelectorAll(".log-tab"));
-const logView = document.getElementById("log-view");
+const sidebarMeta = document.getElementById("sidebar-meta");
+const sidebarSteps = document.getElementById("sidebar-steps");
+const sidebarPlan = document.getElementById("sidebar-plan");
+const runFeed = document.getElementById("run-feed");
 const statusLine = document.getElementById("status-line");
 const lastRefreshed = document.getElementById("last-refreshed");
 
@@ -16,17 +14,22 @@ const project = query.get("project") ?? "";
 const run = query.get("run") ?? "";
 
 const state = {
-  logKind: "agent_stdout",
   selectedStep: null,
   expandedLogIds: new Set(),
   expandedPlanDetails: new Set(),
+  expandedFeedSections: new Set(),
   runData: null,
   events: [],
   stepMeta: new Map(),
   plannerStdout: "",
   plannerStderr: "",
+  agentStdout: "",
+  agentStderr: "",
+  agentResult: "",
   reviews: [],
 };
+
+// ── Helpers (unchanged) ──
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -85,6 +88,13 @@ function fmtDate(ts) {
   return d.toLocaleString();
 }
 
+function fmtTime(ts) {
+  if (!ts) return "-";
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return "-";
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
 function fmtIso(ts) {
   if (!ts) return "-";
   const d = new Date(ts);
@@ -112,10 +122,10 @@ function durationBetween(start, end) {
 
 function humanTokens(value) {
   const n = Number(value || 0);
-  if (!n || Number.isNaN(n)) return "0 Tokens";
-  if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M Tokens`;
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}K Tokens`;
-  return `${n} Tokens`;
+  if (!n || Number.isNaN(n)) return "0";
+  if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
+  return `${n}`;
 }
 
 function relative(ts) {
@@ -172,14 +182,6 @@ function eventLabel(rawType) {
   if (t === "human_gate.approved") return "Human gate approved";
   if (t === "human_gate.rejected") return "Human gate rejected";
   return String(rawType || "event").replaceAll(/[._]/g, " ");
-}
-
-function stepHeading(event, runData) {
-  const stepNum = event?.data?.step;
-  if (typeof stepNum !== "number") return eventLabel(event.event_type);
-  const step = (runData?.steps ?? []).find((s) => s.step_number === stepNum);
-  const agent = step?.agent ? `${step.agent} ` : "";
-  return `${agent}step ${stepNum} ${eventLabel(event.event_type).replace(/^Step\s/i, "").toLowerCase()}`;
 }
 
 function inferModel(value) {
@@ -240,287 +242,7 @@ function buildStepMeta(runData, events) {
   return byStep;
 }
 
-function renderSummary(runData) {
-  const totalTokens = (runData.steps ?? []).reduce((sum, step) => sum + (Number(step.tokens) || 0), 0);
-  runTitle.textContent = `${runData.project_id}/${runData.run_id}`;
-  summaryBar.innerHTML = `
-    <span class="sum-chip status ${escapeHtml(runData.status || "unknown")}">${escapeHtml(runData.status || "unknown")}</span>
-    <span class="sum-chip">Project: ${escapeHtml(runData.project_id)}</span>
-    <span class="sum-chip">Run: ${escapeHtml(runData.run_id)}</span>
-    <span class="sum-chip">Classification: ${escapeHtml(runData.classification || "unclassified")}</span>
-    <span class="sum-chip">${escapeHtml(humanTokens(totalTokens))}</span>
-    <span class="sum-chip">Updated ${escapeHtml(relative(runData.last_event_ts))}</span>
-  `;
-}
-
-function renderReviewPanel(reviews) {
-  if (!reviews.length) {
-    reviewPanel.innerHTML = "";
-    return;
-  }
-
-  reviewPanel.innerHTML = reviews
-    .map((review) => {
-      const artifacts = Array.isArray(review.artifacts_to_review) ? review.artifacts_to_review : [];
-      return `
-        <div class="review-card">
-          <div class="review-header">
-            <span class="review-badge">Human Gate</span>
-            <span class="review-meta">After step ${escapeHtml(String(review.after_step ?? "?"))} · ${escapeHtml(review.review_id || "")}</span>
-          </div>
-          <div class="review-summary">${escapeHtml(review.summary || "No summary provided.")}</div>
-          ${artifacts.length ? `
-            <details class="review-artifacts">
-              <summary>Artifacts to review (${artifacts.length})</summary>
-              <ul>${artifacts.map((a) => `<li>${escapeHtml(a)}</li>`).join("")}</ul>
-            </details>
-          ` : ""}
-          <textarea class="review-feedback" data-review-id="${escapeHtml(review.review_id)}" placeholder="Optional feedback..." rows="2"></textarea>
-          <div class="review-actions">
-            <button type="button" class="review-btn approve" data-review-id="${escapeHtml(review.review_id)}" data-decision="approved">Approve</button>
-            <button type="button" class="review-btn reject" data-review-id="${escapeHtml(review.review_id)}" data-decision="rejected">Reject</button>
-          </div>
-        </div>
-      `;
-    })
-    .join("");
-}
-
-async function submitReviewDecision(reviewId, decision) {
-  const textarea = reviewPanel.querySelector(`textarea[data-review-id="${CSS.escape(reviewId)}"]`);
-  const feedback = textarea?.value ?? "";
-  const btn = reviewPanel.querySelector(`button[data-review-id="${CSS.escape(reviewId)}"][data-decision="${CSS.escape(decision)}"]`);
-  if (btn) { btn.disabled = true; btn.textContent = "Submitting..."; }
-  try {
-    const resp = await fetch("/api/review/decide", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ project, run, review_id: reviewId, decision, feedback }),
-    });
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({ error: "Unknown error" }));
-      alert(`Review failed: ${err.error || "Unknown error"}`);
-      return;
-    }
-    await refresh();
-  } catch (err) {
-    alert(`Review failed: ${err instanceof Error ? err.message : String(err)}`);
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = decision === "approved" ? "Approve" : "Reject"; }
-  }
-}
-
-reviewPanel.addEventListener("click", (event) => {
-  const btn = event.target.closest(".review-btn");
-  if (!btn) return;
-  const reviewId = btn.dataset.reviewId;
-  const decision = btn.dataset.decision;
-  if (!reviewId || !decision) return;
-  void submitReviewDecision(reviewId, decision);
-});
-
-function plannerItems(raw) {
-  return parseJsonLines(raw).slice(-30);
-}
-
-function findPlanInPlanner(items) {
-  for (const item of items) {
-    if (item?.plan?.steps) return item.plan;
-    if (item?.data?.plan?.steps) return item.data.plan;
-    if (item?.steps && Array.isArray(item.steps)) return item;
-  }
-  return null;
-}
-
-function plannerFriendlyLabel(item) {
-  const t = pickString(item, ["event_type", "type"]) || pickString(item?.item, ["type"]);
-  return eventLabel(t || "planner.event");
-}
-
-function plannerSummary(item) {
-  const msg =
-    pickString(item?.data, ["message", "reasoning", "summary", "error"]) ||
-    pickString(item, ["message", "reasoning", "summary", "error"]) ||
-    textFromContent(item?.item?.content) ||
-    textFromContent(item?.content);
-  return msg || "Planner event";
-}
-
-function plannerDetailId(item, index) {
-  return (
-    pickString(item?.item, ["id"]) ||
-    pickString(item, ["id", "event_id", "timestamp", "time"]) ||
-    `planner-${index + 1}`
-  );
-}
-
-function renderPlanPanel(runData, events) {
-  const items = plannerItems(state.plannerStdout);
-  const parsedPlan = findPlanInPlanner(items);
-  const plan = runData.plan || parsedPlan;
-  const failures = events.filter((e) => String(e.event_type).includes("failed") || String(e.event_type).includes("error"));
-  const plannerErrLines = String(state.plannerStderr || "")
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .slice(-8);
-
-  const stepCount = Array.isArray(plan?.steps) ? plan.steps.length : 0;
-
-  planBody.innerHTML = `
-    <div class="plan-grid">
-      <div class="plan-card">
-        <h3>Plan</h3>
-        <p><strong>Plan ID:</strong> ${escapeHtml(plan?.plan_id || "-")}</p>
-        <p><strong>Steps:</strong> ${escapeHtml(String(stepCount))}</p>
-        <p><strong>Classification:</strong> ${escapeHtml(plan?.classification || runData.classification || "-")}</p>
-        <details data-detail-id="plan-reasoning" ${state.expandedPlanDetails.has("plan-reasoning") ? "open" : ""}>
-          <summary>Reasoning</summary>
-          <pre>${escapeHtml(plan?.reasoning || "No reasoning captured")}</pre>
-        </details>
-      </div>
-      <div class="plan-card${failures.length || plannerErrLines.length ? " error" : ""}">
-        <h3>Errors</h3>
-        ${
-          failures.length || plannerErrLines.length
-            ? failures
-                .slice(-6)
-                .map(
-                  (evt) => `<p><strong>${escapeHtml(eventLabel(evt.event_type))}:</strong> ${escapeHtml(shortText(evt?.data?.error || evt?.data?.reason || evt?.data?.message || "error", 140))}</p>`
-                )
-                .concat(plannerErrLines.map((line) => `<p><strong>Planner:</strong> ${escapeHtml(shortText(line, 140))}</p>`))
-                .join("")
-            : '<p>No errors recorded.</p>'
-        }
-      </div>
-    </div>
-    <div class="planner-stream">
-      ${items
-        .map((item, index) => {
-          const id = `planner-${index}`;
-          const detailId = `planner-raw-${plannerDetailId(item, index)}`;
-          const time = pickString(item, ["timestamp", "time", "created_at"]);
-          return `
-            <article class="planner-item">
-              <div class="planner-top">
-                <span>${escapeHtml(plannerFriendlyLabel(item))}</span>
-                <span class="mono">${escapeHtml(time || `#${index + 1}`)}</span>
-              </div>
-              <p>${escapeHtml(shortText(plannerSummary(item), 180))}</p>
-              <details data-detail-id="${escapeHtml(detailId)}" ${state.expandedPlanDetails.has(detailId) ? "open" : ""}>
-                <summary>Raw JSON</summary>
-                <pre id="${escapeHtml(id)}">${escapeHtml(JSON.stringify(item, null, 2))}</pre>
-              </details>
-            </article>
-          `;
-        })
-        .join("")}
-    </div>
-  `;
-}
-
-function dependencyCount(planStep) {
-  const inputs = planStep?.context_inputs;
-  if (!Array.isArray(inputs)) return 0;
-  return inputs.filter((item) => item?.type === "step_output").length;
-}
-
-function outputsCount(meta) {
-  return Array.from(meta?.outputs ?? []).length;
-}
-
-function renderSteps(runData, stepMeta) {
-  const planByStep = new Map((runData.plan?.steps ?? []).map((s) => [s.step_number, s]));
-  const steps = runData.steps ?? [];
-  if (!steps.length) {
-    stepsGrid.innerHTML = '<div class="empty">No steps found.</div>';
-    return;
-  }
-
-  stepsGrid.innerHTML = steps
-    .map((step) => {
-      const meta = stepMeta.get(step.step_number) || { startedAt: null, completedAt: null, model: "", errors: [], outputs: new Set() };
-      const started = meta.startedAt || step.started_at;
-      const completed = meta.completedAt || step.completed_at;
-      const ran = durationBetween(started, completed);
-      const planStep = planByStep.get(step.step_number);
-      const model = meta.model || planStep?.model || "-";
-      const depCount = dependencyCount(planStep);
-      const outCount = outputsCount(meta);
-      const errCount = (meta.errors ?? []).length;
-      const selected = state.selectedStep === step.step_number ? "selected" : "";
-
-      return `
-        <article class="step-card ${escapeHtml(step.status || "pending")} ${selected}" data-step="${escapeHtml(String(step.step_number))}">
-          <header>
-            <span class="step-status ${escapeHtml(step.status || "pending")}"></span>
-            <strong>Step ${escapeHtml(String(step.step_number))} · ${escapeHtml(step.agent || "agent")}</strong>
-            <span class="model-chip">${escapeHtml(model)}</span>
-          </header>
-          <p class="task">${escapeHtml(step.task || "-")}</p>
-          <div class="chips-row">
-            <span class="metric">Started ${escapeHtml(fmtDate(started))}</span>
-            <span class="metric">Ran ${escapeHtml(fmtDuration(ran))}</span>
-            <span class="metric">${escapeHtml(humanTokens(step.tokens))}</span>
-          </div>
-          <div class="chips-row">
-            <span class="pill">Outputs ${escapeHtml(String(outCount))}</span>
-            <span class="pill">Dependencies ${escapeHtml(String(depCount))}</span>
-            <span class="pill error">Errors ${escapeHtml(String(errCount))}</span>
-          </div>
-        </article>
-      `;
-    })
-    .join("");
-}
-
-function eventPreview(event) {
-  return (
-    pickString(event?.data, ["message", "error", "reason", "task"]) ||
-    textFromContent(event?.data?.content) ||
-    textFromContent(event?.data?.output) ||
-    "No payload"
-  );
-}
-
-function timelineDotClass(eventType) {
-  const t = String(eventType || "").toLowerCase();
-  if (t.includes("completed")) return "dot-completed";
-  if (t.includes("failed") || t.includes("error")) return "dot-failed";
-  if (t.includes("rework")) return "dot-rework";
-  if (t.includes("started")) return "dot-started";
-  return "dot-system";
-}
-
-function renderTimeline(events, runData) {
-  const ascending = events.slice(-180);
-  if (!ascending.length) {
-    timelineList.innerHTML = '<li class="empty">No events</li>';
-    return;
-  }
-
-  timelineList.innerHTML = ascending
-    .map((evt) => {
-      const stepNum = evt?.data?.step;
-      const step = typeof stepNum === "number" ? (runData.steps ?? []).find((s) => s.step_number === stepNum) : null;
-      const context = typeof stepNum === "number" ? `step ${stepNum}${step?.agent ? ` · ${step.agent}` : ""}` : "system";
-      const dotClass = timelineDotClass(evt.event_type);
-      return `
-        <li class="timeline-item">
-          <span class="timeline-dot ${dotClass}"></span>
-          <div class="timeline-content">
-            <div class="timeline-head">
-              <strong>${escapeHtml(stepHeading(evt, runData))}</strong>
-              <span>${escapeHtml(context)}</span>
-            </div>
-            <p>${escapeHtml(shortText(eventPreview(evt), 160))}</p>
-            <code>${escapeHtml(fmtIso(evt.timestamp))}</code>
-          </div>
-        </li>
-      `;
-    })
-    .join("");
-}
+// ── Agent log rendering helpers (reused from old code) ──
 
 function classifyAgentItem(item) {
   const nested = item?.item ?? {};
@@ -696,45 +418,357 @@ function renderResult(raw, stepNumber) {
   return `<div class="json-tree">${renderValueTree(scoped)}</div>`;
 }
 
-function errorCountFromErr(raw) {
-  return String(raw || "")
+function errorCountForStep(raw, stepNumber) {
+  const grouped = groupErrByStep(raw);
+  if (typeof stepNumber !== "number") {
+    let total = 0;
+    for (const msgs of grouped.values()) total += msgs.length;
+    return total;
+  }
+  return (grouped.get(`step ${stepNumber}`) || []).length;
+}
+
+function agentOutCountForStep(raw, stepNumber) {
+  const lines = String(raw || "")
     .split("\n")
     .map((line) => line.trim())
-    .filter(Boolean).length;
+    .filter(Boolean);
+  const parsed = lines.map((line) => parseJsonSafe(line)).filter((item) => item && typeof item === "object");
+  if (typeof stepNumber !== "number") return parsed.length;
+  return parsed.filter((item) => getStepNumber(item) === stepNumber).length;
 }
 
-function updateTabBadges(errRaw) {
-  const errCount = errorCountFromErr(errRaw);
-  for (const tab of logTabs) {
-    const kind = tab.dataset.kind;
-    if (kind === "agent_stderr") {
-      tab.textContent = errCount > 0 ? `Agent Err (${errCount})` : "Agent Err";
-    } else if (kind === "agent_stdout") {
-      tab.textContent = "Agent Out";
-    } else if (kind === "agent_result") {
-      tab.textContent = "Result JSON";
+// ── Planner helpers ──
+
+function plannerItems(raw) {
+  return parseJsonLines(raw).slice(-30);
+}
+
+function findPlanInPlanner(items) {
+  for (const item of items) {
+    if (item?.plan?.steps) return item.plan;
+    if (item?.data?.plan?.steps) return item.data.plan;
+    if (item?.steps && Array.isArray(item.steps)) return item;
+  }
+  return null;
+}
+
+function plannerFriendlyLabel(item) {
+  const t = pickString(item, ["event_type", "type"]) || pickString(item?.item, ["type"]);
+  return eventLabel(t || "planner.event");
+}
+
+function plannerSummary(item) {
+  const msg =
+    pickString(item?.data, ["message", "reasoning", "summary", "error"]) ||
+    pickString(item, ["message", "reasoning", "summary", "error"]) ||
+    textFromContent(item?.item?.content) ||
+    textFromContent(item?.content);
+  return msg || "Planner event";
+}
+
+function plannerDetailId(item, index) {
+  return (
+    pickString(item?.item, ["id"]) ||
+    pickString(item, ["id", "event_id", "timestamp", "time"]) ||
+    `planner-${index + 1}`
+  );
+}
+
+// ── Review panel (unchanged) ──
+
+function renderReviewPanel(reviews) {
+  if (!reviews.length) {
+    reviewPanel.innerHTML = "";
+    return;
+  }
+
+  reviewPanel.innerHTML = reviews
+    .map((review) => {
+      const artifacts = Array.isArray(review.artifacts_to_review) ? review.artifacts_to_review : [];
+      return `
+        <div class="review-card">
+          <div class="review-header">
+            <span class="review-badge">Human Gate</span>
+            <span class="review-meta">After step ${escapeHtml(String(review.after_step ?? "?"))} · ${escapeHtml(review.review_id || "")}</span>
+          </div>
+          <div class="review-summary">${escapeHtml(review.summary || "No summary provided.")}</div>
+          ${artifacts.length ? `
+            <details class="review-artifacts">
+              <summary>Artifacts to review (${artifacts.length})</summary>
+              <ul>${artifacts.map((a) => `<li>${escapeHtml(a)}</li>`).join("")}</ul>
+            </details>
+          ` : ""}
+          <textarea class="review-feedback" data-review-id="${escapeHtml(review.review_id)}" placeholder="Optional feedback..." rows="2"></textarea>
+          <div class="review-actions">
+            <button type="button" class="review-btn approve" data-review-id="${escapeHtml(review.review_id)}" data-decision="approved">Approve</button>
+            <button type="button" class="review-btn reject" data-review-id="${escapeHtml(review.review_id)}" data-decision="rejected">Reject</button>
+          </div>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+async function submitReviewDecision(reviewId, decision) {
+  const textarea = reviewPanel.querySelector(`textarea[data-review-id="${CSS.escape(reviewId)}"]`);
+  const feedback = textarea?.value ?? "";
+  const btn = reviewPanel.querySelector(`button[data-review-id="${CSS.escape(reviewId)}"][data-decision="${CSS.escape(decision)}"]`);
+  if (btn) { btn.disabled = true; btn.textContent = "Submitting..."; }
+  try {
+    const resp = await fetch("/api/review/decide", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project, run, review_id: reviewId, decision, feedback }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ error: "Unknown error" }));
+      alert(`Review failed: ${err.error || "Unknown error"}`);
+      return;
     }
+    await refresh();
+  } catch (err) {
+    alert(`Review failed: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = decision === "approved" ? "Approve" : "Reject"; }
   }
 }
 
-async function loadLog(kind = state.logKind) {
-  state.logKind = kind;
-  for (const tab of logTabs) tab.classList.toggle("active", tab.dataset.kind === kind);
+reviewPanel.addEventListener("click", (event) => {
+  const btn = event.target.closest(".review-btn");
+  if (!btn) return;
+  const reviewId = btn.dataset.reviewId;
+  const decision = btn.dataset.decision;
+  if (!reviewId || !decision) return;
+  void submitReviewDecision(reviewId, decision);
+});
 
-  const raw = await fetchText(
-    `/api/log?project=${encodeURIComponent(project)}&run=${encodeURIComponent(run)}&kind=${encodeURIComponent(kind)}&lines=1400`
-  ).catch(() => "");
+// ── NEW: Sidebar rendering ──
 
-  if (kind === "agent_stdout") {
-    logView.innerHTML = renderAgentOut(raw, state.selectedStep);
-    return;
-  }
-  if (kind === "agent_stderr") {
-    logView.innerHTML = renderAgentErr(raw, state.selectedStep);
-    return;
-  }
-  logView.innerHTML = renderResult(raw, state.selectedStep);
+function renderSidebarMeta(runData) {
+  const totalTokens = (runData.steps ?? []).reduce((sum, step) => sum + (Number(step.tokens) || 0), 0);
+  const status = runData.status || "unknown";
+
+  runTitle.textContent = `${runData.project_id}/${runData.run_id}`;
+  runStatusBadge.className = `badge ${escapeHtml(status)}`;
+  runStatusBadge.textContent = status.replace(/_/g, " ");
+
+  sidebarMeta.innerHTML = `
+    <div class="meta-list">
+      <div class="meta-item">
+        <span class="meta-label">Status</span>
+        <span class="meta-value status-dot ${escapeHtml(status)}">${escapeHtml(status.replace(/_/g, " "))}</span>
+      </div>
+      <div class="meta-item">
+        <span class="meta-label">Tokens</span>
+        <span class="meta-value">${escapeHtml(humanTokens(totalTokens))}</span>
+      </div>
+      <div class="meta-item">
+        <span class="meta-label">Updated</span>
+        <span class="meta-value">${escapeHtml(relative(runData.last_event_ts))}</span>
+      </div>
+      <div class="meta-item">
+        <span class="meta-label">Classification</span>
+        <span class="meta-value">${escapeHtml(runData.classification || "unclassified")}</span>
+      </div>
+      <div class="meta-item">
+        <span class="meta-label">Project</span>
+        <span class="meta-value">${escapeHtml(runData.project_id)}</span>
+      </div>
+    </div>
+  `;
 }
+
+function renderSidebarSteps(runData) {
+  const steps = runData.steps ?? [];
+  if (!steps.length) {
+    sidebarSteps.innerHTML = '<div class="empty">No steps</div>';
+    return;
+  }
+
+  sidebarSteps.innerHTML = `
+    <div class="sidebar-heading">Steps</div>
+    ${steps
+      .map((step) => {
+        const active = state.selectedStep === step.step_number ? "active" : "";
+        return `
+          <div class="sidebar-step ${escapeHtml(step.status || "pending")} ${active}" data-step="${escapeHtml(String(step.step_number))}">
+            <span class="step-dot ${escapeHtml(step.status || "pending")}"></span>
+            <span class="step-label">Step ${escapeHtml(String(step.step_number))}</span>
+            <span class="step-agent">${escapeHtml(step.agent || "agent")}</span>
+          </div>
+        `;
+      })
+      .join("")}
+  `;
+}
+
+function renderSidebarPlan(runData, events) {
+  const items = plannerItems(state.plannerStdout);
+  const parsedPlan = findPlanInPlanner(items);
+  const plan = runData.plan || parsedPlan;
+  const failures = events.filter((e) => String(e.event_type).includes("failed") || String(e.event_type).includes("error"));
+  const plannerErrLines = String(state.plannerStderr || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(-8);
+
+  const errCount = failures.length + plannerErrLines.length;
+  const stepCount = Array.isArray(plan?.steps) ? plan.steps.length : 0;
+
+  sidebarPlan.innerHTML = `
+    <div class="sidebar-heading">Plan</div>
+    <details class="sidebar-detail" data-detail-id="sidebar-plan-view" ${state.expandedPlanDetails.has("sidebar-plan-view") ? "open" : ""}>
+      <summary>View Plan <span class="detail-count">${escapeHtml(String(stepCount))} steps</span></summary>
+      <div class="sidebar-detail-body">
+        <div class="meta-item"><span class="meta-label">Plan ID</span><span class="meta-value">${escapeHtml(plan?.plan_id || "-")}</span></div>
+        <div class="meta-item"><span class="meta-label">Classification</span><span class="meta-value">${escapeHtml(plan?.classification || runData.classification || "-")}</span></div>
+        ${plan?.reasoning ? `<p class="plan-reasoning">${escapeHtml(shortText(plan.reasoning, 300))}</p>` : ""}
+      </div>
+    </details>
+    <details class="sidebar-detail ${errCount ? "has-errors" : ""}" data-detail-id="sidebar-plan-errors" ${state.expandedPlanDetails.has("sidebar-plan-errors") ? "open" : ""}>
+      <summary>Errors <span class="detail-count">${escapeHtml(String(errCount))}</span></summary>
+      <div class="sidebar-detail-body">
+        ${errCount
+          ? failures
+              .slice(-6)
+              .map((evt) => `<p class="err-line">${escapeHtml(shortText(evt?.data?.error || evt?.data?.reason || evt?.data?.message || "error", 140))}</p>`)
+              .concat(plannerErrLines.map((line) => `<p class="err-line">${escapeHtml(shortText(line, 140))}</p>`))
+              .join("")
+          : '<p class="empty">None</p>'
+        }
+      </div>
+    </details>
+  `;
+}
+
+// ── Step result summary extraction ──
+
+function extractStepSummary(raw, stepNumber) {
+  const parsed = parseJsonSafe(raw);
+  if (!parsed) return "";
+  const payload = typeof stepNumber === "number" ? findStepPayload(parsed, stepNumber) || parsed : parsed;
+  return pickString(payload, ["summary"]) || pickString(payload?.result, ["summary"]) || "";
+}
+
+// ── NEW: Main feed rendering ──
+
+function stepEventsForStep(events, stepNumber) {
+  return events.filter((evt) => {
+    const sn = evt?.data?.step;
+    return typeof sn === "number" && sn === stepNumber;
+  });
+}
+
+function renderFeed(runData, events, stepMeta) {
+  const steps = runData.steps ?? [];
+  const planByStep = new Map((runData.plan?.steps ?? []).map((s) => [s.step_number, s]));
+
+  const stepCards = steps
+    .map((step) => {
+      const meta = stepMeta.get(step.step_number) || { startedAt: null, completedAt: null, model: "", errors: [], outputs: new Set() };
+      const started = meta.startedAt || step.started_at;
+      const completed = meta.completedAt || step.completed_at;
+      const ran = durationBetween(started, completed);
+      const planStep = planByStep.get(step.step_number);
+      const model = meta.model || planStep?.model || "";
+      const errCount = errorCountForStep(state.agentStderr, step.step_number);
+      const outCount = agentOutCountForStep(state.agentStdout, step.step_number);
+      const stepEvents = stepEventsForStep(events, step.step_number);
+      const isPending = !started && step.status !== "completed" && step.status !== "failed" && step.status !== "running";
+
+      const outSectionId = `feed-out-${step.step_number}`;
+      const errSectionId = `feed-err-${step.step_number}`;
+      const resultSectionId = `feed-result-${step.step_number}`;
+      const summary = extractStepSummary(state.agentResult, step.step_number);
+
+      return `
+        <article class="feed-card ${escapeHtml(step.status || "pending")}" id="step-card-${escapeHtml(String(step.step_number))}" data-step="${escapeHtml(String(step.step_number))}">
+          <header class="feed-card-header">
+            <span class="step-dot ${escapeHtml(step.status || "pending")}"></span>
+            <strong>Step ${escapeHtml(String(step.step_number))} · ${escapeHtml(step.agent || "agent")}</strong>
+            <div class="header-pills">
+              ${model ? `<span class="header-pill model-chip">${escapeHtml(model)}</span>` : ""}
+              ${ran != null ? `<span class="header-pill">${escapeHtml(fmtDuration(ran))}</span>` : ""}
+              ${step.tokens ? `<span class="header-pill">${escapeHtml(humanTokens(step.tokens))} tokens</span>` : ""}
+            </div>
+          </header>
+          <div class="feed-block">
+            <span class="feed-block-label">Input</span>
+            <p class="feed-task">${escapeHtml(step.task || "-")}</p>
+          </div>
+          ${isPending
+            ? '<p class="feed-pending">Pending...</p>'
+            : `
+              ${summary ? `
+                <div class="feed-block">
+                  <span class="feed-block-label">Output</span>
+                  <p class="feed-summary">${escapeHtml(summary)}</p>
+                </div>
+              ` : ""}
+              <details class="feed-section" data-detail-id="${escapeHtml(outSectionId)}" ${state.expandedFeedSections.has(outSectionId) ? "open" : ""}>
+                <summary>Agent Output (${escapeHtml(String(outCount))})</summary>
+                <div class="feed-section-body">${renderAgentOut(state.agentStdout, step.step_number)}</div>
+              </details>
+              <details class="feed-section ${errCount ? "has-errors" : ""}" data-detail-id="${escapeHtml(errSectionId)}" ${state.expandedFeedSections.has(errSectionId) ? "open" : ""}>
+                <summary>Errors (${escapeHtml(String(errCount))})</summary>
+                <div class="feed-section-body">${renderAgentErr(state.agentStderr, step.step_number)}</div>
+              </details>
+              <details class="feed-section" data-detail-id="${escapeHtml(resultSectionId)}" ${state.expandedFeedSections.has(resultSectionId) ? "open" : ""}>
+                <summary>Result JSON</summary>
+                <div class="feed-section-body">${renderResult(state.agentResult, step.step_number)}</div>
+              </details>
+              ${stepEvents.length ? `
+                <div class="feed-events">
+                  ${stepEvents.slice(-4).map((evt) => `<span class="feed-event">${escapeHtml(eventLabel(evt.event_type))} · ${escapeHtml(fmtTime(evt.timestamp))}</span>`).join("")}
+                </div>
+              ` : ""}
+            `
+          }
+        </article>
+      `;
+    })
+    .join("");
+
+  // Planner stream at the bottom
+  const items = plannerItems(state.plannerStdout);
+  const plannerStreamId = "feed-planner-stream";
+  const plannerStream = items.length
+    ? `
+      <details class="feed-section planner-section" data-detail-id="${plannerStreamId}" ${state.expandedFeedSections.has(plannerStreamId) ? "open" : ""}>
+        <summary>Planner Stream (${items.length})</summary>
+        <div class="feed-section-body">
+          <div class="planner-stream">
+            ${items
+              .map((item, index) => {
+                const detailId = `planner-raw-${plannerDetailId(item, index)}`;
+                const time = pickString(item, ["timestamp", "time", "created_at"]);
+                return `
+                  <article class="planner-item">
+                    <div class="planner-top">
+                      <span>${escapeHtml(plannerFriendlyLabel(item))}</span>
+                      <span class="mono">${escapeHtml(time || `#${index + 1}`)}</span>
+                    </div>
+                    <p>${escapeHtml(shortText(plannerSummary(item), 180))}</p>
+                    <details data-detail-id="${escapeHtml(detailId)}" ${state.expandedPlanDetails.has(detailId) ? "open" : ""}>
+                      <summary>Raw JSON</summary>
+                      <pre class="json-block">${escapeHtml(JSON.stringify(item, null, 2))}</pre>
+                    </details>
+                  </article>
+                `;
+              })
+              .join("")}
+          </div>
+        </div>
+      </details>
+    `
+    : "";
+
+  runFeed.innerHTML = stepCards + plannerStream;
+}
+
+// ── Data fetching & refresh ──
 
 async function refresh() {
   if (!project || !run) {
@@ -743,18 +777,23 @@ async function refresh() {
   }
 
   try {
-    const [runData, eventsRes, plannerStdout, plannerStderr, agentErrRaw] = await Promise.all([
+    const [runData, eventsRes, plannerStdout, plannerStderr, agentStdout, agentStderr, agentResult] = await Promise.all([
       fetchJson(`/api/run?project=${encodeURIComponent(project)}&run=${encodeURIComponent(run)}`),
       fetchJson(`/api/events?project=${encodeURIComponent(project)}&run=${encodeURIComponent(run)}&limit=800`),
       fetchText(`/api/log?project=${encodeURIComponent(project)}&run=${encodeURIComponent(run)}&kind=planner_stdout&lines=1000`).catch(() => ""),
       fetchText(`/api/log?project=${encodeURIComponent(project)}&run=${encodeURIComponent(run)}&kind=planner_stderr&lines=400`).catch(() => ""),
+      fetchText(`/api/log?project=${encodeURIComponent(project)}&run=${encodeURIComponent(run)}&kind=agent_stdout&lines=1400`).catch(() => ""),
       fetchText(`/api/log?project=${encodeURIComponent(project)}&run=${encodeURIComponent(run)}&kind=agent_stderr&lines=1400`).catch(() => ""),
+      fetchText(`/api/log?project=${encodeURIComponent(project)}&run=${encodeURIComponent(run)}&kind=agent_result&lines=1400`).catch(() => ""),
     ]);
 
     state.runData = runData;
     state.events = Array.isArray(eventsRes.events) ? eventsRes.events : [];
     state.plannerStdout = plannerStdout;
     state.plannerStderr = plannerStderr;
+    state.agentStdout = agentStdout;
+    state.agentStderr = agentStderr;
+    state.agentResult = agentResult;
     state.stepMeta = buildStepMeta(runData, state.events);
 
     if (runData.status === "waiting_human_review") {
@@ -764,14 +803,11 @@ async function refresh() {
       state.reviews = [];
     }
 
-    renderSummary(runData);
+    renderSidebarMeta(runData);
+    renderSidebarSteps(runData);
+    renderSidebarPlan(runData, state.events);
     renderReviewPanel(state.reviews);
-    renderPlanPanel(runData, state.events);
-    renderSteps(runData, state.stepMeta);
-    renderTimeline(state.events, runData);
-    updateTabBadges(agentErrRaw);
-
-    await loadLog(state.logKind);
+    renderFeed(runData, state.events, state.stepMeta);
 
     statusLine.textContent = `Loaded ${project}/${run}`;
     lastRefreshed.textContent = `Last refreshed: ${new Date().toLocaleTimeString()}`;
@@ -780,40 +816,49 @@ async function refresh() {
   }
 }
 
-stepsGrid.addEventListener("click", async (event) => {
-  const card = event.target.closest(".step-card");
-  if (!card) return;
-  const step = Number(card.dataset.step);
+// ── Event listeners ──
+
+// Sidebar step click → scroll to step card in feed
+sidebarSteps.addEventListener("click", (event) => {
+  const el = event.target.closest(".sidebar-step");
+  if (!el) return;
+  const step = Number(el.dataset.step);
   if (!Number.isFinite(step)) return;
   state.selectedStep = state.selectedStep === step ? null : step;
-  if (state.runData) renderSteps(state.runData, state.stepMeta);
-  await loadLog(state.logKind);
+  if (state.runData) renderSidebarSteps(state.runData);
+  const card = document.getElementById(`step-card-${step}`);
+  if (card) card.scrollIntoView({ behavior: "smooth", block: "start" });
 });
 
-logView.addEventListener("click", (event) => {
+// Toggle JSON blocks in agent output
+runFeed.addEventListener("click", (event) => {
   const row = event.target.closest(".log-row");
   if (!row) return;
   const id = row.dataset.jsonId;
   if (!id) return;
-  const block = logView.querySelector(`#${CSS.escape(id)}`);
+  const block = runFeed.querySelector(`#${CSS.escape(id)}`);
   if (!block) return;
   block.hidden = !block.hidden;
   if (block.hidden) state.expandedLogIds.delete(id);
   else state.expandedLogIds.add(id);
 });
 
-planToggle.addEventListener("click", () => {
-  const hidden = planBody.hasAttribute("hidden");
-  if (hidden) {
-    planBody.removeAttribute("hidden");
-    planToggle.setAttribute("aria-expanded", "true");
-  } else {
-    planBody.setAttribute("hidden", "");
-    planToggle.setAttribute("aria-expanded", "false");
-  }
-});
+// Track expanded <details> in feed to preserve across refresh
+runFeed.addEventListener(
+  "toggle",
+  (event) => {
+    const details = event.target;
+    if (!(details instanceof HTMLDetailsElement)) return;
+    const detailId = details.dataset.detailId;
+    if (!detailId) return;
+    if (details.open) state.expandedFeedSections.add(detailId);
+    else state.expandedFeedSections.delete(detailId);
+  },
+  true
+);
 
-planBody.addEventListener(
+// Track expanded <details> in sidebar plan
+sidebarPlan.addEventListener(
   "toggle",
   (event) => {
     const details = event.target;
@@ -827,12 +872,6 @@ planBody.addEventListener(
 );
 
 refreshBtn.addEventListener("click", refresh);
-
-for (const tab of logTabs) {
-  tab.addEventListener("click", () => {
-    void loadLog(tab.dataset.kind || "agent_stdout");
-  });
-}
 
 setInterval(() => {
   void refresh();

@@ -1,0 +1,5 @@
+{
+  "name": "code-review",
+  "description": "Code review skills — code quality, error handling, performance, testing standards, and architecture alignment. Used by developer agents for self-review and by the code-review agent for formal reviews.",
+  "version": "0.1.0"
+}

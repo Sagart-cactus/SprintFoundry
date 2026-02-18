@@ -10,46 +10,26 @@
   <body>
     <header class="topbar run-topbar">
       <div class="topbar-title">
+        <a href="/v3" class="back-link">&larr;</a>
         <h1 id="run-title">Run Detail</h1>
-        <p><a href="/v3">Back to board</a></p>
+        <span class="badge" id="run-status-badge"></span>
       </div>
       <div class="topbar-controls">
         <button id="refresh-btn" type="button">Refresh</button>
       </div>
     </header>
 
-    <main class="run-page">
-      <section class="run-summary" id="summary-bar"></section>
+    <section id="review-panel"></section>
 
-      <section id="review-panel"></section>
+    <div class="run-layout">
+      <aside class="run-sidebar" id="run-sidebar">
+        <div class="sidebar-section" id="sidebar-meta"></div>
+        <div class="sidebar-section" id="sidebar-steps"></div>
+        <div class="sidebar-section" id="sidebar-plan"></div>
+      </aside>
 
-      <section class="panel">
-        <button class="panel-toggle" id="plan-toggle" type="button" aria-expanded="true">Plan & Errors</button>
-        <div class="panel-body" id="plan-body"></div>
-      </section>
-
-      <section class="run-grid">
-        <section class="panel">
-          <h2>Steps</h2>
-          <div id="steps-grid" class="steps-grid"></div>
-        </section>
-
-        <section class="panel">
-          <h2>Timeline</h2>
-          <ol id="timeline-list" class="timeline-list"></ol>
-        </section>
-      </section>
-
-      <section class="panel logs-panel">
-        <h2>Logs</h2>
-        <div class="log-tabs" id="log-tabs">
-          <button type="button" class="log-tab active" data-kind="agent_stdout">Agent Out</button>
-          <button type="button" class="log-tab" data-kind="agent_stderr">Agent Err</button>
-          <button type="button" class="log-tab" data-kind="agent_result">Result JSON</button>
-        </div>
-        <div id="log-view" class="log-view"></div>
-      </section>
-    </main>
+      <main class="run-feed" id="run-feed"></main>
+    </div>
 
     <footer class="statusbar">
       <span id="status-line">Loading run...</span>

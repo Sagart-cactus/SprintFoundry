@@ -463,7 +463,6 @@ button {
 }
 
 .model-chip {
-  margin-left: auto;
   border: 1px solid #c7d6e1;
   border-radius: 999px;
   padding: 2px 8px;
@@ -969,5 +968,389 @@ input[type="text"]:focus {
 
   .log-tab {
     flex: 1;
+  }
+}
+
+/* ═══════════════════════════════════════════════
+   Run Detail v2: Sidebar + Feed layout
+   ═══════════════════════════════════════════════ */
+
+/* Back link in topbar */
+.back-link {
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 20px;
+  line-height: 1;
+  margin-right: 8px;
+}
+
+.back-link:hover {
+  color: var(--brand);
+}
+
+.topbar-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Sidebar + Feed grid */
+.run-layout {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  gap: 0;
+  min-height: calc(100vh - 120px);
+}
+
+.run-sidebar {
+  border-right: 1px solid var(--line);
+  padding: 16px;
+  position: sticky;
+  top: 60px;
+  height: calc(100vh - 120px);
+  overflow-y: auto;
+  background: var(--surface-soft);
+}
+
+.sidebar-section {
+  padding-bottom: 16px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.sidebar-section:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+
+.sidebar-heading {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+
+/* Sidebar meta: clean key-value pairs */
+.meta-list {
+  display: grid;
+  gap: 2px;
+}
+
+.meta-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  padding: 4px 0;
+}
+
+.meta-label {
+  color: var(--muted);
+}
+
+.meta-value {
+  font-weight: 500;
+  text-align: right;
+}
+
+.meta-value.status-dot {
+  text-transform: capitalize;
+}
+
+.meta-value.status-dot.completed {
+  color: var(--ok);
+}
+
+.meta-value.status-dot.failed {
+  color: var(--err);
+}
+
+.meta-value.status-dot.executing,
+.meta-value.status-dot.running,
+.meta-value.status-dot.planning {
+  color: var(--brand);
+}
+
+.meta-value.status-dot.waiting_human_review {
+  color: var(--warn);
+}
+
+/* Sidebar step list */
+.sidebar-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.1s;
+}
+
+.sidebar-step:hover {
+  background: var(--surface);
+}
+
+.sidebar-step.active {
+  background: var(--surface);
+  font-weight: 600;
+}
+
+.step-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--warn);
+}
+
+.step-dot.completed {
+  background: var(--ok);
+}
+
+.step-dot.failed {
+  background: var(--err);
+}
+
+.step-dot.running {
+  background: var(--brand);
+}
+
+.step-label {
+  font-weight: 500;
+}
+
+.step-agent {
+  color: var(--muted);
+  margin-left: auto;
+  font-size: 12px;
+}
+
+/* Sidebar plan details */
+.sidebar-detail {
+  margin-bottom: 6px;
+}
+
+.sidebar-detail summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  padding: 4px 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sidebar-detail summary:hover {
+  color: var(--brand);
+}
+
+.sidebar-detail.has-errors summary {
+  color: var(--err);
+}
+
+.detail-count {
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.sidebar-detail-body {
+  padding: 6px 0 4px 12px;
+  font-size: 12px;
+}
+
+.plan-reasoning {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: #2e4558;
+  line-height: 1.5;
+}
+
+.err-line {
+  margin: 4px 0;
+  font-size: 12px;
+  color: var(--err);
+}
+
+/* Main feed */
+.run-feed {
+  padding: 16px 24px;
+  max-width: 900px;
+}
+
+/* Step cards in feed */
+.feed-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.feed-card.failed {
+  border-color: color-mix(in srgb, var(--err), white 60%);
+}
+
+.feed-card.completed {
+  border-color: color-mix(in srgb, var(--ok), white 70%);
+}
+
+.feed-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.feed-card-header strong {
+  font-size: 14px;
+}
+
+.header-pills {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.header-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  border: 1px solid #c7d6e1;
+  border-radius: 999px;
+  padding: 0 8px;
+  font-size: 11px;
+  background: #f7fbff;
+  white-space: nowrap;
+}
+
+.header-pill.model-chip {
+  font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+}
+
+/* Input / Output labeled blocks */
+.feed-block {
+  margin-top: 10px;
+}
+
+.feed-block-label {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.feed-task {
+  margin: 0;
+  font-size: 13px;
+  color: #243a4b;
+  line-height: 1.5;
+}
+
+.feed-summary {
+  margin: 0;
+  font-size: 13px;
+  color: #1a3244;
+  line-height: 1.5;
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.feed-pending {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* Inline collapsible sections within feed cards */
+.feed-section {
+  margin-top: 8px;
+}
+
+.feed-section summary {
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 6px 0;
+  color: var(--muted);
+  transition: color 0.1s;
+}
+
+.feed-section summary:hover {
+  color: var(--text);
+}
+
+.feed-section[open] summary {
+  color: var(--text);
+}
+
+.feed-section.has-errors summary {
+  color: var(--err);
+}
+
+.feed-section-body {
+  padding: 6px 0;
+  max-height: 50vh;
+  overflow: auto;
+}
+
+/* Step timeline events (inline per card) */
+.feed-events {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.feed-event {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* Planner stream at bottom of feed */
+.planner-section {
+  margin-top: 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+  background: var(--surface-soft);
+}
+
+.planner-section > summary {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+/* Responsive: stack sidebar below on small screens */
+@media (max-width: 768px) {
+  .run-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .run-sidebar {
+    position: static;
+    height: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .run-feed {
+    padding: 12px;
   }
 }
