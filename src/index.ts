@@ -7,6 +7,7 @@ import type { TaskSource } from "./shared/types.js";
 import { OrchestrationService } from "./service/orchestration-service.js";
 import { loadConfig } from "./service/config-loader.js";
 import { migrateEnvVars } from "./service/env-compat.js";
+import { runProjectCreate } from "./commands/project-create.js";
 
 // Migrate deprecated AGENTSDLC_* env vars to SPRINTFOUNDRY_*
 migrateEnvVars();
@@ -125,6 +126,18 @@ program
     );
     console.log(`Review decision written: ${decisionPath}`);
   });
+
+const projectCmd = new Command("project").description("Project management commands");
+
+projectCmd
+  .command("create")
+  .description("Interactively create a new project configuration")
+  .option("--config <dir>", "Config directory", "config")
+  .action(async (opts) => {
+    await runProjectCreate(opts.config);
+  });
+
+program.addCommand(projectCmd);
 
 const argv =
   process.argv[2] === "--"
