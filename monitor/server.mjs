@@ -7,8 +7,11 @@ import { promises as fs } from "node:fs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const publicV3Dir = path.join(__dirname, "public-v3");
-const runsRoot = process.env.AGENTSDLC_RUNS_ROOT ?? path.join(os.tmpdir(), "agentsdlc");
-const port = Number(process.env.MONITOR_PORT ?? 4310);
+const runsRoot = process.env.AGENTSDLC_RUNS_ROOT ?? path.join(os.tmpdir(), "sprintfoundry");
+
+const portArgIndex = process.argv.indexOf("--port");
+const portArg = portArgIndex !== -1 ? process.argv[portArgIndex + 1] : undefined;
+const port = Number(portArg ?? process.env.MONITOR_PORT ?? 4310);
 
 const LOG_KIND_TO_FILES = {
   planner_stdout: [".planner-runtime.stdout.log"],
@@ -124,7 +127,20 @@ function buildStepStatus(plan, events) {
     const data = evt?.data ?? {};
     const stepNum = data.step;
     if (typeof stepNum !== "number") continue;
-    if (!byStep.has(stepNum)) continue;
+    if (!byStep.has(stepNum)) {
+      // Rework steps (900+) are generated dynamically and not in the original plan.
+      // Materialise them from their events so they appear in the monitor.
+      byStep.set(stepNum, {
+        step_number: stepNum,
+        agent: data.agent ?? (stepNum >= 900 ? "rework" : "unknown"),
+        task: data.task ?? (stepNum >= 900 ? `Rework step ${stepNum}` : ""),
+        status: "pending",
+        started_at: null,
+        completed_at: null,
+        tokens: null,
+        is_rework: stepNum >= 900,
+      });
+    }
     const st = byStep.get(stepNum);
     if (evt.event_type === "step.started") {
       st.status = "running";
@@ -234,10 +250,38 @@ async function loadStepModels(runPath) {
   return out;
 }
 
-async function readLogText(projectId, runId, kind, lines = 400) {
+async function readStepLogText(runPath, kind, stepNumber, lines) {
+  const suffix = kind === "agent_stdout" ? ".stdout.log" : ".stderr.log";
+  const entries = await fs.readdir(runPath, { withFileTypes: true }).catch(() => []);
+  let best = null;
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    for (const rt of ["claude", "codex"]) {
+      const prefix = `.${rt}-runtime.step-${stepNumber}.attempt-`;
+      if (entry.name.startsWith(prefix) && entry.name.endsWith(suffix)) {
+        const attempt = parseInt(entry.name.slice(prefix.length, -suffix.length), 10);
+        if (!best || attempt >= best.attempt) {
+          best = { logPath: path.join(runPath, entry.name), attempt: isNaN(attempt) ? 0 : attempt };
+        }
+      }
+    }
+  }
+  if (!best) return "";
+  const raw = await fs.readFile(best.logPath, "utf-8").catch(() => "");
+  const allLines = raw.split("\n");
+  return allLines.slice(Math.max(0, allLines.length - lines)).join("\n");
+}
+
+async function readLogText(projectId, runId, kind, lines = 400, stepNumber = null) {
+  const runPath = safeJoin(runsRoot, projectId, runId);
+
+  // Per-step log requested: read the step-specific file directly.
+  if (stepNumber != null && (kind === "agent_stdout" || kind === "agent_stderr")) {
+    return readStepLogText(runPath, kind, stepNumber, lines);
+  }
+
   const files = LOG_KIND_TO_FILES[kind];
   if (!files || files.length === 0) return "";
-  const runPath = safeJoin(runsRoot, projectId, runId);
   const candidates = await Promise.all(
     files.map(async (file) => {
       const logPath = path.join(runPath, file);
@@ -363,11 +407,13 @@ const server = http.createServer(async (req, res) => {
       const run = reqUrl.searchParams.get("run");
       const kind = reqUrl.searchParams.get("kind");
       const lines = Number(reqUrl.searchParams.get("lines") ?? "400");
+      const stepParam = reqUrl.searchParams.get("step");
+      const stepNumber = stepParam != null ? Number(stepParam) : null;
       if (!project || !run || !kind) {
         sendJson(res, 400, { error: "Missing project/run/kind query params" });
         return;
       }
-      const text = await readLogText(project, run, kind, lines);
+      const text = await readLogText(project, run, kind, lines, Number.isFinite(stepNumber) ? stepNumber : null);
       sendText(res, 200, text);
       return;
     }

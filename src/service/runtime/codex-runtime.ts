@@ -24,7 +24,13 @@ export class CodexRuntime implements AgentRuntime {
     ].join("\n");
     const runtimeArgs = config.runtime.args ?? [];
     const hasSandboxFlag = runtimeArgs.includes("--sandbox") || runtimeArgs.includes("-s");
-    const args = ["exec", prompt, "--json", ...(hasSandboxFlag ? [] : ["--sandbox", "workspace-write"])];
+    const hasBypassFlag = runtimeArgs.includes("--dangerously-bypass-approvals-and-sandbox");
+    const args = [
+      "exec",
+      prompt,
+      "--json",
+      ...(hasSandboxFlag || hasBypassFlag ? [] : ["--sandbox", "workspace-write"]),
+    ];
     const env = {
       ...process.env,
       ...(config.apiKey ? { OPENAI_API_KEY: config.apiKey } : {}),
@@ -54,6 +60,7 @@ export class CodexRuntime implements AgentRuntime {
       runtime_mode: config.runtime.mode,
       runtime_args: runtimeArgs,
       has_sandbox_flag: hasSandboxFlag,
+      has_bypass_flag: hasBypassFlag,
       openai_model: env.OPENAI_MODEL ?? "",
       openai_api_key_present: Boolean(env.OPENAI_API_KEY),
       codex_home: env.CODEX_HOME ?? "",

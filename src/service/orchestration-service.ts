@@ -82,12 +82,15 @@ export class OrchestrationService {
       const workspacePath = await this.workspace.create(run.run_id);
       console.log(`[orchestrator] Workspace created: ${workspacePath}`);
 
-      // Initialize event store with workspace path for per-run logs
-      await this.events.initialize(workspacePath);
-
       console.log(`[orchestrator] Cloning repo and creating branch...`);
       await this.git.cloneAndBranch(workspacePath, ticket);
       console.log(`[orchestrator] Repo cloned successfully.`);
+
+      // Initialize event store after clone. Initializing earlier can create
+      // workspace files (e.g. .events.jsonl) that make `git clone ... .` fail.
+      await this.events.initialize(workspacePath);
+
+      await this.runRegistryPreflight(workspacePath);
 
       // 4. Get plan from orchestrator agent
       run.status = "planning";
@@ -560,6 +563,71 @@ export class OrchestrationService {
   }
 
   // ---- Quality Gate ----
+
+  private async runRegistryPreflight(workspacePath: string): Promise<void> {
+    if (process.env.SPRINTFOUNDRY_SKIP_REGISTRY_PREFLIGHT === "true") {
+      return;
+    }
+
+    const hasPackageJson = await fs
+      .access(path.join(workspacePath, "package.json"))
+      .then(() => true, () => false);
+    if (!hasPackageJson) return;
+
+    const registry = this.resolveNpmRegistry(workspacePath);
+    const endpoint = this.buildRegistryPingUrl(registry);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+
+    try {
+      const response = await fetch(endpoint, {
+        method: "GET",
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      console.log(`[orchestrator] Registry preflight OK: ${endpoint}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        [
+          `Registry preflight failed for JavaScript workspace.`,
+          `Checked endpoint: ${endpoint}`,
+          `Failure: ${message}`,
+          `How to fix: allow outbound DNS/HTTPS to your npm registry (default: registry.npmjs.org), or set NPM_CONFIG_REGISTRY to a reachable mirror/proxy.`,
+          `To bypass this check (not recommended): set SPRINTFOUNDRY_SKIP_REGISTRY_PREFLIGHT=true.`,
+        ].join(" ")
+      );
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  private resolveNpmRegistry(workspacePath: string): string {
+    const envRegistry = process.env.NPM_CONFIG_REGISTRY ?? process.env.npm_config_registry;
+    if (envRegistry && envRegistry.trim().length > 0) {
+      return envRegistry.trim();
+    }
+
+    try {
+      const raw = execSync("npm config get registry", {
+        cwd: workspacePath,
+        encoding: "utf-8",
+        stdio: "pipe",
+      }).trim();
+      if (raw) return raw;
+    } catch {
+      // fall through to default
+    }
+
+    return "https://registry.npmjs.org/";
+  }
+
+  private buildRegistryPingUrl(registry: string): string {
+    const normalized = registry.endsWith("/") ? registry : `${registry}/`;
+    return new URL("-/ping", normalized).toString();
+  }
 
   async runQualityGate(
     workspacePath: string,

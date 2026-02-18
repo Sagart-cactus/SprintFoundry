@@ -55,11 +55,34 @@ The `code-review` plugin provides self-review skills:
 
 Before handoff, run through this checklist. Fix any issues before proceeding.
 
-### Automated checks (must pass)
-- `npm run lint` (if configured)
-- `npm run typecheck` or `npx tsc --noEmit` (if TypeScript)
-- `npm test` (if tests exist)
-- `npm run build` (if configured)
+### Automated checks
+
+**Step 1 — Install dependencies** (required so local binaries like `tsc`, `vitest` are available):
+```bash
+if [ ! -d node_modules ]; then
+  if   [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile
+  elif [ -f yarn.lock ];      then yarn install --frozen-lockfile
+  else npm ci 2>/dev/null || npm install
+  fi
+fi
+```
+
+**Step 2 — Run each check using `--if-present`** so missing scripts are silently skipped. **Never loop or retry because a script is missing — record `"skipped"` and move on.**
+
+```bash
+npm run lint --if-present        # skip silently if not in package.json scripts
+npm run typecheck --if-present   # or: [ -f tsconfig.json ] && npx tsc --noEmit
+npm test --if-present            # skip if no test script
+npm run build --if-present       # skip if not configured
+```
+
+If the package manager is pnpm or yarn (no native `--if-present`), check `package.json` before each script:
+```bash
+node -e "process.exit(require('./package.json').scripts?.lint?0:1)"       2>/dev/null && pnpm lint       || true
+node -e "process.exit(require('./package.json').scripts?.typecheck?0:1)"  2>/dev/null && pnpm typecheck  || true
+node -e "process.exit(require('./package.json').scripts?.test?0:1)"       2>/dev/null && pnpm test       || true
+node -e "process.exit(require('./package.json').scripts?.build?0:1)"      2>/dev/null && pnpm build      || true
+```
 
 ### Code quality self-check
 - No `console.log`, `debugger`, or debug artifacts left in code
@@ -129,8 +152,9 @@ Write/modify source code in the existing project structure. Follow the project's
       "lint": "pass",
       "typecheck": "pass",
       "tests": "pass",
-      "build": "pass"
+      "build": "skipped"
     }
+    // valid values per field: "pass" | "fail" | "skipped"
   }
 }
 ```
