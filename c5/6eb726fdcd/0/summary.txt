@@ -1,0 +1,28 @@
+All tasks complete. Here's a summary of what was done:
+
+## QA Summary
+
+### New Tests Written (14 total, all passing)
+
+**`tests/git-manager.test.ts`** — 7 new tests for `commitStepCheckpoint`:
+1. Happy path — stages changes, detects diff, commits, returns `true`
+2. Commit message format validation (runId, stepNumber, agentId)
+3. No-diff skip — `git diff --staged --quiet` exits 0 → returns `false`, no commit
+4. Throws when `git commit` fails (non-zero exit code)
+5. Throws when `git add` fails
+6. Throws when `spawnSync` returns an `error` object (ENOENT)
+7. PR creation compatibility — `gh pr create` succeeds after per-step commits
+
+**`tests/orchestration-service.test.ts`** — 7 new tests for commit-checkpoint integration:
+1. `commitStepCheckpoint` called after each completed step
+2. `step.committed` event emitted when checkpoint created
+3. No `step.committed` event when no diff (returns `false`)
+4. Commit failure → step/run marked `failed`, `step.failed` event emitted, PR not created
+5. `needs_rework` steps don't get checkpoint commits
+6. PR creation compatibility — `createPullRequest` still works after per-step commits
+
+### Bug Found
+
+**MINOR — BUG-1**: The developer's commit added `tryEnableEntire()` inside `cloneAndBranch` (which calls `spawnSync("entire", ...)`) but did not update the existing test that asserted `toHaveBeenCalledTimes(2)`. This causes `cloneAndBranch calls git clone + checkout` to fail (gets 3 calls, expected 2). The developer needs to fix the test assertion or guard the `tryEnableEntire` call in test mode.
+
+**Status: `needs_rework`** — returned to developer to fix the broken existing test.
