@@ -1,0 +1,1 @@
+Ok ,whenever we run sprintfoudry is clones the target app repo in a temp directory and then run agents on it. I want you to execute `entire enable --strategy auto-commit` on the cloned directory just after cloning so that whatever sessions we run on the repo are captured by entire.
