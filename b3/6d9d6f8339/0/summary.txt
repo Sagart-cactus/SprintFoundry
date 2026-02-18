@@ -1,0 +1,7 @@
+Done. Here's a summary of what was done:
+
+**Problem**: `cloneAndBranch` makes 3 `spawnSync` calls (clone, checkout, `tryEnableEntire`), but the test asserted `toHaveBeenCalledTimes(2)`.
+
+**Fix**: Updated `tests/git-manager.test.ts` line 46 from `toHaveBeenCalledTimes(2)` to `toHaveBeenCalledTimes(3)`, with a comment explaining the 3 calls. The rest of the test (checking clone and checkout args via `calls[0]` and `calls[1]`) was already correct.
+
+**Result**: All 144 tests pass, including all 14 new `commitStepCheckpoint` tests.
