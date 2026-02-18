@@ -3,6 +3,7 @@
   --surface: #ffffff;
   --surface-soft: #f8fafb;
   --text: #0f1720;
+  --text-secondary: #2c3f52;
   --muted: #5f6b77;
   --line: #d8e0e6;
   --brand: #0b5fff;
@@ -20,6 +21,8 @@
 body {
   margin: 0;
   color: var(--text);
+  font-size: 0.875rem;
+  line-height: 1.55;
   background: radial-gradient(circle at 0% 0%, #ffffff 0%, #edf2f5 48%, #e7edf1 100%);
   font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
 }
@@ -41,15 +44,15 @@ body {
 
 .topbar-title h1 {
   margin: 0;
-  font-size: 22px;
-  font-weight: 650;
+  font-size: 1.375rem;
+  font-weight: 700;
   letter-spacing: -0.02em;
 }
 
 .topbar-title p {
   margin: 2px 0 0;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 .topbar-title a {
@@ -67,7 +70,7 @@ body {
 .control {
   display: grid;
   gap: 4px;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--muted);
 }
 
@@ -105,10 +108,10 @@ button {
 .lane h2,
 .panel h2 {
   margin: 0 0 10px;
-  font-size: 14px;
+  font-size: 0.875rem;
   letter-spacing: 0.02em;
   text-transform: uppercase;
-  color: #2c3f52;
+  color: var(--text-secondary);
 }
 
 .lane-grid {
@@ -153,7 +156,7 @@ button {
 }
 
 .badge {
-  font-size: 12px;
+  font-size: 0.75rem;
   padding: 2px 8px;
   border-radius: 999px;
   border: 1px solid #bfd0df;
@@ -188,14 +191,14 @@ button {
 
 .run-card h3 {
   margin: 0;
-  font-size: 15px;
+  font-size: 0.9375rem;
   line-height: 1.25;
   overflow-wrap: anywhere;
 }
 
 .updated,
 .active-agent {
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--muted);
 }
 
@@ -206,13 +209,13 @@ button {
   border: 1px solid #c9d7e1;
   border-radius: 6px;
   padding: 0 8px;
-  font-size: 12px;
+  font-size: 0.75rem;
   background: var(--surface-soft);
 }
 
 .metric-row {
-  font-size: 12px;
-  color: #33495b;
+  font-size: 0.75rem;
+  color: var(--muted);
 }
 
 .progress {
@@ -232,7 +235,7 @@ button {
 
 .empty {
   margin: 0;
-  font-size: 13px;
+  font-size: 0.8125rem;
   color: var(--muted);
 }
 
@@ -248,7 +251,7 @@ button {
   border-top: 1px solid var(--line);
   background: color-mix(in srgb, var(--surface), transparent 5%);
   padding: 10px 18px;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--muted);
 }
 
@@ -273,7 +276,7 @@ button {
   border: 1px solid #c7d6e0;
   border-radius: 999px;
   padding: 0 10px;
-  font-size: 12px;
+  font-size: 0.75rem;
   background: #f8fbff;
 }
 
@@ -316,7 +319,7 @@ button {
 .panel-toggle {
   width: 100%;
   text-align: left;
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 700;
 }
 
@@ -341,12 +344,12 @@ button {
 
 .plan-card h3 {
   margin: 0 0 8px;
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 .plan-card p {
   margin: 6px 0;
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 .plan-card.error {
@@ -356,8 +359,8 @@ button {
 
 .plan-card details summary {
   cursor: pointer;
-  color: #385673;
-  font-size: 12px;
+  color: var(--muted);
+  font-size: 0.75rem;
 }
 
 .plan-card pre,
@@ -369,7 +372,7 @@ button {
   border: 1px solid #d6e1e9;
   background: #f7fafc;
   font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
-  font-size: 12px;
+  font-size: 0.75rem;
   line-height: 1.45;
   white-space: pre-wrap;
   word-break: break-word;
@@ -391,7 +394,7 @@ button {
   display: flex;
   justify-content: space-between;
   gap: 10px;
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 600;
 }
 
@@ -402,8 +405,8 @@ button {
 
 .planner-item p {
   margin: 8px 0 0;
-  font-size: 12px;
-  color: #2e4558;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
 }
 
 .run-grid {
@@ -466,15 +469,15 @@ button {
   border: 1px solid #c7d6e1;
   border-radius: 999px;
   padding: 2px 8px;
-  font-size: 11px;
+  font-size: 0.75rem;
   background: #f7fbff;
   font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
 }
 
 .task {
   margin: 0;
-  font-size: 13px;
-  color: #243a4b;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
 }
 
 .chips-row {
@@ -488,7 +491,7 @@ button {
   border: 1px solid #cfdbe4;
   border-radius: 999px;
   padding: 2px 8px;
-  font-size: 11px;
+  font-size: 0.75rem;
   background: #f8fbfe;
 }
 
@@ -547,18 +550,18 @@ button {
   display: flex;
   justify-content: space-between;
   gap: 8px;
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 .timeline-content p {
   margin: 7px 0;
-  font-size: 12px;
-  color: #2b4457;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
 }
 
 .timeline-content code {
-  font-size: 11px;
-  color: #5b6b78;
+  font-size: 0.75rem;
+  color: var(--muted);
   font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
 }
 
@@ -575,7 +578,7 @@ button {
 
 .log-tab {
   border-radius: 999px;
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 .log-tab.active {
@@ -615,18 +618,19 @@ button {
 }
 
 .log-row .title {
-  font-size: 13px;
+  font-size: 0.8125rem;
+  line-height: 1.3;
   font-weight: 700;
 }
 
 .log-row .meta {
-  font-size: 11px;
+  font-size: 0.75rem;
   color: var(--muted);
 }
 
 .preview {
   margin: 6px 0 0;
-  font-size: 12px;
+  font-size: 0.75rem;
   line-height: 1.4;
   white-space: pre-wrap;
   word-break: break-word;
@@ -650,19 +654,20 @@ button {
 
 .err-group h4 {
   margin: 0 0 6px;
-  font-size: 13px;
+  font-size: 0.8125rem;
   color: #8f2e2e;
 }
 
 .err-group p {
   margin: 0 0 6px;
-  font-size: 12px;
+  font-size: 0.75rem;
+  line-height: 1.4;
   color: #6f2f2f;
 }
 
 .json-tree {
   font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
-  font-size: 12px;
+  font-size: 0.75rem;
   line-height: 1.5;
 }
 
@@ -685,7 +690,7 @@ button {
 }
 
 .json-key {
-  color: #0b5fff;
+  color: var(--brand);
 }
 
 .json-string {
@@ -728,7 +733,7 @@ button {
   height: 26px;
   padding: 0 10px;
   border-radius: 999px;
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 700;
   color: #7a4200;
   background: #ffecc8;
@@ -736,14 +741,14 @@ button {
 }
 
 .review-meta {
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--muted);
 }
 
 .review-summary {
-  font-size: 13px;
+  font-size: 0.8125rem;
   line-height: 1.5;
-  color: #2b3e4e;
+  color: var(--text-secondary);
   white-space: pre-wrap;
   word-break: break-word;
   max-height: 200px;
@@ -755,12 +760,12 @@ button {
 }
 
 .review-artifacts {
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 .review-artifacts summary {
   cursor: pointer;
-  color: #385673;
+  color: var(--muted);
   font-weight: 600;
 }
 
@@ -772,7 +777,7 @@ button {
 .review-artifacts li {
   margin-bottom: 3px;
   font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
-  font-size: 11px;
+  font-size: 0.75rem;
 }
 
 .review-feedback {
@@ -782,7 +787,7 @@ button {
   border-radius: 8px;
   padding: 8px 10px;
   font-family: inherit;
-  font-size: 13px;
+  font-size: 0.8125rem;
   resize: vertical;
   background: var(--surface);
 }
@@ -802,7 +807,7 @@ button {
   flex: 1;
   height: 40px;
   border-radius: 10px;
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 700;
   cursor: pointer;
   border: 1px solid;
@@ -841,7 +846,7 @@ input[type="text"] {
   border-radius: 10px;
   padding: 0 12px;
   color: var(--text);
-  font-size: 13px;
+  font-size: 0.8125rem;
   min-width: 160px;
 }
 
@@ -871,7 +876,7 @@ input[type="text"]:focus {
 .lane-count {
   font-weight: 400;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 /* Stale run cards */
@@ -885,7 +890,7 @@ input[type="text"]:focus {
 }
 
 .stale-badge {
-  color: #6b7785;
+  color: var(--muted);
   border-color: #c0c9d2;
   background: #eef1f4;
   font-style: italic;
@@ -901,7 +906,7 @@ input[type="text"]:focus {
   border-radius: 8px;
   background: transparent;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 0.75rem;
   cursor: pointer;
   text-align: center;
 }
@@ -979,7 +984,7 @@ input[type="text"]:focus {
 .back-link {
   color: var(--muted);
   text-decoration: none;
-  font-size: 20px;
+  font-size: 1.25rem;
   line-height: 1;
   margin-right: 8px;
 }
@@ -1025,7 +1030,7 @@ input[type="text"]:focus {
 }
 
 .sidebar-heading {
-  font-size: 11px;
+  font-size: 0.75rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -1043,7 +1048,8 @@ input[type="text"]:focus {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  font-size: 13px;
+  font-size: 0.8125rem;
+  line-height: 1.4;
   padding: 4px 0;
 }
 
@@ -1086,7 +1092,8 @@ input[type="text"]:focus {
   padding: 6px 8px;
   border-radius: 6px;
   cursor: pointer;
-  font-size: 13px;
+  font-size: 0.8125rem;
+  line-height: 1.4;
   transition: background 0.1s;
 }
 
@@ -1126,7 +1133,7 @@ input[type="text"]:focus {
 .step-agent {
   color: var(--muted);
   margin-left: auto;
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 /* Sidebar plan details */
@@ -1136,7 +1143,7 @@ input[type="text"]:focus {
 
 .sidebar-detail summary {
   cursor: pointer;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 500;
   color: var(--text);
   padding: 4px 0;
@@ -1155,25 +1162,25 @@ input[type="text"]:focus {
 
 .detail-count {
   font-weight: 400;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--muted);
 }
 
 .sidebar-detail-body {
   padding: 6px 0 4px 12px;
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 .plan-reasoning {
   margin: 6px 0 0;
-  font-size: 12px;
-  color: #2e4558;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
   line-height: 1.5;
 }
 
 .err-line {
   margin: 4px 0;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--err);
 }
 
@@ -1208,7 +1215,7 @@ input[type="text"]:focus {
 }
 
 .feed-card-header strong {
-  font-size: 14px;
+  font-size: 0.875rem;
 }
 
 .header-pills {
@@ -1226,7 +1233,7 @@ input[type="text"]:focus {
   border: 1px solid #c7d6e1;
   border-radius: 999px;
   padding: 0 8px;
-  font-size: 11px;
+  font-size: 0.75rem;
   background: #f7fbff;
   white-space: nowrap;
 }
@@ -1242,7 +1249,7 @@ input[type="text"]:focus {
 
 .feed-block-label {
   display: inline-block;
-  font-size: 11px;
+  font-size: 0.75rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.03em;
@@ -1252,15 +1259,15 @@ input[type="text"]:focus {
 
 .feed-task {
   margin: 0;
-  font-size: 13px;
-  color: #243a4b;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
   line-height: 1.5;
 }
 
 .feed-summary {
   margin: 0;
-  font-size: 13px;
-  color: #1a3244;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
   line-height: 1.5;
   background: var(--surface-soft);
   border: 1px solid var(--line);
@@ -1270,7 +1277,7 @@ input[type="text"]:focus {
 
 .feed-pending {
   margin: 8px 0 0;
-  font-size: 13px;
+  font-size: 0.8125rem;
   color: var(--muted);
   font-style: italic;
 }
@@ -1281,7 +1288,7 @@ input[type="text"]:focus {
 }
 
 .feed-section summary {
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 600;
   cursor: pointer;
   padding: 6px 0;
@@ -1318,7 +1325,7 @@ input[type="text"]:focus {
 }
 
 .feed-event {
-  font-size: 11px;
+  font-size: 0.75rem;
   color: var(--muted);
 }
 
@@ -1332,7 +1339,7 @@ input[type="text"]:focus {
 }
 
 .planner-section > summary {
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 600;
   color: var(--muted);
 }
