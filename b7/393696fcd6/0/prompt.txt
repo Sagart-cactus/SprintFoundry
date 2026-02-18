@@ -1,0 +1,1 @@
+Read task details in .agent-task.md and follow CLAUDE.md.

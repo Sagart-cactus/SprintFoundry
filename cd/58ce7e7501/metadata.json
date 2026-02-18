@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "cd58ce7e7501",
+  "strategy": "auto-commit",
+  "branch": "feat/overhaul-ui",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "src/service/git-manager.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/cd/58ce7e7501/0/metadata.json",
+      "transcript": "/cd/58ce7e7501/0/full.jsonl",
+      "context": "",
+      "content_hash": "/cd/58ce7e7501/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 7,
+    "cache_creation_tokens": 3302,
+    "cache_read_tokens": 302808,
+    "output_tokens": 689,
+    "api_call_count": 5
+  }
+}
