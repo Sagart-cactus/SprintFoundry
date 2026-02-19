@@ -286,6 +286,7 @@ describe("AgentRunner", () => {
     const result = await runner.run(makeRunConfig({ workspacePath }));
     expect(mockClaudeSdkQuery).toHaveBeenCalledTimes(1);
     expect(result.agentResult.status).toBe("complete");
+    expect(result.cost_usd).toBe(0.123);
   });
 
   it("spawnContainer constructs correct docker args with volume mounts", async () => {
@@ -419,6 +420,7 @@ describe("AgentRunner", () => {
     const spawnOpts = (mockSpawn as any).mock.calls[0][2];
     expect(spawnOpts.env.CODEX_HOME).toBe("/tmp/codex-home-test");
     expect(result.tokens_used).toBe(321);
+    expect(result.cost_usd).toBeCloseTo(0.000963, 8);
   });
 
   it("prepareWorkspace stages codex skills and appends AGENTS.md skill section", async () => {

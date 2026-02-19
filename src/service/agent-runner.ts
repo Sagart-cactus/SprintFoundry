@@ -121,11 +121,13 @@ export class AgentRunner {
     const agentResult = await this.readAgentResult(config.workspacePath);
 
     const duration = (Date.now() - startTime) / 1000;
+    const costUsd =
+      result.cost_usd ?? this.estimateCost(result.tokens_used, config.modelConfig);
 
     return {
       agentResult,
       tokens_used: result.tokens_used,
-      cost_usd: this.estimateCost(result.tokens_used, config.modelConfig),
+      cost_usd: costUsd,
       duration_seconds: duration,
       container_id: result.runtime_id,
     };
