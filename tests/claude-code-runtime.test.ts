@@ -107,8 +107,20 @@ describe("ClaudeCodeRuntime", () => {
 
     const stdoutLog = await fs.readFile(path.join(tmpDir, ".claude-runtime.stdout.log"), "utf-8");
     const stderrLog = await fs.readFile(path.join(tmpDir, ".claude-runtime.stderr.log"), "utf-8");
+    const latestDebug = JSON.parse(
+      await fs.readFile(path.join(tmpDir, ".claude-runtime.debug.json"), "utf-8")
+    );
+    const stepDebug = JSON.parse(
+      await fs.readFile(
+        path.join(tmpDir, ".claude-runtime.step-1.attempt-1.debug.json"),
+        "utf-8"
+      )
+    );
     expect(stdoutLog).toContain('"type":"result"');
     expect(stderrLog).toContain("sdk stderr line");
+    expect(latestDebug.runtime_command).toBe("claude-sdk");
+    expect(latestDebug.runtime_mode).toBe("local_process");
+    expect(stepDebug.runtime_provider).toBe("claude-code");
   });
 
   it("times out local SDK execution using AbortController", async () => {
@@ -148,9 +160,21 @@ describe("ClaudeCodeRuntime", () => {
     }, 5);
 
     const result = await promise;
+    const latestDebug = JSON.parse(
+      await fs.readFile(path.join(tmpDir, ".claude-runtime.debug.json"), "utf-8")
+    );
+    const stepDebug = JSON.parse(
+      await fs.readFile(
+        path.join(tmpDir, ".claude-runtime.step-1.attempt-1.debug.json"),
+        "utf-8"
+      )
+    );
 
     expect((mockSpawn as any).mock.calls[0][0]).toBe("docker");
     expect(result.runtime_id).toContain("sprintfoundry-developer-");
     expect(result.tokens_used).toBe(9);
+    expect(latestDebug.runtime_command).toBe("docker");
+    expect(latestDebug.runtime_mode).toBe("container");
+    expect(stepDebug.runtime_provider).toBe("claude-code");
   });
 });
