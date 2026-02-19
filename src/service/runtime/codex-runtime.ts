@@ -1,5 +1,6 @@
 import type { AgentRuntime, RuntimeStepContext, RuntimeStepResult } from "./types.js";
 import { runProcess } from "./process-utils.js";
+import { Codex } from "@openai/codex-sdk";
 import * as path from "path";
 import * as fs from "fs/promises";
 
@@ -31,9 +32,10 @@ const CODEX_AUTH_HEADER_ERROR_SIGNATURE =
 
 export class CodexRuntime implements AgentRuntime {
   async runStep(config: RuntimeStepContext): Promise<RuntimeStepResult> {
-    if (config.runtime.mode !== "local_process") {
-      throw new Error("Codex runtime currently supports only local_process mode");
+    if (config.runtime.mode !== "local_process" && config.runtime.mode !== "local_sdk") {
+      throw new Error("Codex runtime supports only local_process and local_sdk modes");
     }
+    if (config.runtime.mode === "local_sdk") return this.runSdk(config);
     await fs.mkdir(config.workspacePath, { recursive: true });
 
     const prompt = [
@@ -182,6 +184,61 @@ export class CodexRuntime implements AgentRuntime {
     return {
       tokens_used: result.tokensUsed,
       runtime_id: result.runtimeId,
+    };
+  }
+
+  private async runSdk(config: RuntimeStepContext): Promise<RuntimeStepResult> {
+    await fs.mkdir(config.workspacePath, { recursive: true });
+
+    const prompt = [
+      "You are executing one agent step in SprintFoundry.",
+      `Primary task: ${config.task}`,
+      "Read .agent-task.md and AGENTS.md, then complete the actual work requested there.",
+      config.codexSkillNames && config.codexSkillNames.length > 0
+        ? `Skills available in CODEX_HOME: ${config.codexSkillNames.join(", ")}. Use them when relevant.`
+        : "No additional runtime skills were provided for this step.",
+      "Create/modify the required project artifacts and code files first.",
+      "Do not stop after only updating .agent-result.json.",
+      "Only after doing the real work, write .agent-result.json with accurate status and artifact lists.",
+      "If truly blocked, set status=blocked or needs_rework with concrete issues.",
+    ].join("\n");
+
+    const env = this.buildRuntimeEnv(config);
+
+    const stepPrefix = `.codex-runtime.step-${config.stepNumber}.attempt-${config.stepAttempt}`;
+    const legacyDebugPath = path.join(config.workspacePath, ".codex-runtime.debug.json");
+    const stepDebugPath = path.join(config.workspacePath, `${stepPrefix}.debug.json`);
+
+    const debugPayload: Record<string, unknown> = {
+      timestamp: new Date().toISOString(),
+      step_number: config.stepNumber,
+      step_attempt: config.stepAttempt,
+      runtime_mode: config.runtime.mode,
+      openai_model: env.OPENAI_MODEL ?? "",
+      openai_api_key_present: Boolean(env.OPENAI_API_KEY),
+      codex_home: env.CODEX_HOME ?? "",
+      codex_home_present: Boolean(env.CODEX_HOME),
+      skill_names: config.codexSkillNames ?? [],
+    };
+    await this.writeDebugFiles(stepDebugPath, legacyDebugPath, debugPayload);
+
+    console.log(
+      `[codex-runtime] SDK mode: openai_model=${env.OPENAI_MODEL}, openai_api_key_present=${Boolean(env.OPENAI_API_KEY)}, codex_home_present=${Boolean(env.CODEX_HOME)}, skills=${(config.codexSkillNames ?? []).join(",") || "none"}`
+    );
+
+    const codex = new Codex({ env: env as Record<string, string> });
+    const thread = codex.startThread({
+      workingDirectory: config.workspacePath,
+      model: config.modelConfig.model,
+      sandboxMode: "workspace-write",
+      approvalPolicy: "never",
+      skipGitRepoCheck: true,
+    });
+    const turn = await thread.run(prompt);
+
+    return {
+      tokens_used: (turn.usage?.input_tokens ?? 0) + (turn.usage?.output_tokens ?? 0),
+      runtime_id: thread.id ?? "",
     };
   }
 
