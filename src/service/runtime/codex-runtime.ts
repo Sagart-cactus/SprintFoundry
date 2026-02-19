@@ -7,6 +7,8 @@ import * as fs from "fs/promises";
 const FORWARDED_PARENT_ENV_KEYS = [
   "PATH",
   "HOME",
+  "OPENAI_API_KEY",
+  "CODEX_HOME",
   "USERPROFILE",
   "TMPDIR",
   "TEMP",
