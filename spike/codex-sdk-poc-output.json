@@ -1,0 +1,72 @@
+{
+  "sdkVersion": "0.104.0",
+  "mode": "preflight",
+  "model": "gpt-5.3-codex",
+  "workspacePath": "(not created)",
+  "checks": [
+    {
+      "name": "OPENAI_API_KEY auth",
+      "status": "skipped",
+      "details": "Set OPENAI_API_KEY to execute live Codex SDK runs"
+    },
+    {
+      "name": "workspace path control",
+      "status": "skipped",
+      "details": "Skipped in preflight mode (no API key)"
+    },
+    {
+      "name": "AGENTS.md instruction pickup",
+      "status": "skipped",
+      "details": "Skipped in preflight mode (no API key)"
+    },
+    {
+      "name": "thread persistence via run()",
+      "status": "skipped",
+      "details": "Skipped in preflight mode (no API key)"
+    },
+    {
+      "name": "thread persistence via resumeThread(threadId)",
+      "status": "skipped",
+      "details": "Skipped in preflight mode (no API key)"
+    },
+    {
+      "name": "CODEX_HOME skills behavior",
+      "status": "skipped",
+      "details": "Skipped in preflight mode (no API key)"
+    },
+    {
+      "name": "structured output capture",
+      "status": "skipped",
+      "details": "Skipped in preflight mode (no API key)"
+    }
+  ],
+  "tokens": {
+    "firstRun": null,
+    "secondRun": null,
+    "resumedRun": null,
+    "total": {
+      "input_tokens": 0,
+      "cached_input_tokens": 0,
+      "output_tokens": 0
+    }
+  },
+  "cost": {
+    "value_usd": null,
+    "source": "No live run; Codex SDK does not expose cost in type surface"
+  },
+  "thread": {
+    "initialThreadId": null,
+    "resumedThreadId": null,
+    "persistedThreadIdMatch": false
+  },
+  "outputs": {
+    "firstRun": null,
+    "secondRun": null,
+    "resumedRun": null
+  },
+  "mappingNotes": [
+    "Codex SDK APIs required by this spike: startThread(), run(), resumeThread().",
+    "OPENAI_API_KEY check is preflight-gated to avoid auth failures in CI.",
+    "Live run required to verify AGENTS.md and skills behavior."
+  ]
+}
