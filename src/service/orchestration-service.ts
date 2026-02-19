@@ -15,6 +15,8 @@ import type {
   AgentResult,
   ProjectConfig,
   PlatformConfig,
+  BudgetConfig,
+  PlatformRule,
   AgentType,
   AgentRole,
   HumanReview,
@@ -183,21 +185,86 @@ export class OrchestrationService {
       const parallelGroup = this.findParallelGroup(ready, plan.parallel_groups);
 
       if (parallelGroup.length > 1) {
-        // Execute in parallel
+        // Phase 1: Execute in parallel, collecting rework signals instead of handling them inline.
+        // This prevents multiple parallel steps from each spawning an independent developer rework call.
+        const reworkSignals: Array<{ step: PlanStep; agentResult: AgentResult; currentRework: number }> = [];
         const results = await Promise.all(
           parallelGroup.map((step) =>
-            this.executeStep(run, step, workspacePath, reworkCounts)
+            this.executeStep(run, step, workspacePath, reworkCounts, reworkSignals)
           )
         );
+
+        // Hard failures take precedence
+        for (let i = 0; i < parallelGroup.length; i++) {
+          if (results[i] === "failed") {
+            run.status = "failed";
+            return;
+          }
+        }
+
+        // Phase 2: If any steps need rework, merge them into a single planRework call
+        if (reworkSignals.length > 0) {
+          const budget = this.resolveBudget(run.ticket);
+          const maxRework = budget.max_rework_cycles ?? this.platformConfig.defaults.max_rework_cycles;
+
+          if (reworkSignals.some((s) => s.currentRework >= maxRework)) {
+            run.status = "failed";
+            await this.notifications.send(
+              `Parallel group exceeded max rework cycles (${maxRework}). Escalating.`
+            );
+            return;
+          }
+
+          const mergedReason =
+            reworkSignals.length === 1
+              ? (reworkSignals[0].agentResult.rework_reason ?? "Rework requested")
+              : reworkSignals
+                  .map((s) => `[${s.step.agent}] ${s.agentResult.rework_reason ?? "Rework requested"}`)
+                  .join("; ");
+
+          const primarySignal = reworkSignals[0];
+          const mergedAgentResult: AgentResult = { ...primarySignal.agentResult, rework_reason: mergedReason };
+
+          for (const signal of reworkSignals) {
+            reworkCounts.set(signal.step.step_number, signal.currentRework + 1);
+            await this.emitEvent(run.run_id, "step.rework_triggered", {
+              step: signal.step.step_number,
+              reason: signal.agentResult.rework_reason,
+              rework_count: signal.currentRework + 1,
+              merged: reworkSignals.length > 1,
+            });
+          }
+
+          const previousReworkResults = run.steps
+            .filter((s) => s.step_number === primarySignal.step.step_number && s.status === "needs_rework" && s.result)
+            .map((s) => s.result!);
+
+          const reworkPlan = await this.plannerRuntime.planRework(
+            run.ticket,
+            primarySignal.step,
+            mergedAgentResult,
+            workspacePath,
+            run.steps,
+            primarySignal.currentRework + 1,
+            previousReworkResults
+          );
+
+          for (const reworkStep of reworkPlan.steps) {
+            const reworkResult = await this.executeStep(run, reworkStep, workspacePath, reworkCounts);
+            if (reworkResult === "failed") {
+              run.status = "failed";
+              return;
+            }
+          }
+
+          // Retry the parallel group — while loop will pick it up since none were added to `completed`
+          continue;
+        }
 
         for (let i = 0; i < parallelGroup.length; i++) {
           if (results[i] === "completed") {
             completed.add(parallelGroup[i].step_number);
-          } else if (results[i] === "failed") {
-            run.status = "failed";
-            return;
           }
-          // "rework" is handled inside executeStep via recursion
         }
       } else {
         // Execute sequentially
@@ -266,9 +333,11 @@ export class OrchestrationService {
     run: TaskRun,
     step: PlanStep,
     workspacePath: string,
-    reworkCounts: Map<number, number>
+    reworkCounts: Map<number, number>,
+    parallelReworkSignals?: Array<{ step: PlanStep; agentResult: AgentResult; currentRework: number }>
   ): Promise<"completed" | "failed" | "rework"> {
-    const maxRework = this.platformConfig.defaults.max_rework_cycles;
+    const budget = this.resolveBudget(run.ticket);
+    const maxRework = budget.max_rework_cycles ?? this.platformConfig.defaults.max_rework_cycles;
     const currentRework = reworkCounts.get(step.step_number) ?? 0;
 
     // Initialize step execution record
@@ -295,7 +364,6 @@ export class OrchestrationService {
     // Resolve model + budget for this agent (project overrides > platform defaults)
     const modelConfig = this.resolveModel(step.agent);
     const runtime = this.resolveRuntimeForAgent(step.agent);
-    const budget = this.resolveBudget();
     const cliFlags = this.platformConfig.defaults.agent_cli_flags;
     const containerResources = this.platformConfig.defaults.container_resources;
     const apiKey = this.resolveApiKey(modelConfig.provider, runtime);
@@ -454,6 +522,19 @@ export class OrchestrationService {
       }
 
       if (result.agentResult.status === "needs_rework") {
+        stepExec.status = "needs_rework";
+
+        // Defer rework handling to parallel group coordinator
+        if (parallelReworkSignals) {
+          parallelReworkSignals.push({ step, agentResult: result.agentResult, currentRework });
+          await this.emitEvent(run.run_id, "step.rework_triggered", {
+            step: step.step_number,
+            reason: result.agentResult.rework_reason,
+            deferred_to_parallel_coordinator: true,
+          });
+          return "rework";
+        }
+
         // Check rework budget
         if (currentRework >= maxRework) {
           stepExec.status = "failed";
@@ -468,7 +549,6 @@ export class OrchestrationService {
         }
 
         reworkCounts.set(step.step_number, currentRework + 1);
-        stepExec.status = "needs_rework";
         await this.emitEvent(run.run_id, "step.rework_triggered", {
           step: step.step_number,
           reason: result.agentResult.rework_reason,
@@ -731,11 +811,36 @@ export class OrchestrationService {
     );
   }
 
-  private resolveBudget() {
-    return {
+  private resolveBudget(ticket?: TicketDetails) {
+    const base: BudgetConfig = {
       ...this.platformConfig.defaults.budgets,
       ...this.projectConfig.budget_overrides,
     };
+    if (!ticket) return base;
+    for (const rule of this.getMergedRules()) {
+      if (rule.action.type !== "set_budget") continue;
+      if (!this.evaluateRuleConditionForTicket(rule.condition, ticket)) continue;
+      Object.assign(base, rule.action.budget);
+    }
+    return base;
+  }
+
+  private evaluateRuleConditionForTicket(
+    condition: PlatformRule["condition"],
+    ticket: TicketDetails
+  ): boolean {
+    switch (condition.type) {
+      case "always":
+        return true;
+      case "label_contains":
+        return ticket.labels.some((l) =>
+          l.toLowerCase().includes(condition.value.toLowerCase())
+        );
+      case "priority_is":
+        return condition.values.includes(ticket.priority);
+      default:
+        return false;
+    }
   }
 
   private resolveApiKey(provider: string, runtime?: RuntimeConfig): string {

@@ -252,7 +252,14 @@ Set "model" for each step to the agent model that should run that step.
 9. Task descriptions should be specific and actionable, not vague.
 10. Mark steps that can run in parallel in parallel_groups.
 11. Add human_gates sparingly \u2014 only when the decision is significant enough to warrant pausing.
-12. Use the agent IDs exactly as listed above (e.g. "go-developer" not "developer" for Go projects).`;
+12. Use the agent IDs exactly as listed above (e.g. "go-developer" not "developer" for Go projects).
+
+## Ticket type plan shapes
+- type:spike   → developer + qa ONLY. Max 2 steps. No architect, security, or code-review.
+                 Spikes are research tasks — the output is a PoC and findings doc, not production code.
+- type:bug     → developer + qa. Skip architect and product. No security unless label also contains "security".
+- type:docs    → developer (or product) only. Single step.
+- type:feature → default full pipeline applies.`;
   }
 
   private buildReworkSystemPrompt(agentDefinitions: AgentDefinition[]): string {

@@ -1,13 +1,43 @@
 import type { AgentRuntime, RuntimeStepContext, RuntimeStepResult } from "./types.js";
 import { runProcess } from "./process-utils.js";
+import { Codex } from "@openai/codex-sdk";
 import * as path from "path";
 import * as fs from "fs/promises";
 
+const FORWARDED_PARENT_ENV_KEYS = [
+  "PATH",
+  "HOME",
+  "OPENAI_API_KEY",
+  "CODEX_HOME",
+  "USERPROFILE",
+  "TMPDIR",
+  "TEMP",
+  "TMP",
+  "SYSTEMROOT",
+  "COMSPEC",
+  "PATHEXT",
+  "TERM",
+  "SHELL",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "NO_PROXY",
+  "HTTPS_PROXY",
+  "HTTP_PROXY",
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+  "NODE_EXTRA_CA_CERTS",
+] as const;
+const CODEX_HOME_FALLBACK_ENV_FLAG = "SPRINTFOUNDRY_ENABLE_CODEX_HOME_AUTH_FALLBACK";
+const CODEX_AUTH_HEADER_ERROR_SIGNATURE =
+  "401 Unauthorized: Missing bearer or basic authentication in header";
+
 export class CodexRuntime implements AgentRuntime {
   async runStep(config: RuntimeStepContext): Promise<RuntimeStepResult> {
-    if (config.runtime.mode !== "local_process") {
-      throw new Error("Codex runtime currently supports only local_process mode");
+    if (config.runtime.mode !== "local_process" && config.runtime.mode !== "local_sdk") {
+      throw new Error("Codex runtime supports only local_process and local_sdk modes");
     }
+    if (config.runtime.mode === "local_sdk") return this.runSdk(config);
     await fs.mkdir(config.workspacePath, { recursive: true });
 
     const prompt = [
@@ -31,13 +61,10 @@ export class CodexRuntime implements AgentRuntime {
       "--json",
       ...(hasSandboxFlag || hasBypassFlag ? [] : ["--sandbox", "workspace-write"]),
     ];
-    const env = {
-      ...process.env,
-      ...(config.apiKey ? { OPENAI_API_KEY: config.apiKey } : {}),
-      OPENAI_MODEL: config.modelConfig.model,
-      ...(config.codexHomeDir ? { CODEX_HOME: config.codexHomeDir } : {}),
-      ...(config.runtime.env ?? {}),
-    };
+    const env = this.buildRuntimeEnv(config);
+    const codexHomeFallbackEnabled =
+      process.env[CODEX_HOME_FALLBACK_ENV_FLAG] === "1" ||
+      config.runtime.env?.[CODEX_HOME_FALLBACK_ENV_FLAG] === "1";
 
     const stepPrefix = `.codex-runtime.step-${config.stepNumber}.attempt-${config.stepAttempt}`;
     const legacyPaths = {
@@ -65,6 +92,7 @@ export class CodexRuntime implements AgentRuntime {
       openai_api_key_present: Boolean(env.OPENAI_API_KEY),
       codex_home: env.CODEX_HOME ?? "",
       codex_home_present: Boolean(env.CODEX_HOME),
+      codex_home_fallback_enabled: codexHomeFallbackEnabled,
       skill_names: config.codexSkillNames ?? [],
     };
     await this.writeDebugFiles(stepPaths.debugPath, legacyPaths.debugPath, debugPayload);
@@ -95,26 +123,37 @@ export class CodexRuntime implements AgentRuntime {
         legacyPaths.stderrPath
       );
     } catch (error) {
-      // Fallback path: some Codex/OpenAI auth flows fail only when CODEX_HOME is overridden.
-      // Retry once without CODEX_HOME if we detect that signature.
-      const firstStdout = await fs.readFile(baseOutputFiles.stdoutPath, "utf-8").catch(() => "");
-      const hasAuthHeaderError = firstStdout.includes(
-        "401 Unauthorized: Missing bearer or basic authentication in header"
-      );
-      if (env.CODEX_HOME && hasAuthHeaderError) {
+      const firstStderr = await fs.readFile(baseOutputFiles.stderrPath, "utf-8").catch(() => "");
+      if (this.shouldRetryWithoutCodexHome(env, error, firstStderr, codexHomeFallbackEnabled)) {
         console.warn(
-          "[codex-runtime] Detected auth-header error with CODEX_HOME override; retrying once without CODEX_HOME."
+          "[codex-runtime] Retrying once without CODEX_HOME after trusted auth-header failure."
         );
         const fallbackEnv = { ...env };
         delete fallbackEnv.CODEX_HOME;
         await fs.writeFile(
           stepPaths.debugPath,
-          JSON.stringify({ ...debugPayload, fallback_without_codex_home: true }, null, 2),
+          JSON.stringify(
+            {
+              ...debugPayload,
+              fallback_without_codex_home: true,
+              fallback_reason: "trusted_auth_header_error",
+            },
+            null,
+            2
+          ),
           "utf-8"
         );
         await fs.writeFile(
           legacyPaths.debugPath,
-          JSON.stringify({ ...debugPayload, fallback_without_codex_home: true }, null, 2),
+          JSON.stringify(
+            {
+              ...debugPayload,
+              fallback_without_codex_home: true,
+              fallback_reason: "trusted_auth_header_error",
+            },
+            null,
+            2
+          ),
           "utf-8"
         );
         result = await runProcess(command, [...runtimeArgs, ...args], {
@@ -148,6 +187,94 @@ export class CodexRuntime implements AgentRuntime {
       tokens_used: result.tokensUsed,
       runtime_id: result.runtimeId,
     };
+  }
+
+  private async runSdk(config: RuntimeStepContext): Promise<RuntimeStepResult> {
+    await fs.mkdir(config.workspacePath, { recursive: true });
+
+    const prompt = [
+      "You are executing one agent step in SprintFoundry.",
+      `Primary task: ${config.task}`,
+      "Read .agent-task.md and AGENTS.md, then complete the actual work requested there.",
+      config.codexSkillNames && config.codexSkillNames.length > 0
+        ? `Skills available in CODEX_HOME: ${config.codexSkillNames.join(", ")}. Use them when relevant.`
+        : "No additional runtime skills were provided for this step.",
+      "Create/modify the required project artifacts and code files first.",
+      "Do not stop after only updating .agent-result.json.",
+      "Only after doing the real work, write .agent-result.json with accurate status and artifact lists.",
+      "If truly blocked, set status=blocked or needs_rework with concrete issues.",
+    ].join("\n");
+
+    const env = this.buildRuntimeEnv(config);
+
+    const stepPrefix = `.codex-runtime.step-${config.stepNumber}.attempt-${config.stepAttempt}`;
+    const legacyDebugPath = path.join(config.workspacePath, ".codex-runtime.debug.json");
+    const stepDebugPath = path.join(config.workspacePath, `${stepPrefix}.debug.json`);
+
+    const debugPayload: Record<string, unknown> = {
+      timestamp: new Date().toISOString(),
+      step_number: config.stepNumber,
+      step_attempt: config.stepAttempt,
+      runtime_mode: config.runtime.mode,
+      openai_model: env.OPENAI_MODEL ?? "",
+      openai_api_key_present: Boolean(env.OPENAI_API_KEY),
+      codex_home: env.CODEX_HOME ?? "",
+      codex_home_present: Boolean(env.CODEX_HOME),
+      skill_names: config.codexSkillNames ?? [],
+    };
+    await this.writeDebugFiles(stepDebugPath, legacyDebugPath, debugPayload);
+
+    console.log(
+      `[codex-runtime] SDK mode: openai_model=${env.OPENAI_MODEL}, openai_api_key_present=${Boolean(env.OPENAI_API_KEY)}, codex_home_present=${Boolean(env.CODEX_HOME)}, skills=${(config.codexSkillNames ?? []).join(",") || "none"}`
+    );
+
+    const codex = new Codex({ env: env as Record<string, string> });
+    const thread = codex.startThread({
+      workingDirectory: config.workspacePath,
+      model: config.modelConfig.model,
+      sandboxMode: "workspace-write",
+      approvalPolicy: "never",
+      skipGitRepoCheck: true,
+    });
+    const turn = await thread.run(prompt);
+
+    return {
+      tokens_used: (turn.usage?.input_tokens ?? 0) + (turn.usage?.output_tokens ?? 0),
+      runtime_id: thread.id ?? "",
+    };
+  }
+
+  private buildRuntimeEnv(config: RuntimeStepContext): Record<string, string | undefined> {
+    const env: Record<string, string | undefined> = {};
+    for (const key of FORWARDED_PARENT_ENV_KEYS) {
+      const value = process.env[key];
+      if (value !== undefined) env[key] = value;
+    }
+    if (config.apiKey) {
+      env.OPENAI_API_KEY = config.apiKey;
+    }
+    env.OPENAI_MODEL = config.modelConfig.model;
+    if (config.codexHomeDir) {
+      env.CODEX_HOME = config.codexHomeDir;
+    }
+    for (const [key, value] of Object.entries(config.runtime.env ?? {})) {
+      env[key] = value;
+    }
+    return env;
+  }
+
+  private shouldRetryWithoutCodexHome(
+    env: Record<string, string | undefined>,
+    error: unknown,
+    stderrOutput: string,
+    codexHomeFallbackEnabled: boolean
+  ): boolean {
+    if (!env.CODEX_HOME || !codexHomeFallbackEnabled) return false;
+    if (!(error instanceof Error)) return false;
+    const errorMessage = error.message.toLowerCase();
+    const hasExitCodeSignal = /exited with code\s+[1-9]\d*/i.test(errorMessage);
+    const trustedAuthSignal = stderrOutput.includes(CODEX_AUTH_HEADER_ERROR_SIGNATURE);
+    return hasExitCodeSignal && trustedAuthSignal;
   }
 
   private async writeDebugFiles(

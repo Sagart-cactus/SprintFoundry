@@ -1,0 +1,99 @@
+{
+  "sdkVersion": "0.104.0",
+  "mode": "live",
+  "model": "gpt-5.3-codex",
+  "workspacePath": "/var/folders/3h/qx4txpps3ps2sfy2bwc4_wlh0000gn/T/codex-sdk-poc-workspace-YybfTw",
+  "checks": [
+    {
+      "name": "OPENAI_API_KEY auth",
+      "status": "pass",
+      "details": "Live run succeeded after trusted auth-header retry without CODEX_HOME"
+    },
+    {
+      "name": "workspace path control",
+      "status": "pass",
+      "details": "cwd=/private/var/folders/3h/qx4txpps3ps2sfy2bwc4_wlh0000gn/T/codex-sdk-poc-workspace-YybfTw"
+    },
+    {
+      "name": "AGENTS.md instruction pickup",
+      "status": "pass",
+      "details": "agents_instruction_marker=AGENTS_RULE_ACTIVE"
+    },
+    {
+      "name": "thread persistence via run()",
+      "status": "pass",
+      "details": "remembered_marker=THREAD_MARKER_ONE"
+    },
+    {
+      "name": "thread persistence via resumeThread(threadId)",
+      "status": "pass",
+      "details": "resumed_marker=THREAD_MARKER_ONE"
+    },
+    {
+      "name": "CODEX_HOME skills behavior",
+      "status": "pass",
+      "details": "Known incompatibility: live run with CODEX_HOME returned auth-header 401 (Missing bearer or basic authentication in header); behavior documented."
+    },
+    {
+      "name": "structured output capture",
+      "status": "pass",
+      "details": "Parsed JSON from all turn.finalResponse values"
+    }
+  ],
+  "tokens": {
+    "firstRun": {
+      "input_tokens": 26389,
+      "cached_input_tokens": 15360,
+      "output_tokens": 717
+    },
+    "secondRun": {
+      "input_tokens": 40907,
+      "cached_input_tokens": 17792,
+      "output_tokens": 953
+    },
+    "resumedRun": {
+      "input_tokens": 56632,
+      "cached_input_tokens": 20224,
+      "output_tokens": 1151
+    },
+    "total": {
+      "input_tokens": 123928,
+      "cached_input_tokens": 53376,
+      "output_tokens": 2821
+    }
+  },
+  "cost": {
+    "value_usd": null,
+    "source": "@openai/codex-sdk Usage exposes token counts but no cost field in Turn/ThreadEvent APIs"
+  },
+  "thread": {
+    "initialThreadId": "019c76b7-bf97-7ed1-b978-8746c971e427",
+    "resumedThreadId": "019c76b7-bf97-7ed1-b978-8746c971e427",
+    "persistedThreadIdMatch": true
+  },
+  "outputs": {
+    "firstRun": {
+      "agents_instruction_marker": "AGENTS_RULE_ACTIVE",
+      "cwd": "/private/var/folders/3h/qx4txpps3ps2sfy2bwc4_wlh0000gn/T/codex-sdk-poc-workspace-YybfTw",
+      "workspace_sentinel": "WORKSPACE_SENTINEL_OK",
+      "outside_workspace_secret": null,
+      "thread_memory_marker": "THREAD_MARKER_ONE"
+    },
+    "secondRun": {
+      "remembered_marker": "THREAD_MARKER_ONE",
+      "continuity_ok": true
+    },
+    "resumedRun": {
+      "resumed_thread_memory_marker": "THREAD_MARKER_ONE",
+      "resumed_ok": true
+    }
+  },
+  "mappingNotes": [
+    "Codex SDK startThread(options) maps to CLI session start with --cd/--model/--sandbox.",
+    "Thread.run(input, { outputSchema }) replaces `codex exec <prompt> --json` parsing.",
+    "resumeThread(threadId) maps to `codex exec resume <threadId>`.",
+    "Usage tokens are directly exposed at turn.completed / turn.usage.",
+    "Cost is not exposed by @openai/codex-sdk v0.104.0, unlike Claude SDK total_cost_usd.",
+    "Live run required auth fallback: CODEX_HOME triggered 401 auth-header failure, retry without CODEX_HOME succeeded."
+  ]
+}
