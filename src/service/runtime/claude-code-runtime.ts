@@ -107,7 +107,6 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     let runtimeId = `local-claude-sdk-${Date.now()}`;
     let stdout = "";
     let stderr = "";
-    let timeoutTriggered = false;
     let finalResultMessage: SDKResultMessage | null = null;
 
     try {
@@ -140,8 +139,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
         }
       }
     } catch (error) {
-      timeoutTriggered = timeoutAbortController.signal.aborted;
-      if (!timeoutTriggered) {
+      if (!timeoutAbortController.signal.aborted) {
         throw error;
       }
     } finally {
@@ -154,9 +152,6 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     }
 
     if (timeoutAbortController.signal.aborted && !finalResultMessage) {
-      timeoutTriggered = true;
-    }
-    if (timeoutTriggered) {
       throw new Error("Process claude timed out");
     }
     if (!finalResultMessage) {
