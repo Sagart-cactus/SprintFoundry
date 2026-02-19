@@ -38,6 +38,8 @@ export interface RuntimeStepContext {
   containerImage?: string;
   codexHomeDir?: string;
   codexSkillNames?: string[];
+  resumeSessionId?: string;
+  resumeReason?: string;
 }
 
 export interface RuntimeStepResult {

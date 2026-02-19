@@ -8,6 +8,7 @@ import type { RuntimeStepContext } from "../src/service/runtime/types.js";
 // Defined before any dynamic imports so they are initialized by the time factories are invoked.
 const mockRunFn = vi.fn();
 const mockStartThreadFn = vi.fn();
+const mockResumeThreadFn = vi.fn();
 const mockCodexConstructorCalls: Array<{ env: Record<string, string> }> = [];
 
 // vi.mock is hoisted, but factory bodies run lazily (at first import).
@@ -16,7 +17,7 @@ vi.mock("@openai/codex-sdk", () => ({
   // Regular function (not arrow) so it can be used as a constructor with `new`.
   Codex: function MockCodex(this: any, opts: { env: Record<string, string> }) {
     mockCodexConstructorCalls.push({ env: opts?.env ?? {} });
-    return { startThread: mockStartThreadFn };
+    return { startThread: mockStartThreadFn, resumeThread: mockResumeThreadFn };
   },
 }));
 
@@ -50,6 +51,8 @@ function makeContext(
     cliFlags: overrides?.cliFlags,
     containerResources: overrides?.containerResources,
     containerImage: overrides?.containerImage,
+    resumeSessionId: overrides?.resumeSessionId,
+    resumeReason: overrides?.resumeReason,
   };
 }
 
@@ -68,6 +71,7 @@ describe("CodexRuntime local_sdk mode", () => {
       finalResponse: "",
     });
     mockStartThreadFn.mockReturnValue({ id: "thread-sdk-123", run: mockRunFn });
+    mockResumeThreadFn.mockReturnValue({ id: "thread-sdk-resume-123", run: mockRunFn });
   });
 
   afterEach(async () => {
@@ -193,6 +197,19 @@ describe("CodexRuntime local_sdk mode", () => {
     const constructorEnv = mockCodexConstructorCalls[0].env;
     expect(constructorEnv.MY_CUSTOM_VAR).toBe("custom-value");
   });
+
+  it("resumes SDK thread when resumeSessionId is provided", async () => {
+    const runtime = new CodexRuntime();
+    const result = await runtime.runStep(
+      makeContext(tmpDir, {
+        resumeSessionId: "thread-old-111",
+      })
+    );
+
+    expect(mockResumeThreadFn).toHaveBeenCalledWith("thread-old-111");
+    expect(mockStartThreadFn).not.toHaveBeenCalled();
+    expect(result.runtime_id).toBe("thread-sdk-resume-123");
+  });
 });
 
 describe("CodexRuntime local_process mode (unchanged behavior)", () => {
@@ -242,6 +259,19 @@ describe("CodexRuntime local_process mode (unchanged behavior)", () => {
       string | undefined
     >;
     expect(callEnv.UNRELATED_PARENT_SECRET).toBeUndefined();
+  });
+
+  it("uses codex exec resume when resumeSessionId is provided", async () => {
+    const runtime = new CodexRuntime();
+    await runtime.runStep(
+      makeContext(tmpDir, {
+        runtime: { provider: "codex", mode: "local_process" },
+        resumeSessionId: "thread-abc-123",
+      })
+    );
+
+    const args = vi.mocked(runProcess).mock.calls[0][1] as string[];
+    expect(args.slice(0, 4)).toEqual(["exec", "resume", "thread-abc-123", expect.any(String)]);
   });
 });
 

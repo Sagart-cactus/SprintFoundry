@@ -50,14 +50,16 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     await this.copyLatestLogs(paths.stepStdoutPath, paths.stepStderrPath, paths.latestStdoutPath, paths.latestStderrPath);
     return {
       tokens_used: result.tokensUsed,
-      runtime_id: result.runtimeId,
+      runtime_id: this.extractSessionIdFromOutput(result.stdout) ?? result.runtimeId,
     };
   }
 
   private buildCliArgs(config: RuntimeStepContext): string[] {
     const flags = config.cliFlags ?? {};
     const taskPrompt = this.readTaskPrompt();
-    const args: string[] = ["-p", taskPrompt];
+    const args: string[] = config.resumeSessionId
+      ? ["--resume", config.resumeSessionId, "-p", taskPrompt]
+      : ["-p", taskPrompt];
     args.push("--output-format", flags.output_format ?? "json");
     if (flags.skip_permissions !== false) {
       args.push("--dangerously-skip-permissions");
@@ -110,25 +112,29 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     let finalResultMessage: SDKResultMessage | null = null;
 
     try {
+      const queryOptions: Record<string, unknown> = {
+        cwd: config.workspacePath,
+        model: config.modelConfig.model,
+        env,
+        systemPrompt: prompts.systemPrompt,
+        maxBudgetUsd:
+          flags.max_budget_usd !== undefined && flags.max_budget_usd > 0
+            ? flags.max_budget_usd
+            : undefined,
+        permissionMode: flags.skip_permissions !== false ? "bypassPermissions" : undefined,
+        allowDangerouslySkipPermissions: flags.skip_permissions !== false ? true : undefined,
+        plugins: config.plugins?.map((pluginPath) => ({ type: "local" as const, path: pluginPath })),
+        abortController: timeoutAbortController,
+        stderr: (data: string) => {
+          stderr += data;
+        },
+      };
+      if (config.resumeSessionId) {
+        queryOptions.resume = config.resumeSessionId;
+      }
       for await (const message of query({
         prompt: prompts.taskPrompt,
-        options: {
-          cwd: config.workspacePath,
-          model: config.modelConfig.model,
-          env,
-          systemPrompt: prompts.systemPrompt,
-          maxBudgetUsd:
-            flags.max_budget_usd !== undefined && flags.max_budget_usd > 0
-              ? flags.max_budget_usd
-              : undefined,
-          permissionMode: flags.skip_permissions !== false ? "bypassPermissions" : undefined,
-          allowDangerouslySkipPermissions: flags.skip_permissions !== false ? true : undefined,
-          plugins: config.plugins?.map((pluginPath) => ({ type: "local" as const, path: pluginPath })),
-          abortController: timeoutAbortController,
-          stderr: (data) => {
-            stderr += data;
-          },
-        },
+        options: queryOptions as any,
       })) {
         stdout += `${JSON.stringify(message)}\n`;
         if ("session_id" in message && typeof message.session_id === "string") {
@@ -208,6 +214,28 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       if (Number.isFinite(parsed)) return parsed;
     }
     return null;
+  }
+
+  private extractSessionIdFromOutput(stdout: string): string | null {
+    const trimmed = stdout.trim();
+    if (!trimmed) return null;
+    for (const line of trimmed.split(/\r?\n/)) {
+      const candidate = this.extractSessionIdFromJson(line.trim());
+      if (candidate) return candidate;
+    }
+    return this.extractSessionIdFromJson(trimmed);
+  }
+
+  private extractSessionIdFromJson(jsonText: string): string | null {
+    if (!jsonText || (!jsonText.startsWith("{") && !jsonText.startsWith("["))) return null;
+    try {
+      const parsed = JSON.parse(jsonText) as Record<string, unknown>;
+      const sessionId = parsed["session_id"];
+      if (typeof sessionId === "string" && sessionId.trim()) return sessionId;
+      return null;
+    } catch {
+      return null;
+    }
   }
 
   private async runContainer(config: RuntimeStepContext): Promise<RuntimeStepResult> {

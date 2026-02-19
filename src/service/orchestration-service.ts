@@ -32,6 +32,7 @@ import { WorkspaceManager } from "./workspace-manager.js";
 import { TicketFetcher } from "./ticket-fetcher.js";
 import { GitManager } from "./git-manager.js";
 import { NotificationService } from "./notification-service.js";
+import { RuntimeSessionStore } from "./runtime-session-store.js";
 import type { PlannerRuntime } from "./runtime/types.js";
 import { PlannerFactory } from "./runtime/planner-factory.js";
 
@@ -44,6 +45,7 @@ export class OrchestrationService {
   private tickets: TicketFetcher;
   private git: GitManager;
   private notifications: NotificationService;
+  private sessions: RuntimeSessionStore;
 
   constructor(
     private platformConfig: PlatformConfig,
@@ -57,6 +59,7 @@ export class OrchestrationService {
     this.tickets = new TicketFetcher(projectConfig.integrations);
     this.git = new GitManager(projectConfig.repo, projectConfig.branch_strategy);
     this.notifications = new NotificationService(projectConfig.integrations);
+    this.sessions = new RuntimeSessionStore();
   }
 
   // ---- Main entry point ----
@@ -250,7 +253,14 @@ export class OrchestrationService {
           );
 
           for (const reworkStep of reworkPlan.steps) {
-            const reworkResult = await this.executeStep(run, reworkStep, workspacePath, reworkCounts);
+            const reworkResult = await this.executeStep(
+              run,
+              reworkStep,
+              workspacePath,
+              reworkCounts,
+              undefined,
+              "rework_plan"
+            );
             if (reworkResult === "failed") {
               run.status = "failed";
               return;
@@ -334,7 +344,8 @@ export class OrchestrationService {
     step: PlanStep,
     workspacePath: string,
     reworkCounts: Map<number, number>,
-    parallelReworkSignals?: Array<{ step: PlanStep; agentResult: AgentResult; currentRework: number }>
+    parallelReworkSignals?: Array<{ step: PlanStep; agentResult: AgentResult; currentRework: number }>,
+    resumeReason?: string
   ): Promise<"completed" | "failed" | "rework"> {
     const budget = this.resolveBudget(run.ticket);
     const maxRework = budget.max_rework_cycles ?? this.platformConfig.defaults.max_rework_cycles;
@@ -366,6 +377,11 @@ export class OrchestrationService {
     const runtime = this.resolveRuntimeForAgent(step.agent);
     const cliFlags = this.platformConfig.defaults.agent_cli_flags;
     const containerResources = this.platformConfig.defaults.container_resources;
+    const resumeSession = resumeReason
+      ? await this.sessions.findLatestByAgent(workspacePath, run.run_id, step.agent)
+      : null;
+    const resumeSessionId = resumeSession?.session_id;
+
     const apiKey = this.resolveApiKey(modelConfig.provider, runtime);
 
     console.log(
@@ -435,6 +451,8 @@ export class OrchestrationService {
         plugins: agentDef?.plugins,
         cliFlags,
         containerResources,
+        resumeSessionId,
+        resumeReason,
       });
 
       console.log(`[step ${step.step_number}] Agent ${step.agent} finished: status=${result.agentResult.status}, tokens=${result.tokens_used}, cost=$${result.cost_usd.toFixed(2)}, duration=${result.duration_seconds.toFixed(1)}s`);
@@ -447,6 +465,8 @@ export class OrchestrationService {
       stepExec.container_id = result.container_id;
       stepExec.result = result.agentResult;
       stepExec.completed_at = new Date();
+
+      await this.recordRuntimeSession(workspacePath, run.run_id, step, currentRework + 1, runtime, result.container_id, resumeReason);
 
       // Update run totals
       run.total_tokens_used += result.tokens_used;
@@ -514,7 +534,7 @@ export class OrchestrationService {
             }
 
             reworkCounts.set(step.step_number, currentRework + 1);
-            return this.executeStep(run, step, workspacePath, reworkCounts);
+            return this.executeStep(run, step, workspacePath, reworkCounts, undefined, "quality_gate_retry");
           }
         }
 
@@ -578,13 +598,13 @@ export class OrchestrationService {
         // Execute the rework step(s) then retry this step
         for (const reworkStep of reworkPlan.steps) {
           const reworkResult = await this.executeStep(
-            run, reworkStep, workspacePath, reworkCounts
+            run, reworkStep, workspacePath, reworkCounts, undefined, "rework_plan"
           );
           if (reworkResult === "failed") return "failed";
         }
 
         // Retry the original step
-        return this.executeStep(run, step, workspacePath, reworkCounts);
+        return this.executeStep(run, step, workspacePath, reworkCounts, undefined, "rework_retry");
       }
 
       // Blocked or failed
@@ -604,6 +624,43 @@ export class OrchestrationService {
       });
       return "failed";
     }
+  }
+
+  private async recordRuntimeSession(
+    workspacePath: string,
+    runId: string,
+    step: PlanStep,
+    stepAttempt: number,
+    runtime: RuntimeConfig,
+    runtimeId: string,
+    resumeReason?: string
+  ): Promise<void> {
+    if (!this.isResumableRuntime(runtime)) return;
+    const sessionId = runtimeId.trim();
+    if (!this.isLikelySessionId(sessionId)) return;
+    await this.sessions.record(workspacePath, {
+      run_id: runId,
+      agent: step.agent,
+      step_number: step.step_number,
+      step_attempt: stepAttempt,
+      runtime_provider: runtime.provider,
+      runtime_mode: runtime.mode,
+      session_id: sessionId,
+      resume_reason: resumeReason,
+      updated_at: new Date().toISOString(),
+    });
+  }
+
+  private isResumableRuntime(runtime: RuntimeConfig): boolean {
+    if (runtime.mode === "container" || runtime.mode === "remote") return false;
+    return runtime.provider === "codex" || runtime.provider === "claude-code";
+  }
+
+  private isLikelySessionId(runtimeId: string): boolean {
+    if (!runtimeId) return false;
+    if (runtimeId.startsWith("local-")) return false;
+    if (runtimeId.startsWith("sprintfoundry-")) return false;
+    return true;
   }
 
   // ---- Human Review ----

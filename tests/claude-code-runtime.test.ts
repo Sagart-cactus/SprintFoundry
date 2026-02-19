@@ -131,6 +131,39 @@ describe("ClaudeCodeRuntime", () => {
     expect(stepDebug.runtime_provider).toBe("claude-code");
   });
 
+  it("passes resume to SDK query when resumeSessionId is provided", async () => {
+    await fs.writeFile(path.join(tmpDir, "CLAUDE.md"), "System prompt", "utf-8");
+    await fs.writeFile(path.join(tmpDir, ".agent-task.md"), "Task prompt", "utf-8");
+
+    (mockQuery as any).mockImplementationOnce(() => (async function* () {
+      yield {
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        duration_ms: 1,
+        duration_api_ms: 1,
+        num_turns: 1,
+        stop_reason: null,
+        total_cost_usd: 0,
+        usage: { input_tokens: 1, output_tokens: 1 },
+        modelUsage: {},
+        permission_denials: [],
+        result: "ok",
+        uuid: "00000000-0000-0000-0000-000000000001",
+        session_id: "sdk-session-456",
+      };
+    })());
+
+    const runtime = new ClaudeCodeRuntime();
+    await runtime.runStep({
+      ...makeContext(tmpDir),
+      resumeSessionId: "session-old-222",
+    });
+
+    const call = (mockQuery as any).mock.calls[0][0];
+    expect(call.options.resume).toBe("session-old-222");
+  });
+
   it("times out local SDK execution using AbortController", async () => {
     await fs.writeFile(path.join(tmpDir, "CLAUDE.md"), "System prompt", "utf-8");
     await fs.writeFile(path.join(tmpDir, ".agent-task.md"), "Task prompt", "utf-8");
@@ -217,5 +250,23 @@ describe("ClaudeCodeRuntime", () => {
     );
     expect(latestDebug.runtime_command).toBe("claude");
     expect(latestDebug.runtime_mode).toBe("local_process");
+  });
+
+  it("uses --resume for local_process mode when resumeSessionId is provided", async () => {
+    (mockRunProcess as any).mockResolvedValueOnce({
+      tokensUsed: 3,
+      runtimeId: "local-claude-cli-xyz",
+      stdout: "",
+      stderr: "",
+    });
+
+    const runtime = new ClaudeCodeRuntime();
+    await runtime.runStep({
+      ...makeContext(tmpDir, "local_process"),
+      resumeSessionId: "claude-session-123",
+    });
+
+    const args = (mockRunProcess as any).mock.calls[0][1] as string[];
+    expect(args.slice(0, 4)).toEqual(["--resume", "claude-session-123", "-p", expect.any(String)]);
   });
 });

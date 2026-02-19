@@ -41,6 +41,8 @@ export interface AgentRunConfig {
   plugins?: string[];
   cliFlags?: AgentCliFlags;
   containerResources?: ContainerResources;
+  resumeSessionId?: string;
+  resumeReason?: string;
 }
 
 interface WorkspacePrepResult {
@@ -113,6 +115,8 @@ export class AgentRunner {
       containerImage: agentDef?.container_image,
       codexHomeDir: prep.codexHomeDir,
       codexSkillNames: prep.codexSkillNames,
+      resumeSessionId: config.resumeSessionId,
+      resumeReason: config.resumeReason,
     });
 
     console.log(`[agent-runner] Runtime completed for ${config.agent}. Reading result...`);
