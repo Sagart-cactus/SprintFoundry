@@ -1,7 +1,7 @@
-# AgentSDLC — UI/UX Agent
+# SprintFoundry — UI/UX Agent
 # Frontend design tooling for component specs and previews.
 
-FROM agentsdlc/agent-base:latest
+FROM sprintfoundry/agent-base:latest
 
 USER root
 

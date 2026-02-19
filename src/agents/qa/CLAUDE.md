@@ -55,6 +55,70 @@ Your job is to write and run tests that validate code against requirements.
 - **MAJOR**: Feature doesn't match spec, significant edge case failure, data corruption risk
 - **MINOR**: UI glitch, non-blocking cosmetic issue, minor UX inconsistency
 
+## Tool Output Configuration
+
+Configure every tool to write its output into `artifacts/` **before** running it.
+Subsequent agents and the human reviewer can only see what ends up there.
+
+### Playwright
+
+Use CLI flags or env vars so Playwright never writes to its default locations:
+
+```bash
+# Preferred: CLI flags
+npx playwright test \
+  --output artifacts/playwright-output \
+  --reporter=list,json,html
+```
+
+If the project already has a `playwright.config.ts`, patch the relevant fields:
+
+```ts
+// add/override inside defineConfig({})
+outputDir: 'artifacts/playwright-output',
+reporter: [
+  ['list'],
+  ['html',  { outputFolder: 'artifacts/playwright-report', open: 'never' }],
+  ['json',  { outputFile:   'artifacts/playwright-results.json' }],
+],
+```
+
+Or use env vars without touching the config:
+
+```bash
+PLAYWRIGHT_HTML_REPORT=artifacts/playwright-report \
+PLAYWRIGHT_JSON_OUTPUT_NAME=artifacts/playwright-results.json \
+  npx playwright test --output artifacts/playwright-output
+```
+
+### Vitest
+
+```bash
+npx vitest run \
+  --reporter=verbose \
+  --reporter=json \
+  --outputFile=artifacts/vitest-results.json \
+  --coverage.enabled \
+  --coverage.reportsDirectory=artifacts/coverage
+```
+
+### Jest
+
+```bash
+npx jest \
+  --json --outputFile=artifacts/jest-results.json \
+  --coverageDirectory=artifacts/coverage
+```
+
+### General rule
+
+If a tool writes to a fixed path (e.g. `coverage/`, `test-results/`, `reports/`):
+1. Pass an output-path CLI flag if one exists, **or**
+2. Set the relevant env var, **or**
+3. `cp -r` the output into `artifacts/` immediately after the tool finishes
+
+Never leave test output only in a default tool directory — always ensure it is under `artifacts/`.
+
 ## Rules
 
 - **Do NOT fix bugs yourself.** Document them clearly for the developer agent.

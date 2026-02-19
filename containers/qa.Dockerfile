@@ -1,7 +1,7 @@
-# AgentSDLC — QA Agent
+# SprintFoundry — QA Agent
 # Testing environment with vitest, playwright, and browser dependencies.
 
-FROM agentsdlc/agent-base:latest
+FROM sprintfoundry/agent-base:latest
 
 USER root
 

@@ -80,6 +80,39 @@ func TestHandler(t *testing.T) {
 - **MAJOR**: Feature doesn't match spec, significant edge case failure, data corruption risk
 - **MINOR**: Cosmetic issue, non-blocking inconsistency, minor UX issue
 
+## Tool Output Configuration
+
+Save all test outputs to `artifacts/`. Subsequent agents and reviewers can only see what ends up there.
+
+### go test — JSON results
+
+```bash
+# Stream JSON output to artifacts
+go test -v -json -race ./... 2>&1 | tee artifacts/go-test-results.json
+```
+
+### go test — coverage
+
+```bash
+# Write coverage profile to artifacts
+go test -coverprofile=artifacts/coverage.out ./...
+
+# Generate HTML coverage report
+go tool cover -html=artifacts/coverage.out -o artifacts/coverage.html
+```
+
+### Combined (preferred)
+
+```bash
+go test -v -json -race -coverprofile=artifacts/coverage.out ./... \
+  2>&1 | tee artifacts/go-test-results.json
+go tool cover -html=artifacts/coverage.out -o artifacts/coverage.html
+```
+
+### General rule
+
+If any tool writes to a fixed default path, move or copy the output to `artifacts/` immediately after the tool finishes. Never leave test output only in a default directory.
+
 ## Rules
 
 - **Do NOT fix bugs yourself.** Document them clearly for the developer agent.

@@ -761,25 +761,80 @@ button {
   background: var(--surface);
 }
 
-.review-artifacts {
+.review-artifacts-list {
+  display: grid;
+  gap: 4px;
+}
+
+.review-artifacts-heading {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+
+.artifact-diff-details {
+  border: 1px solid #e8dcc8;
+  border-radius: 6px;
+  overflow: hidden;
   font-size: 0.75rem;
 }
 
-.review-artifacts summary {
+.artifact-diff-details summary {
   cursor: pointer;
+  padding: 6px 10px;
+  background: #fdf6ec;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  user-select: none;
+  list-style: none;
+}
+
+.artifact-diff-details summary::-webkit-details-marker { display: none; }
+
+.artifact-diff-details summary::before {
+  content: "▶";
+  font-size: 0.6rem;
   color: var(--muted);
-  font-weight: 600;
+  transition: transform 0.15s;
+  flex-shrink: 0;
 }
 
-.review-artifacts ul {
-  margin: 6px 0 0;
-  padding-left: 18px;
+.artifact-diff-details[open] summary::before {
+  transform: rotate(90deg);
 }
 
-.review-artifacts li {
-  margin-bottom: 3px;
+.artifact-path {
   font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
   font-size: 0.75rem;
+  color: #5a3a00;
+  word-break: break-all;
+}
+
+/* ── Diff viewer ── */
+
+.diff-view {
+  font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.7rem;
+  line-height: 1.5;
+  overflow-x: auto;
+  max-height: 400px;
+  overflow-y: auto;
+  border-top: 1px solid #e8dcc8;
+}
+
+.diff-ctx  { background: var(--surface); color: var(--text-secondary); padding: 0 10px; white-space: pre; }
+.diff-add  { background: #edfaef; color: #166534; padding: 0 10px; white-space: pre; }
+.diff-del  { background: #fef2f2; color: #991b1b; padding: 0 10px; white-space: pre; }
+.diff-hunk { background: #eff6ff; color: #1e40af; padding: 0 10px; white-space: pre; }
+.diff-meta { background: #f5f5f5; color: var(--muted); padding: 0 10px; white-space: pre; }
+
+.diff-loading {
+  padding: 10px;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-style: italic;
 }
 
 .review-feedback {

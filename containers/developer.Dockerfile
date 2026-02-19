@@ -1,7 +1,7 @@
-# AgentSDLC — Developer Agent
+# SprintFoundry — Developer Agent
 # Full-stack development environment with Node.js, TypeScript, and common tools.
 
-FROM agentsdlc/agent-base:latest
+FROM sprintfoundry/agent-base:latest
 
 USER root
 

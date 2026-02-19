@@ -1,7 +1,7 @@
-# AgentSDLC — Architecture Agent
+# SprintFoundry — Architecture Agent
 # Includes diagramming tools for architecture documentation.
 
-FROM agentsdlc/agent-base:latest
+FROM sprintfoundry/agent-base:latest
 
 USER root
 

@@ -3,11 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promises as fs } from "node:fs";
+import { execFile } from "node:child_process";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const publicV3Dir = path.join(__dirname, "public-v3");
-const runsRoot = process.env.AGENTSDLC_RUNS_ROOT ?? path.join(os.tmpdir(), "sprintfoundry");
+const runsRoot = process.env.SPRINTFOUNDRY_RUNS_ROOT ?? process.env.AGENTSDLC_RUNS_ROOT ?? path.join(os.tmpdir(), "sprintfoundry");
 
 const portArgIndex = process.argv.indexOf("--port");
 const portArg = portArgIndex !== -1 ? process.argv[portArgIndex + 1] : undefined;
@@ -431,6 +432,52 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (pathname === "/api/diff") {
+      const project = reqUrl.searchParams.get("project");
+      const run = reqUrl.searchParams.get("run");
+      const file = reqUrl.searchParams.get("file");
+      if (!project || !run || !file) {
+        sendJson(res, 400, { error: "Missing project, run, or file" });
+        return;
+      }
+      const runPath = safeJoin(runsRoot, project, run);
+      const absFile = path.resolve(runPath, file);
+      if (!absFile.startsWith(runPath + path.sep) && absFile !== runPath) {
+        sendJson(res, 400, { error: "Invalid file path" });
+        return;
+      }
+      const relFile = path.relative(runPath, absFile);
+      const git = (args) => new Promise((resolve) => {
+        execFile("git", args, { cwd: runPath, maxBuffer: 2 * 1024 * 1024 }, (err, stdout) => {
+          resolve({ ok: !err, stdout: stdout || "" });
+        });
+      });
+      // Try last-commit diff first
+      const diff = await git(["diff", "HEAD~1..HEAD", "--", relFile]);
+      if (diff.ok && diff.stdout.trim()) {
+        sendJson(res, 200, { diff: diff.stdout, kind: "diff" });
+        return;
+      }
+      // Fallback: show the file as entirely new (single-commit workspace)
+      const show = await git(["show", `HEAD:${relFile}`]);
+      if (show.ok && show.stdout) {
+        const body = show.stdout.split("\n").map((l) => `+${l}`).join("\n");
+        const synth = `--- /dev/null\n+++ b/${relFile}\n@@ -0,0 +1 @@\n${body}`;
+        sendJson(res, 200, { diff: synth, kind: "new" });
+        return;
+      }
+      // Final fallback: file is untracked (e.g. in .gitignore like artifacts/) — read directly
+      const raw = await fs.readFile(absFile, "utf-8").catch(() => null);
+      if (raw != null) {
+        const body = raw.split("\n").map((l) => `+${l}`).join("\n");
+        const synth = `--- /dev/null\n+++ b/${relFile}\n@@ -0,0 +1 @@\n${body}`;
+        sendJson(res, 200, { diff: synth, kind: "untracked" });
+        return;
+      }
+      sendJson(res, 200, { diff: "", kind: "none" });
+      return;
+    }
+
     if (pathname === "/api/reviews") {
       const project = reqUrl.searchParams.get("project");
       const run = reqUrl.searchParams.get("run");
@@ -439,7 +486,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const runPath = safeJoin(runsRoot, project, run);
-      const reviewDir = path.join(runPath, ".agentsdlc", "reviews");
+      const reviewDir = path.join(runPath, ".sprintfoundry", "reviews");
       const entries = await fs.readdir(reviewDir).catch(() => []);
       const reviews = [];
       for (const entry of entries) {
@@ -477,7 +524,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const runPath = safeJoin(runsRoot, project, runId);
-      const reviewDir = path.join(runPath, ".agentsdlc", "reviews");
+      const reviewDir = path.join(runPath, ".sprintfoundry", "reviews");
       await fs.mkdir(reviewDir, { recursive: true });
       const decisionPath = path.join(reviewDir, `${review_id}.decision.json`);
       await fs.writeFile(

@@ -5,6 +5,7 @@ dist/
 .claude/
 config/project.yaml
 .agentsdlc/
+.sprintfoundry/
 mnt/user-data/outputs/
 coverage/
 *.log

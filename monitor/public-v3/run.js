@@ -31,6 +31,10 @@ const state = {
   stepLogs: new Map(),
   // Step numbers whose logs are final (completed/failed) — skip re-fetching
   completedStepNums: new Set(),
+  // Track open artifact diff <details> across refreshes: "reviewId:filePath"
+  expandedReviewSections: new Set(),
+  // Cached diff content: "reviewId:filePath" → diff string
+  artifactDiffs: new Map(),
 };
 
 // ── Helpers (unchanged) ──
@@ -492,7 +496,38 @@ function plannerDetailId(item, index) {
   );
 }
 
-// ── Review panel (unchanged) ──
+// ── Review panel ──
+
+function renderDiff(diffText) {
+  if (!diffText || !diffText.trim()) return '<div class="empty">No diff available</div>';
+  const lines = diffText.split("\n");
+  const html = lines.map((line) => {
+    let cls = "diff-ctx";
+    if (line.startsWith("+++") || line.startsWith("---")) cls = "diff-meta";
+    else if (line.startsWith("@@")) cls = "diff-hunk";
+    else if (line.startsWith("+")) cls = "diff-add";
+    else if (line.startsWith("-")) cls = "diff-del";
+    return `<div class="${cls}">${escapeHtml(line)}</div>`;
+  }).join("");
+  return `<div class="diff-view">${html}</div>`;
+}
+
+async function loadArtifactDiff(reviewId, filePath, detailsEl) {
+  const key = `${reviewId}:${filePath}`;
+  state.artifactDiffs.set(key, null); // mark as loading
+  const contentEl = detailsEl?.querySelector(".diff-content");
+  if (contentEl) contentEl.innerHTML = '<div class="diff-loading">Loading diff\u2026</div>';
+  try {
+    const res = await fetchJson(
+      `/api/diff?project=${encodeURIComponent(project)}&run=${encodeURIComponent(run)}&file=${encodeURIComponent(filePath)}`
+    );
+    state.artifactDiffs.set(key, res.diff || "");
+    if (contentEl) contentEl.innerHTML = renderDiff(res.diff || "");
+  } catch (err) {
+    state.artifactDiffs.set(key, "");
+    if (contentEl) contentEl.innerHTML = `<div class="empty">Error: ${escapeHtml(String(err))}</div>`;
+  }
+}
 
 function renderReviewPanel(reviews) {
   if (!reviews.length) {
@@ -500,9 +535,34 @@ function renderReviewPanel(reviews) {
     return;
   }
 
+  // Don't wipe the DOM while the user is interacting with the panel
+  if (reviewPanel.contains(document.activeElement)) {
+    return;
+  }
+
+  // Preserve feedback text across re-renders
+  const savedFeedback = new Map();
+  reviewPanel.querySelectorAll("textarea[data-review-id]").forEach((el) => {
+    if (el.value) savedFeedback.set(el.dataset.reviewId, el.value);
+  });
+
   reviewPanel.innerHTML = reviews
     .map((review) => {
       const artifacts = Array.isArray(review.artifacts_to_review) ? review.artifacts_to_review : [];
+      const artifactItems = artifacts.map((a) => {
+        const key = `${review.review_id}:${a}`;
+        const isOpen = state.expandedReviewSections.has(key);
+        const cached = state.artifactDiffs.get(key);
+        const diffHtml = (isOpen && cached != null) ? renderDiff(cached) : '<div class="diff-loading">Loading diff\u2026</div>';
+        return `
+          <details class="artifact-diff-details" data-review-id="${escapeHtml(review.review_id)}" data-artifact-path="${escapeHtml(a)}" ${isOpen ? "open" : ""}>
+            <summary><span class="artifact-path">${escapeHtml(a)}</span></summary>
+            <div class="diff-content">${isOpen ? diffHtml : ""}</div>
+          </details>
+        `;
+      }).join("");
+
+      const feedback = savedFeedback.get(review.review_id) ?? "";
       return `
         <div class="review-card">
           <div class="review-header">
@@ -511,12 +571,12 @@ function renderReviewPanel(reviews) {
           </div>
           <div class="review-summary">${escapeHtml(review.summary || "No summary provided.")}</div>
           ${artifacts.length ? `
-            <details class="review-artifacts">
-              <summary>Artifacts to review (${artifacts.length})</summary>
-              <ul>${artifacts.map((a) => `<li>${escapeHtml(a)}</li>`).join("")}</ul>
-            </details>
+            <div class="review-artifacts-list">
+              <div class="review-artifacts-heading">Artifacts to review (${artifacts.length})</div>
+              ${artifactItems}
+            </div>
           ` : ""}
-          <textarea class="review-feedback" data-review-id="${escapeHtml(review.review_id)}" placeholder="Optional feedback..." rows="2"></textarea>
+          <textarea class="review-feedback" data-review-id="${escapeHtml(review.review_id)}" placeholder="Optional feedback..." rows="2">${escapeHtml(feedback)}</textarea>
           <div class="review-actions">
             <button type="button" class="review-btn approve" data-review-id="${escapeHtml(review.review_id)}" data-decision="approved">Approve</button>
             <button type="button" class="review-btn reject" data-review-id="${escapeHtml(review.review_id)}" data-decision="rejected">Reject</button>
@@ -559,6 +619,24 @@ reviewPanel.addEventListener("click", (event) => {
   if (!reviewId || !decision) return;
   void submitReviewDecision(reviewId, decision);
 });
+
+// Track artifact diff <details> open state + lazy-load diffs
+reviewPanel.addEventListener("toggle", (event) => {
+  const details = event.target;
+  if (!(details instanceof HTMLDetailsElement)) return;
+  const artifactPath = details.dataset.artifactPath;
+  const reviewId = details.dataset.reviewId;
+  if (!artifactPath || !reviewId) return;
+  const key = `${reviewId}:${artifactPath}`;
+  if (details.open) {
+    state.expandedReviewSections.add(key);
+    if (!state.artifactDiffs.has(key)) {
+      void loadArtifactDiff(reviewId, artifactPath, details);
+    }
+  } else {
+    state.expandedReviewSections.delete(key);
+  }
+}, true);
 
 // ── NEW: Sidebar rendering ──
 

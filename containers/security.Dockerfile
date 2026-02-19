@@ -1,7 +1,7 @@
-# AgentSDLC — Security Agent
+# SprintFoundry — Security Agent
 # Security scanning tools: npm audit, Snyk, TruffleHog, Trivy, semgrep.
 
-FROM agentsdlc/agent-base:latest
+FROM sprintfoundry/agent-base:latest
 
 USER root
 
