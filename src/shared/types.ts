@@ -98,7 +98,7 @@ export interface ContainerResources {
 }
 
 export type RuntimeProvider = "claude-code" | "codex";
-export type RuntimeMode = "local_process" | "container" | "remote";
+export type RuntimeMode = "local_process" | "local_sdk" | "container" | "remote";
 
 export interface RuntimeConfig {
   provider: RuntimeProvider;

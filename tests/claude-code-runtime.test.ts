@@ -17,11 +17,19 @@ vi.mock("child_process", async () => {
   };
 });
 
+vi.mock("../src/service/runtime/process-utils.js", async () => {
+  const actual = await vi.importActual<typeof import("../src/service/runtime/process-utils.js")>(
+    "../src/service/runtime/process-utils.js"
+  );
+  return { ...actual, runProcess: vi.fn() };
+});
+
 const { query: mockQuery } = await import("@anthropic-ai/claude-agent-sdk");
 const { spawn: mockSpawn } = await import("child_process");
+const { runProcess: mockRunProcess } = await import("../src/service/runtime/process-utils.js");
 const { ClaudeCodeRuntime } = await import("../src/service/runtime/claude-code-runtime.js");
 
-function makeContext(workspacePath: string, mode: "local_process" | "container" = "local_process"): RuntimeStepContext {
+function makeContext(workspacePath: string, mode: "local_sdk" | "local_process" | "container" = "local_sdk"): RuntimeStepContext {
   return {
     stepNumber: 1,
     stepAttempt: 1,
@@ -119,7 +127,7 @@ describe("ClaudeCodeRuntime", () => {
     expect(stdoutLog).toContain('"type":"result"');
     expect(stderrLog).toContain("sdk stderr line");
     expect(latestDebug.runtime_command).toBe("claude-sdk");
-    expect(latestDebug.runtime_mode).toBe("local_process");
+    expect(latestDebug.runtime_mode).toBe("local_sdk");
     expect(stepDebug.runtime_provider).toBe("claude-code");
   });
 
@@ -176,5 +184,38 @@ describe("ClaudeCodeRuntime", () => {
     expect(latestDebug.runtime_command).toBe("docker");
     expect(latestDebug.runtime_mode).toBe("container");
     expect(stepDebug.runtime_provider).toBe("claude-code");
+  });
+
+  it("uses CLI subprocess (not SDK) for local_process mode", async () => {
+    (mockRunProcess as any).mockResolvedValueOnce({
+      tokensUsed: 77,
+      runtimeId: "local-claude-cli-abc",
+      stdout: "",
+      stderr: "",
+    });
+
+    const runtime = new ClaudeCodeRuntime();
+    const result = await runtime.runStep(makeContext(tmpDir, "local_process"));
+
+    expect(mockQuery).not.toHaveBeenCalled();
+    expect(mockRunProcess).toHaveBeenCalledOnce();
+
+    const [command, args, opts] = (mockRunProcess as any).mock.calls[0];
+    expect(command).toBe("claude");
+    expect(args[0]).toBe("-p");
+    expect(args).toContain("--dangerously-skip-permissions");
+    expect(args).toContain("--max-budget-usd");
+    expect(opts.env.ANTHROPIC_API_KEY).toBe("sk-ant-test");
+    expect(opts.env.ANTHROPIC_MODEL).toBe("claude-sonnet-4-6");
+    expect(opts.env.EXTRA_ENV).toBe("yes");
+
+    expect(result.tokens_used).toBe(77);
+    expect(result.runtime_id).toBe("local-claude-cli-abc");
+
+    const latestDebug = JSON.parse(
+      await fs.readFile(path.join(tmpDir, ".claude-runtime.debug.json"), "utf-8")
+    );
+    expect(latestDebug.runtime_command).toBe("claude");
+    expect(latestDebug.runtime_mode).toBe("local_process");
   });
 });

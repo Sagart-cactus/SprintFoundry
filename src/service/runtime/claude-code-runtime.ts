@@ -3,7 +3,7 @@ import { spawn } from "child_process";
 import * as fs from "fs/promises";
 import { query, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentRuntime, RuntimeStepContext, RuntimeStepResult } from "./types.js";
-import { parseTokenUsage } from "./process-utils.js";
+import { runProcess, parseTokenUsage } from "./process-utils.js";
 
 export class ClaudeCodeRuntime implements AgentRuntime {
   async runStep(config: RuntimeStepContext): Promise<RuntimeStepResult> {
@@ -15,10 +15,70 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       );
       return this.runContainer(config);
     }
+    if (config.runtime.mode === "local_sdk") return this.runSdk(config);
     return this.runLocal(config);
   }
 
   private async runLocal(config: RuntimeStepContext): Promise<RuntimeStepResult> {
+    const args = this.buildCliArgs(config);
+    const paths = this.buildLogPaths(config);
+    await this.writeDebugFiles(paths, {
+      timestamp: new Date().toISOString(),
+      step_number: config.stepNumber,
+      step_attempt: config.stepAttempt,
+      runtime_mode: config.runtime.mode,
+      runtime_provider: config.runtime.provider,
+      runtime_command: "claude",
+      model: config.modelConfig.model,
+      api_key_present: Boolean(config.apiKey),
+    });
+    const result = await runProcess("claude", args, {
+      cwd: config.workspacePath,
+      env: {
+        ...process.env,
+        ...(config.apiKey ? { ANTHROPIC_API_KEY: config.apiKey } : {}),
+        ANTHROPIC_MODEL: config.modelConfig.model,
+        ...(config.runtime.env ?? {}),
+      },
+      timeoutMs: config.timeoutMinutes * 60 * 1000,
+      parseTokensFromStdout: true,
+      outputFiles: {
+        stdoutPath: paths.stepStdoutPath,
+        stderrPath: paths.stepStderrPath,
+      },
+    });
+    await this.copyLatestLogs(paths.stepStdoutPath, paths.stepStderrPath, paths.latestStdoutPath, paths.latestStderrPath);
+    return {
+      tokens_used: result.tokensUsed,
+      runtime_id: result.runtimeId,
+    };
+  }
+
+  private buildCliArgs(config: RuntimeStepContext): string[] {
+    const flags = config.cliFlags ?? {};
+    const taskPrompt = this.readTaskPrompt();
+    const args: string[] = ["-p", taskPrompt];
+    args.push("--output-format", flags.output_format ?? "json");
+    if (flags.skip_permissions !== false) {
+      args.push("--dangerously-skip-permissions");
+    }
+    const budgetUsd = flags.max_budget_usd;
+    if (budgetUsd !== undefined && budgetUsd > 0) {
+      args.push("--max-budget-usd", String(budgetUsd));
+    }
+    if (config.plugins && config.plugins.length > 0) {
+      for (const pluginPath of config.plugins) {
+        args.push("--plugin-dir", pluginPath);
+      }
+    }
+    return args;
+  }
+
+  private readTaskPrompt(): string {
+    return `Read task details in .agent-task.md and follow CLAUDE.md.`;
+  }
+
+  private async runSdk(config: RuntimeStepContext): Promise<RuntimeStepResult> {
     const paths = this.buildLogPaths(config);
     const prompts = await this.readPrompts(config.workspacePath);
     const flags = config.cliFlags ?? {};
