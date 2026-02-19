@@ -43,6 +43,8 @@ export interface RuntimeStepContext {
 export interface RuntimeStepResult {
   tokens_used: number;
   runtime_id: string;
+  cost_usd?: number;
+  usage?: Record<string, number>;
 }
 
 export interface AgentRuntime {

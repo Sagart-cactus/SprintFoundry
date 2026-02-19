@@ -1,6 +1,7 @@
 import * as path from "path";
 import { spawn } from "child_process";
 import * as fs from "fs/promises";
+import { query, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentRuntime, RuntimeStepContext, RuntimeStepResult } from "./types.js";
 import { runProcess, parseTokenUsage } from "./process-utils.js";
 
@@ -14,32 +15,8 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       );
       return this.runContainer(config);
     }
+    if (config.runtime.mode === "local_sdk") return this.runSdk(config);
     return this.runLocal(config);
-  }
-
-  private buildCliArgs(config: RuntimeStepContext): string[] {
-    const flags = config.cliFlags ?? {};
-    const taskPrompt = this.readTaskPrompt(config);
-    const args: string[] = ["-p", taskPrompt];
-
-    args.push("--output-format", flags.output_format ?? "json");
-    if (flags.skip_permissions !== false) {
-      args.push("--dangerously-skip-permissions");
-    }
-    const budgetUsd = flags.max_budget_usd;
-    if (budgetUsd !== undefined && budgetUsd > 0) {
-      args.push("--max-budget-usd", String(budgetUsd));
-    }
-    if (config.plugins && config.plugins.length > 0) {
-      for (const pluginPath of config.plugins) {
-        args.push("--plugin-dir", pluginPath);
-      }
-    }
-    return args;
-  }
-
-  private readTaskPrompt(config: RuntimeStepContext): string {
-    return `Read task details in .agent-task.md and follow CLAUDE.md.`;
   }
 
   private async runLocal(config: RuntimeStepContext): Promise<RuntimeStepResult> {
@@ -61,6 +38,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
         ...process.env,
         ...(config.apiKey ? { ANTHROPIC_API_KEY: config.apiKey } : {}),
         ANTHROPIC_MODEL: config.modelConfig.model,
+        ...(config.runtime.env ?? {}),
       },
       timeoutMs: config.timeoutMinutes * 60 * 1000,
       parseTokensFromStdout: true,
@@ -74,6 +52,162 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       tokens_used: result.tokensUsed,
       runtime_id: result.runtimeId,
     };
+  }
+
+  private buildCliArgs(config: RuntimeStepContext): string[] {
+    const flags = config.cliFlags ?? {};
+    const taskPrompt = this.readTaskPrompt();
+    const args: string[] = ["-p", taskPrompt];
+    args.push("--output-format", flags.output_format ?? "json");
+    if (flags.skip_permissions !== false) {
+      args.push("--dangerously-skip-permissions");
+    }
+    const budgetUsd = flags.max_budget_usd;
+    if (budgetUsd !== undefined && budgetUsd > 0) {
+      args.push("--max-budget-usd", String(budgetUsd));
+    }
+    if (config.plugins && config.plugins.length > 0) {
+      for (const pluginPath of config.plugins) {
+        args.push("--plugin-dir", pluginPath);
+      }
+    }
+    return args;
+  }
+
+  private readTaskPrompt(): string {
+    return `Read task details in .agent-task.md and follow CLAUDE.md.`;
+  }
+
+  private async runSdk(config: RuntimeStepContext): Promise<RuntimeStepResult> {
+    const paths = this.buildLogPaths(config);
+    const prompts = await this.readPrompts(config.workspacePath);
+    const flags = config.cliFlags ?? {};
+    const env = {
+      ...process.env,
+      ...(config.apiKey ? { ANTHROPIC_API_KEY: config.apiKey } : {}),
+      ANTHROPIC_MODEL: config.modelConfig.model,
+      ...(config.runtime.env ?? {}),
+    };
+    await this.writeDebugFiles(paths, {
+      timestamp: new Date().toISOString(),
+      step_number: config.stepNumber,
+      step_attempt: config.stepAttempt,
+      runtime_mode: config.runtime.mode,
+      runtime_provider: config.runtime.provider,
+      runtime_command: "claude-sdk",
+      model: config.modelConfig.model,
+      api_key_present: Boolean(config.apiKey),
+    });
+    const timeoutMs = config.timeoutMinutes * 60 * 1000;
+    const timeoutAbortController = new AbortController();
+    const timeout = setTimeout(() => {
+      timeoutAbortController.abort();
+    }, timeoutMs);
+
+    let runtimeId = `local-claude-sdk-${Date.now()}`;
+    let stdout = "";
+    let stderr = "";
+    let finalResultMessage: SDKResultMessage | null = null;
+
+    try {
+      for await (const message of query({
+        prompt: prompts.taskPrompt,
+        options: {
+          cwd: config.workspacePath,
+          model: config.modelConfig.model,
+          env,
+          systemPrompt: prompts.systemPrompt,
+          maxBudgetUsd:
+            flags.max_budget_usd !== undefined && flags.max_budget_usd > 0
+              ? flags.max_budget_usd
+              : undefined,
+          permissionMode: flags.skip_permissions !== false ? "bypassPermissions" : undefined,
+          allowDangerouslySkipPermissions: flags.skip_permissions !== false ? true : undefined,
+          plugins: config.plugins?.map((pluginPath) => ({ type: "local" as const, path: pluginPath })),
+          abortController: timeoutAbortController,
+          stderr: (data) => {
+            stderr += data;
+          },
+        },
+      })) {
+        stdout += `${JSON.stringify(message)}\n`;
+        if ("session_id" in message && typeof message.session_id === "string") {
+          runtimeId = message.session_id;
+        }
+        if (message.type === "result") {
+          finalResultMessage = message;
+        }
+      }
+    } catch (error) {
+      if (!timeoutAbortController.signal.aborted) {
+        throw error;
+      }
+    } finally {
+      clearTimeout(timeout);
+      await Promise.all([
+        fs.writeFile(paths.stepStdoutPath, stdout, "utf-8"),
+        fs.writeFile(paths.stepStderrPath, stderr, "utf-8"),
+      ]);
+      await this.copyLatestLogs(paths.stepStdoutPath, paths.stepStderrPath, paths.latestStdoutPath, paths.latestStderrPath);
+    }
+
+    if (timeoutAbortController.signal.aborted && !finalResultMessage) {
+      throw new Error("Process claude timed out");
+    }
+    if (!finalResultMessage) {
+      throw new Error("Claude SDK did not return a result message");
+    }
+    if (finalResultMessage.subtype !== "success") {
+      const details = finalResultMessage.errors.join("; ");
+      throw new Error(`Process claude exited with code 1. ${details}`);
+    }
+
+    const usage = this.normalizeUsage(finalResultMessage.usage);
+    const tokensUsed = this.tokensFromUsage(usage);
+    return {
+      tokens_used: tokensUsed,
+      runtime_id: runtimeId,
+      cost_usd: finalResultMessage.total_cost_usd,
+      usage,
+    };
+  }
+
+  private async readPrompts(workspacePath: string): Promise<{ systemPrompt: string; taskPrompt: string }> {
+    const [systemPrompt, taskPrompt] = await Promise.all([
+      fs.readFile(path.join(workspacePath, "CLAUDE.md"), "utf-8"),
+      fs.readFile(path.join(workspacePath, ".agent-task.md"), "utf-8"),
+    ]);
+    return { systemPrompt, taskPrompt };
+  }
+
+  private normalizeUsage(usage: Record<string, unknown>): Record<string, number> {
+    const normalized: Record<string, number> = {};
+    for (const [key, value] of Object.entries(usage)) {
+      const num = this.toNumber(value);
+      if (num !== null) {
+        normalized[key] = num;
+      }
+    }
+    return normalized;
+  }
+
+  private tokensFromUsage(usage: Record<string, number>): number {
+    const total = usage.total_tokens;
+    if (typeof total === "number" && Number.isFinite(total)) {
+      return total;
+    }
+    const input = usage.input_tokens ?? usage.inputTokens ?? 0;
+    const output = usage.output_tokens ?? usage.outputTokens ?? 0;
+    return input + output;
+  }
+
+  private toNumber(value: unknown): number | null {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string") {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+    return null;
   }
 
   private async runContainer(config: RuntimeStepContext): Promise<RuntimeStepResult> {

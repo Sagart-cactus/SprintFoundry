@@ -16,7 +16,12 @@ vi.mock("child_process", () => {
   };
 });
 
+vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
+  query: vi.fn(),
+}));
+
 const { spawn: mockSpawn } = await import("child_process");
+const { query: mockClaudeSdkQuery } = await import("@anthropic-ai/claude-agent-sdk");
 
 const { AgentRunner } = await import("../src/service/agent-runner.js");
 
@@ -56,6 +61,36 @@ function makeRunConfig(overrides?: Partial<AgentRunConfig>): AgentRunConfig {
     plugins: overrides?.plugins,
     cliFlags: overrides?.cliFlags,
     containerResources: overrides?.containerResources,
+  };
+}
+
+async function* makeSdkSuccessStream(tokens = 500) {
+  yield {
+    type: "system",
+    subtype: "init",
+    session_id: "sdk-session-1",
+  };
+  yield {
+    type: "result",
+    subtype: "success",
+    is_error: false,
+    duration_ms: 1,
+    duration_api_ms: 1,
+    num_turns: 1,
+    stop_reason: null,
+    total_cost_usd: 0.123,
+    usage: {
+      input_tokens: Math.floor(tokens / 2),
+      output_tokens: tokens - Math.floor(tokens / 2),
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 0,
+      server_tool_use: { web_search_requests: 0 },
+    },
+    modelUsage: {},
+    permission_denials: [],
+    result: "ok",
+    uuid: "00000000-0000-0000-0000-000000000000",
+    session_id: "sdk-session-1",
   };
 }
 
@@ -239,28 +274,19 @@ describe("AgentRunner", () => {
     expect(cost).toBe(3.0); // default $3 per 1M
   });
 
-  it("spawnLocalClaudeCode called when SPRINTFOUNDRY_USE_CONTAINERS unset", async () => {
+  it("uses Claude SDK query() for local claude-code runtime", async () => {
     delete process.env.SPRINTFOUNDRY_USE_CONTAINERS;
-
-    const proc = makeFakeProcess(
-      JSON.stringify({ usage: { total_tokens: 500 } })
-    );
-    (mockSpawn as any).mockReturnValueOnce(proc);
+    (mockClaudeSdkQuery as any).mockReturnValueOnce(makeSdkSuccessStream(500));
 
     const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig());
-
-    // Mock prepareWorkspace and readAgentResult
-    (runner as any).prepareWorkspace = vi.fn().mockResolvedValue(undefined);
+    const workspacePath = path.join(tmpDir, "workspace-local-sdk");
+    await fs.mkdir(workspacePath, { recursive: true });
     (runner as any).readAgentResult = vi.fn().mockResolvedValue(makeResult());
 
-    const result = await runner.run(makeRunConfig());
-
-    expect(mockSpawn).toHaveBeenCalledWith(
-      "claude",
-      expect.any(Array),
-      expect.any(Object)
-    );
+    const result = await runner.run(makeRunConfig({ workspacePath }));
+    expect(mockClaudeSdkQuery).toHaveBeenCalledTimes(1);
     expect(result.agentResult.status).toBe("complete");
+    expect(result.cost_usd).toBe(0.123);
   });
 
   it("spawnContainer constructs correct docker args with volume mounts", async () => {
@@ -298,36 +324,53 @@ describe("AgentRunner", () => {
 
   it("timeout kills the process", async () => {
     delete process.env.SPRINTFOUNDRY_USE_CONTAINERS;
-
-    // Create a process that never closes (we'll trigger timeout)
-    const proc = new EventEmitter() as any;
-    proc.stdout = new EventEmitter();
-    proc.stderr = new EventEmitter();
-    proc.stdin = { write: vi.fn(), end: vi.fn() };
-    proc.pid = 99999;
-    proc.kill = vi.fn();
-
-    (mockSpawn as any).mockReturnValueOnce(proc);
+    (mockClaudeSdkQuery as any).mockImplementationOnce((params: any) => (async function* () {
+      await new Promise((_, reject) => {
+        const signal = params.options.abortController.signal as AbortSignal;
+        signal.addEventListener("abort", () => reject(new Error("aborted")));
+      });
+    })());
 
     const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig());
-    (runner as any).prepareWorkspace = vi.fn().mockResolvedValue(undefined);
-
-    const config = makeRunConfig({ timeoutMinutes: 0.001 }); // ~60ms timeout
+    const workspacePath = path.join(tmpDir, "workspace-timeout-sdk");
+    await fs.mkdir(workspacePath, { recursive: true });
+    const config = makeRunConfig({ timeoutMinutes: 0.001, workspacePath }); // ~60ms timeout
 
     await expect(runner.run(config)).rejects.toThrow(/timed out/);
-    expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(mockClaudeSdkQuery).toHaveBeenCalledTimes(1);
   });
 
   it("run rejects when local claude exits with non-zero code", async () => {
     delete process.env.SPRINTFOUNDRY_USE_CONTAINERS;
-
-    const proc = makeFakeProcess("error output", 1);
-    (mockSpawn as any).mockReturnValueOnce(proc);
+    (mockClaudeSdkQuery as any).mockReturnValueOnce((async function* () {
+      yield {
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        duration_ms: 1,
+        duration_api_ms: 1,
+        num_turns: 1,
+        stop_reason: null,
+        total_cost_usd: 0,
+        usage: {
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+          server_tool_use: { web_search_requests: 0 },
+        },
+        modelUsage: {},
+        permission_denials: [],
+        errors: ["simulated failure"],
+        uuid: "00000000-0000-0000-0000-000000000000",
+        session_id: "sdk-session-err",
+      };
+    })());
 
     const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig());
-    (runner as any).prepareWorkspace = vi.fn().mockResolvedValue(undefined);
-
-    await expect(runner.run(makeRunConfig())).rejects.toThrow(/exited with code 1/);
+    const workspacePath = path.join(tmpDir, "workspace-local-error-sdk");
+    await fs.mkdir(workspacePath, { recursive: true });
+    await expect(runner.run(makeRunConfig({ workspacePath }))).rejects.toThrow(/exited with code 1/);
   });
 
   it("run rejects when docker exits with non-zero code", async () => {
@@ -377,6 +420,7 @@ describe("AgentRunner", () => {
     const spawnOpts = (mockSpawn as any).mock.calls[0][2];
     expect(spawnOpts.env.CODEX_HOME).toBe("/tmp/codex-home-test");
     expect(result.tokens_used).toBe(321);
+    expect(result.cost_usd).toBeCloseTo(0.000963, 8);
   });
 
   it("prepareWorkspace stages codex skills and appends AGENTS.md skill section", async () => {
