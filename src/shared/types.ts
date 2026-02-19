@@ -168,6 +168,7 @@ export interface BudgetConfig {
   per_agent_tokens: number; // max tokens per single agent run
   per_task_total_tokens: number; // max tokens across all agents for one task
   per_task_max_cost_usd: number; // hard cost cap
+  max_rework_cycles?: number; // overrides platform default when set by a rule
 }
 
 export interface TimeoutConfig {
