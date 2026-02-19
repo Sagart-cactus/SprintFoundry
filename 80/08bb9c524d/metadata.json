@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "8008bb9c524d",
+  "strategy": "auto-commit",
+  "branch": "feat/overhaul-ui",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "monitor/public-v3/app.js",
+    "monitor/public-v3/run.html",
+    "monitor/public-v3/run.js",
+    "monitor/public-v3/styles.css",
+    "monitor/server.mjs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/80/08bb9c524d/0/metadata.json",
+      "transcript": "/80/08bb9c524d/0/full.jsonl",
+      "context": "",
+      "content_hash": "/80/08bb9c524d/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 42,
+    "cache_creation_tokens": 109441,
+    "cache_read_tokens": 3209649,
+    "output_tokens": 7634,
+    "api_call_count": 40
+  }
+}
