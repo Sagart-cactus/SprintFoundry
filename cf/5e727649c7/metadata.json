@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "cf5e727649c7",
+  "strategy": "auto-commit",
+  "branch": "feat/spr-5-default-monitor-to-v3-remove-v1-and-v2-routes-asse",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".agent-result.json",
+    "artifacts/bugs.md",
+    "artifacts/test-report.json",
+    "tests/api/monitor-routes.test.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/cf/5e727649c7/0/metadata.json",
+      "transcript": "/cf/5e727649c7/0/full.jsonl",
+      "context": "",
+      "content_hash": "/cf/5e727649c7/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 36,
+    "cache_creation_tokens": 34305,
+    "cache_read_tokens": 1372283,
+    "output_tokens": 370,
+    "api_call_count": 34
+  }
+}

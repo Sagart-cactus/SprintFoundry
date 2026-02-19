@@ -1,0 +1,6 @@
+Created `config/project-sprintfoundry-claude.yaml`. This config uses platform defaults (claude-sonnet-4-5 model, claude-code runtime, local_process mode) for all 7 agents, with Linear as the ticket source.
+
+Usage:
+```bash
+pnpm dev -- --source linear --ticket LIN-423 --project sprintfoundry-claude
+```
