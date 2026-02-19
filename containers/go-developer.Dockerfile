@@ -1,4 +1,4 @@
-FROM agentsdlc/agent-base:latest
+FROM sprintfoundry/agent-base:latest
 
 # Go 1.23
 RUN apt-get update && apt-get install -y --no-install-recommends \

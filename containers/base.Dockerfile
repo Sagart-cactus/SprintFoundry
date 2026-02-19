@@ -1,4 +1,4 @@
-# AgentSDLC — Base Agent Image
+# SprintFoundry — Base Agent Image
 # All agent containers inherit from this image.
 # Provides Claude Code CLI, Node.js, and common utilities.
 

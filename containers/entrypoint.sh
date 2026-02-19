@@ -4,19 +4,19 @@ set -euo pipefail
 # AgentSDLC — Shared Agent Entrypoint
 # Reads config from env vars and runs Claude Code on the task.
 
-echo "[agentsdlc] Starting ${AGENT_TYPE:-unknown} agent..."
+echo "[sprintfoundry] Starting ${AGENT_TYPE:-unknown} agent..."
 
 # Ensure CLAUDE.md is in the workspace root
 if [ -f /workspace/CLAUDE.md ]; then
-  echo "[agentsdlc] CLAUDE.md found in workspace"
+  echo "[sprintfoundry] CLAUDE.md found in workspace"
 else
-  echo "[agentsdlc] ERROR: No CLAUDE.md found in /workspace"
+  echo "[sprintfoundry] ERROR: No CLAUDE.md found in /workspace"
   exit 1
 fi
 
 # Ensure task file exists
 if [ ! -f /workspace/.agent-task.md ]; then
-  echo "[agentsdlc] ERROR: No .agent-task.md found in /workspace"
+  echo "[sprintfoundry] ERROR: No .agent-task.md found in /workspace"
   exit 1
 fi
 
@@ -49,26 +49,26 @@ if [ -n "$PLUGIN_DIRS" ]; then
   for dir in "${DIRS[@]}"; do
     if [ -d "$dir" ]; then
       CLI_ARGS+=(--plugin-dir "$dir")
-      echo "[agentsdlc] Plugin: $dir"
+      echo "[sprintfoundry] Plugin: $dir"
     else
-      echo "[agentsdlc] WARNING: Plugin directory not found: $dir"
+      echo "[sprintfoundry] WARNING: Plugin directory not found: $dir"
     fi
   done
 fi
 
-echo "[agentsdlc] Running Claude Code..."
+echo "[sprintfoundry] Running Claude Code..."
 
 # Run Claude Code with the dynamically built args
 claude "${CLI_ARGS[@]}"
 
-echo "[agentsdlc] Agent complete."
+echo "[sprintfoundry] Agent complete."
 
 # Verify result file was produced
 if [ -f /workspace/.agent-result.json ]; then
-  echo "[agentsdlc] Result:"
+  echo "[sprintfoundry] Result:"
   cat /workspace/.agent-result.json | jq .status
 else
-  echo "[agentsdlc] WARNING: Agent did not produce .agent-result.json"
+  echo "[sprintfoundry] WARNING: Agent did not produce .agent-result.json"
   # Create a failure result so the orchestrator knows what happened
   cat > /workspace/.agent-result.json << 'RESULT'
 {

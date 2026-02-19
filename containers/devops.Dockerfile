@@ -1,7 +1,7 @@
-# AgentSDLC — DevOps Agent
+# SprintFoundry — DevOps Agent
 # CI/CD and infrastructure tooling.
 
-FROM agentsdlc/agent-base:latest
+FROM sprintfoundry/agent-base:latest
 
 USER root
 
