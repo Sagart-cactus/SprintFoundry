@@ -39,12 +39,13 @@ const PKG_FILE = path.join(ROOT, "package.json");
 
 // ---- Helpers (inlined to avoid triggering main() in the PoC) ----
 
-function computeLatencyStats(samples: number[]): {
+function computeLatencyStats(samples: number[], isSimulated: boolean): {
   samples: number[];
   min_ms: number;
   mean_ms: number;
   max_ms: number;
   p95_ms: number;
+  isSimulated: boolean;
 } {
   const sorted = [...samples].sort((a, b) => a - b);
   const sum = sorted.reduce((a, b) => a + b, 0);
@@ -58,6 +59,7 @@ function computeLatencyStats(samples: number[]): {
     mean_ms: Math.round(sum / sorted.length),
     max_ms: sorted[sorted.length - 1]!,
     p95_ms: sorted[p95Index]!,
+    isSimulated,
   };
 }
 
@@ -66,7 +68,8 @@ function assertPluginLoaded(
   expectedName: string,
   expectedPath: string
 ): boolean {
-  return plugins.some((p) => p.path === expectedPath || p.name === expectedName);
+  // Both path AND name must match to avoid false positives from same-named plugins at different paths.
+  return plugins.some((p) => p.path === expectedPath && p.name === expectedName);
 }
 
 // ---- AC3: package.json dependencies ----
@@ -262,30 +265,30 @@ describe("AC2/AC4/AC5: FINDINGS.md required sections and content", () => {
 
 describe("AC6: computeLatencyStats correctness (multi-run benchmark logic)", () => {
   it("returns correct min from sample set", () => {
-    const stats = computeLatencyStats([332, 284, 291, 301]);
+    const stats = computeLatencyStats([332, 284, 291, 301], false);
     expect(stats.min_ms).toBe(284);
   });
 
   it("returns correct max from sample set", () => {
-    const stats = computeLatencyStats([332, 284, 291, 301]);
+    const stats = computeLatencyStats([332, 284, 291, 301], false);
     expect(stats.max_ms).toBe(332);
   });
 
   it("returns correct mean from sample set", () => {
-    const stats = computeLatencyStats([332, 284, 291, 301]);
+    const stats = computeLatencyStats([332, 284, 291, 301], false);
     // sum = 1208, mean = 1208/4 = 302
     expect(stats.mean_ms).toBe(302);
   });
 
   it("returns correct p95 for 4 samples (should be max element)", () => {
-    const stats = computeLatencyStats([332, 284, 291, 301]);
+    const stats = computeLatencyStats([332, 284, 291, 301], false);
     // sorted: [284, 291, 301, 332]
     // p95 index = ceil(4 * 0.95) - 1 = ceil(3.8) - 1 = 4 - 1 = 3 → sorted[3] = 332
     expect(stats.p95_ms).toBe(332);
   });
 
   it("handles single sample correctly", () => {
-    const stats = computeLatencyStats([350]);
+    const stats = computeLatencyStats([350], false);
     expect(stats.min_ms).toBe(350);
     expect(stats.mean_ms).toBe(350);
     expect(stats.max_ms).toBe(350);
@@ -294,13 +297,18 @@ describe("AC6: computeLatencyStats correctness (multi-run benchmark logic)", () 
 
   it("preserves original sample order in samples array", () => {
     const input = [332, 284, 291, 301];
-    const stats = computeLatencyStats(input);
+    const stats = computeLatencyStats(input, false);
     expect(stats.samples).toEqual(input);
+  });
+
+  it("propagates isSimulated flag correctly", () => {
+    expect(computeLatencyStats([300], true).isSimulated).toBe(true);
+    expect(computeLatencyStats([300], false).isSimulated).toBe(false);
   });
 
   it("handles 10 samples — p95 is 10th element (index 9)", () => {
     const samples = [100, 110, 120, 130, 140, 150, 160, 170, 180, 950];
-    const stats = computeLatencyStats(samples);
+    const stats = computeLatencyStats(samples, false);
     // sorted: [100, 110, 120, 130, 140, 150, 160, 170, 180, 950]
     // p95 index = ceil(10 * 0.95) - 1 = ceil(9.5) - 1 = 10 - 1 = 9 → 950
     expect(stats.p95_ms).toBe(950);
@@ -313,14 +321,14 @@ describe("AC7: assertPluginLoaded correctness", () => {
   const PLUGIN_DIR = "/some/plugin/path";
   const PLUGIN_NAME = "code-review";
 
-  it("returns true when plugin matches by path", () => {
-    const plugins = [{ name: "other", path: PLUGIN_DIR }];
-    expect(assertPluginLoaded(plugins, PLUGIN_NAME, PLUGIN_DIR)).toBe(true);
+  it("returns false when plugin matches only by path (name differs) — prevents false positives", () => {
+    const plugins = [{ name: "other-plugin", path: PLUGIN_DIR }];
+    expect(assertPluginLoaded(plugins, PLUGIN_NAME, PLUGIN_DIR)).toBe(false);
   });
 
-  it("returns true when plugin matches by name", () => {
+  it("returns false when plugin matches only by name (path differs) — prevents false positives", () => {
     const plugins = [{ name: PLUGIN_NAME, path: "/different/path" }];
-    expect(assertPluginLoaded(plugins, PLUGIN_NAME, PLUGIN_DIR)).toBe(true);
+    expect(assertPluginLoaded(plugins, PLUGIN_NAME, PLUGIN_DIR)).toBe(false);
   });
 
   it("returns false when no plugin matches", () => {

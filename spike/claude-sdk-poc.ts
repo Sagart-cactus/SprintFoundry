@@ -95,6 +95,8 @@ interface LatencyStats {
   mean_ms: number;
   max_ms: number;
   p95_ms: number;
+  /** true when numbers come from stubQueryGen rather than real query() calls */
+  isSimulated: boolean;
 }
 
 // ---- Helpers ----
@@ -103,7 +105,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function computeLatencyStats(samples: number[]): LatencyStats {
+function computeLatencyStats(samples: number[], isSimulated: boolean): LatencyStats {
   const sorted = [...samples].sort((a, b) => a - b);
   const sum = sorted.reduce((a, b) => a + b, 0);
   // p95 index (0-based): ceil(n * 0.95) - 1, clamped to last element
@@ -117,6 +119,7 @@ function computeLatencyStats(samples: number[]): LatencyStats {
     mean_ms: Math.round(sum / sorted.length),
     max_ms: sorted[sorted.length - 1]!,
     p95_ms: sorted[p95Index]!,
+    isSimulated,
   };
 }
 
@@ -182,17 +185,34 @@ async function* stubQueryGen(
 // using the stub generator.  No real API key required.
 // Cold run simulates JIT + page-cache cold; warm runs reflect steady-state.
 
-async function measureFirstMessageLatency(isColdRun: boolean): Promise<number> {
-  // Simulate realistic startup delays:
-  //   Cold run:  process fork (~20ms) + Node bootstrap (~320ms, incl. JIT warm-up) + SDK handshake (~10ms)
-  //   Warm run:  process fork (~20ms) + Node bootstrap (~250ms, already in page cache) + SDK handshake (~10ms)
+// Measure time from query() call to the first system/init message using a
+// real SDK invocation.  system/init is emitted before any model inference, so
+// this captures process-fork + Node bootstrap cost with ~$0 budget impact.
+// We abort (break) as soon as the first message arrives.
+async function measureFirstMessageLatencyReal(): Promise<number> {
+  const start = Date.now();
+  for await (const msg of query({
+    prompt: "exit",
+    options: {
+      maxBudgetUsd: 0.001,
+      permissionMode: "bypassPermissions" as const,
+      allowDangerouslySkipPermissions: true,
+      cwd: os.tmpdir(),
+    },
+  })) {
+    if (msg.type === "system") {
+      return Date.now() - start;
+    }
+  }
+  return Date.now() - start;
+}
+
+// Stub fallback used when ANTHROPIC_API_KEY is absent.
+async function measureFirstMessageLatencyStub(isColdRun: boolean): Promise<number> {
   const baseDelay = isColdRun ? 350 : 280;
   const jitter = Math.floor(Math.random() * 60) - 30; // ±30ms
-  const simulatedDelay = baseDelay + jitter;
-
   const start = Date.now();
-  for await (const _msg of stubQueryGen(simulatedDelay)) {
-    // Return on first message (system/init)
+  for await (const _msg of stubQueryGen(baseDelay + jitter)) {
     return Date.now() - start;
   }
   return -1;
@@ -200,32 +220,44 @@ async function measureFirstMessageLatency(isColdRun: boolean): Promise<number> {
 
 async function runLatencyBenchmark(): Promise<LatencyStats> {
   const totalRuns = 1 + WARM_RUNS;
-  console.log(
-    `\n[poc] === Latency Benchmark (stub mode — no API key required) ===`
-  );
+  const usingReal = Boolean(API_KEY);
+  const modeLabel = usingReal
+    ? "empirical — real query() calls, breaks after system/init"
+    : "SIMULATED — stub generator, no real API calls";
+
+  console.log(`\n[poc] === Latency Benchmark (${modeLabel}) ===`);
   console.log(
     `[poc] Methodology: 1 cold run + ${WARM_RUNS} warm runs (n=${totalRuns})`
   );
   console.log(
     `[poc] Metric: time from query() call to first system/init message`
   );
+  if (!usingReal) {
+    console.log(
+      `[poc] NOTE: Set ANTHROPIC_API_KEY for empirical measurements.`
+    );
+  }
 
   const latencies: number[] = [];
 
   process.stdout.write(`[poc] Run 1 (cold): `);
-  const cold = await measureFirstMessageLatency(true);
+  const cold = usingReal
+    ? await measureFirstMessageLatencyReal()
+    : await measureFirstMessageLatencyStub(true);
   latencies.push(cold);
   console.log(`${cold}ms`);
 
   for (let i = 0; i < WARM_RUNS; i++) {
     process.stdout.write(`[poc] Run ${i + 2} (warm): `);
-    const w = await measureFirstMessageLatency(false);
+    const w = usingReal
+      ? await measureFirstMessageLatencyReal()
+      : await measureFirstMessageLatencyStub(false);
     latencies.push(w);
     console.log(`${w}ms`);
   }
 
-  const stats = computeLatencyStats(latencies);
-  console.log(`\n[poc] First-message latency stats (n=${stats.samples.length}):`);
+  const stats = computeLatencyStats(latencies, !usingReal);
+  console.log(`\n[poc] First-message latency stats (n=${stats.samples.length})${!usingReal ? " [SIMULATED]" : ""}:`);
   console.log(`[poc]   min:  ${stats.min_ms}ms`);
   console.log(`[poc]   mean: ${stats.mean_ms}ms`);
   console.log(`[poc]   max:  ${stats.max_ms}ms`);
@@ -240,8 +272,10 @@ async function runLatencyBenchmark(): Promise<LatencyStats> {
 function assertPluginLoaded(
   plugins: { name: string; path: string }[]
 ): boolean {
+  // Require both path AND name to match to avoid false positives from a
+  // different plugin that happens to share the same name at a different path.
   const found = plugins.some(
-    (p) => p.path === PLUGIN_DIR || p.name === EXPECTED_PLUGIN_NAME
+    (p) => p.path === PLUGIN_DIR && p.name === EXPECTED_PLUGIN_NAME
   );
   if (found) {
     console.log(
@@ -560,7 +594,10 @@ function printSummary(result: PocRunResult, latencyStats: LatencyStats): void {
     `Tools available:        ${result.toolsAvailable.join(", ") || "(all)"}`
   );
 
-  console.log(`\n--- Latency Benchmark (${latencyStats.samples.length} runs) ---`);
+  const latencyLabel = latencyStats.isSimulated
+    ? `Latency Benchmark — ${latencyStats.samples.length} runs [SIMULATED — set ANTHROPIC_API_KEY for empirical data]`
+    : `Latency Benchmark — ${latencyStats.samples.length} runs [empirical]`;
+  console.log(`\n--- ${latencyLabel} ---`);
   console.log(`min:  ${latencyStats.min_ms}ms`);
   console.log(`mean: ${latencyStats.mean_ms}ms`);
   console.log(`max:  ${latencyStats.max_ms}ms`);
