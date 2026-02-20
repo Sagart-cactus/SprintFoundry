@@ -266,6 +266,7 @@ describe("CodexRuntime local_sdk mode", () => {
   it("enforces SDK timeout and still writes debug artifacts", async () => {
     mockRunFn.mockImplementation(() => new Promise(() => {}));
     const runtime = new CodexRuntime();
+    const startedAt = Date.now();
     await expect(
       runtime.runStep(
         makeContext(tmpDir, {
@@ -275,6 +276,9 @@ describe("CodexRuntime local_sdk mode", () => {
         })
       )
     ).rejects.toThrow(/Codex SDK run timed out/);
+    const elapsedMs = Date.now() - startedAt;
+    expect(elapsedMs).toBeGreaterThanOrEqual(20);
+    expect(elapsedMs).toBeLessThan(2000);
 
     const stepDebugPath = path.join(
       tmpDir,
@@ -282,6 +286,17 @@ describe("CodexRuntime local_sdk mode", () => {
     );
     const debugContent = JSON.parse(await fs.readFile(stepDebugPath, "utf-8"));
     expect(debugContent.runtime_mode).toBe("local_sdk");
+  });
+
+  it("falls back to synthesized prompt when workspace .agent-task.md is empty", async () => {
+    await fs.writeFile(path.join(tmpDir, ".agent-task.md"), "   \n\n", "utf-8");
+    const runtime = new CodexRuntime();
+    await runtime.runStep(makeContext(tmpDir, { task: "Use fallback when task file is empty" }));
+
+    const prompt = vi.mocked(mockRunFn).mock.calls[0]?.[0] as string;
+    expect(prompt).toContain("Read .agent-task.md and AGENTS.md");
+    expect(prompt).not.toContain("# .agent-task.md");
+    expect(prompt).toContain("Primary task: Use fallback when task file is empty");
   });
 });
 
@@ -367,6 +382,21 @@ describe("CodexRuntime local_process mode (unchanged behavior)", () => {
 
     const args = vi.mocked(runProcess).mock.calls[0][1] as string[];
     expect(args.some((arg) => arg.includes("model_reasoning_effort"))).toBe(false);
+  });
+
+  it("keeps synthesized prompt contract in local_process mode", async () => {
+    const runtime = new CodexRuntime();
+    await runtime.runStep(
+      makeContext(tmpDir, {
+        task: "Process mode task contract",
+        runtime: { provider: "codex", mode: "local_process" },
+      })
+    );
+
+    const args = vi.mocked(runProcess).mock.calls[0][1] as string[];
+    expect(args[0]).toBe("exec");
+    expect(args[1]).toContain("Primary task: Process mode task contract");
+    expect(args[1]).toContain("Read .agent-task.md and AGENTS.md");
   });
 });
 
