@@ -37,6 +37,18 @@
       <main class="run-feed" id="run-feed"></main>
     </div>
 
+    <div class="detail-drawer-backdrop" id="detail-drawer-backdrop" hidden></div>
+    <aside class="detail-drawer" id="detail-drawer" aria-hidden="true">
+      <header class="detail-drawer-header">
+        <div>
+          <div class="detail-drawer-kicker" id="detail-drawer-kicker">Step details</div>
+          <h2 id="detail-drawer-title">Details</h2>
+        </div>
+        <button id="detail-drawer-close" type="button" aria-label="Close detail drawer">Close</button>
+      </header>
+      <div class="detail-drawer-body" id="detail-drawer-body"></div>
+    </aside>
+
     <footer class="statusbar">
       <span id="status-line">Loading run...</span>
       <span id="last-refreshed">Last refreshed: -</span>

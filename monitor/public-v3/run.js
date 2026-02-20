@@ -8,6 +8,12 @@ const sidebarPlan = document.getElementById("sidebar-plan");
 const runFeed = document.getElementById("run-feed");
 const statusLine = document.getElementById("status-line");
 const lastRefreshed = document.getElementById("last-refreshed");
+const detailDrawer = document.getElementById("detail-drawer");
+const detailDrawerBackdrop = document.getElementById("detail-drawer-backdrop");
+const detailDrawerTitle = document.getElementById("detail-drawer-title");
+const detailDrawerKicker = document.getElementById("detail-drawer-kicker");
+const detailDrawerBody = document.getElementById("detail-drawer-body");
+const detailDrawerClose = document.getElementById("detail-drawer-close");
 
 const query = new URLSearchParams(window.location.search);
 const project = query.get("project") ?? "";
@@ -25,7 +31,7 @@ const state = {
   plannerStderr: "",
   agentStdout: "",
   agentStderr: "",
-  agentResult: "",
+  stepResults: new Map(),
   reviews: [],
   // Per-step logs: stepNumber → { stdout, stderr }
   stepLogs: new Map(),
@@ -35,6 +41,11 @@ const state = {
   expandedReviewSections: new Set(),
   // Cached diff content: "reviewId:filePath" → diff string
   artifactDiffs: new Map(),
+  drawer: {
+    open: false,
+    step: null,
+    mode: "output", // output | result
+  },
 };
 
 // ── Helpers (unchanged) ──
@@ -415,30 +426,6 @@ function renderValueTree(value, key = null, depth = 0) {
   `;
 }
 
-function findStepPayload(value, stepNumber) {
-  if (!value || typeof value !== "object") return null;
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const found = findStepPayload(item, stepNumber);
-      if (found) return found;
-    }
-    return null;
-  }
-  if (value.step === stepNumber || value.step_number === stepNumber) return value;
-  for (const child of Object.values(value)) {
-    const found = findStepPayload(child, stepNumber);
-    if (found) return found;
-  }
-  return null;
-}
-
-function renderResult(raw, stepNumber) {
-  const parsed = parseJsonSafe(raw);
-  if (!parsed) return `<pre class="json-block">${escapeHtml(raw || "(empty)")}</pre>`;
-  const scoped = typeof stepNumber === "number" ? findStepPayload(parsed, stepNumber) || parsed : parsed;
-  return `<div class="json-tree">${renderValueTree(scoped)}</div>`;
-}
-
 function errorCountForStep(raw, stepNumber) {
   const grouped = groupErrByStep(raw);
   if (typeof stepNumber !== "number") {
@@ -738,15 +725,6 @@ function renderSidebarPlan(runData, events) {
   `;
 }
 
-// ── Step result summary extraction ──
-
-function extractStepSummary(raw, stepNumber) {
-  const parsed = parseJsonSafe(raw);
-  if (!parsed) return "";
-  const payload = typeof stepNumber === "number" ? findStepPayload(parsed, stepNumber) || parsed : parsed;
-  return pickString(payload, ["summary"]) || pickString(payload?.result, ["summary"]) || "";
-}
-
 // ── NEW: Main feed rendering ──
 
 function stepEventsForStep(events, stepNumber) {
@@ -754,6 +732,159 @@ function stepEventsForStep(events, stepNumber) {
     const sn = evt?.data?.step;
     return typeof sn === "number" && sn === stepNumber;
   });
+}
+
+function stepByNumber(stepNumber) {
+  return (state.runData?.steps ?? []).find((step) => step.step_number === stepNumber) || null;
+}
+
+async function ensureStepResult(stepNumber) {
+  if (!Number.isFinite(stepNumber)) return null;
+  if (state.stepResults.has(stepNumber)) return state.stepResults.get(stepNumber);
+  const res = await fetchJson(
+    `/api/step-result?project=${encodeURIComponent(project)}&run=${encodeURIComponent(run)}&step=${stepNumber}`
+  ).catch(() => ({ result: null, source: "error" }));
+  const payload = {
+    result: res?.result && typeof res.result === "object" ? res.result : null,
+    source: typeof res?.source === "string" ? res.source : "none",
+  };
+  state.stepResults.set(stepNumber, payload);
+  return payload;
+}
+
+function stepResultSummary(step) {
+  if (!step) return "";
+  if (typeof step.result_summary === "string" && step.result_summary.trim()) {
+    return step.result_summary.trim();
+  }
+  return "";
+}
+
+function closeDrawer() {
+  state.drawer.open = false;
+  state.drawer.step = null;
+  detailDrawer.classList.remove("open");
+  detailDrawer.setAttribute("aria-hidden", "true");
+  detailDrawerBackdrop.hidden = true;
+}
+
+function openDrawer(mode, stepNumber) {
+  state.drawer.open = true;
+  state.drawer.mode = mode;
+  state.drawer.step = stepNumber;
+  detailDrawer.classList.add("open");
+  detailDrawer.setAttribute("aria-hidden", "false");
+  detailDrawerBackdrop.hidden = false;
+  void renderDrawer();
+}
+
+function renderArtifactDiffDetails(stepNumber, files) {
+  if (!Array.isArray(files) || !files.length) return '<p class="empty">None</p>';
+  return files
+    .map((filePath) => {
+      const key = `step-${stepNumber}:${filePath}`;
+      const cached = state.artifactDiffs.get(key);
+      const isOpen = state.expandedReviewSections.has(key);
+      const diffHtml = isOpen && cached != null
+        ? renderDiff(cached)
+        : '<div class="diff-loading">Loading diff\u2026</div>';
+      return `
+        <details class="artifact-diff-details" data-step="${escapeHtml(String(stepNumber))}" data-artifact-path="${escapeHtml(filePath)}" ${isOpen ? "open" : ""}>
+          <summary><span class="artifact-path">${escapeHtml(filePath)}</span></summary>
+          <div class="diff-content">${isOpen ? diffHtml : ""}</div>
+        </details>
+      `;
+    })
+    .join("");
+}
+
+async function loadDrawerArtifactDiff(stepNumber, filePath, detailsEl) {
+  const key = `step-${stepNumber}:${filePath}`;
+  state.artifactDiffs.set(key, null);
+  const contentEl = detailsEl?.querySelector(".diff-content");
+  if (contentEl) contentEl.innerHTML = '<div class="diff-loading">Loading diff\u2026</div>';
+  try {
+    const res = await fetchJson(
+      `/api/diff?project=${encodeURIComponent(project)}&run=${encodeURIComponent(run)}&file=${encodeURIComponent(filePath)}`
+    );
+    state.artifactDiffs.set(key, res.diff || "");
+    if (contentEl) contentEl.innerHTML = renderDiff(res.diff || "");
+  } catch (err) {
+    state.artifactDiffs.set(key, "");
+    if (contentEl) contentEl.innerHTML = `<div class="empty">Error: ${escapeHtml(String(err))}</div>`;
+  }
+}
+
+async function renderDrawer() {
+  if (!state.drawer.open || !Number.isFinite(state.drawer.step)) return;
+  const stepNumber = state.drawer.step;
+  const step = stepByNumber(stepNumber);
+  if (!step) {
+    detailDrawerTitle.textContent = "Step not found";
+    detailDrawerBody.innerHTML = '<p class="empty">No step data available.</p>';
+    return;
+  }
+  detailDrawerKicker.textContent = `Step ${stepNumber} · ${step.agent || "agent"}`;
+
+  if (state.drawer.mode === "output") {
+    detailDrawerTitle.textContent = "Agent Output";
+    const stepLog = state.stepLogs.get(stepNumber);
+    const stepStdout = stepLog?.stdout ?? state.agentStdout;
+    const stepStderr = stepLog?.stderr ?? state.agentStderr;
+    const stepNumFilter = stepLog ? null : stepNumber;
+    detailDrawerBody.innerHTML = `
+      <section class="drawer-section">
+        <h3>Output</h3>
+        <div>${renderAgentOut(stepStdout, stepNumFilter)}</div>
+      </section>
+      <section class="drawer-section">
+        <h3>Errors</h3>
+        <div>${renderAgentErr(stepStderr, stepNumFilter)}</div>
+      </section>
+    `;
+    return;
+  }
+
+  detailDrawerTitle.textContent = "Step Result";
+  detailDrawerBody.innerHTML = '<p class="empty">Loading step result…</p>';
+  const payload = await ensureStepResult(stepNumber);
+  const result = payload?.result;
+  if (!result) {
+    detailDrawerBody.innerHTML = '<p class="empty">No step result found yet.</p>';
+    return;
+  }
+  const artifactsCreated = Array.isArray(result.artifacts_created) ? result.artifacts_created : [];
+  const artifactsModified = Array.isArray(result.artifacts_modified) ? result.artifacts_modified : [];
+  const issues = Array.isArray(result.issues) ? result.issues : [];
+  detailDrawerBody.innerHTML = `
+    <section class="drawer-section">
+      <h3>Summary</h3>
+      <div class="result-grid">
+        <div class="result-key">Status</div>
+        <div class="result-value">${escapeHtml(result.status || "-")}</div>
+        <div class="result-key">Source</div>
+        <div class="result-value">${escapeHtml(payload?.source || "-")}</div>
+        <div class="result-key">Summary</div>
+        <div class="result-value">${escapeHtml(result.summary || "-")}</div>
+      </div>
+    </section>
+    <section class="drawer-section">
+      <h3>Artifacts Created (${artifactsCreated.length})</h3>
+      <div>${renderArtifactDiffDetails(stepNumber, artifactsCreated)}</div>
+    </section>
+    <section class="drawer-section">
+      <h3>Files Modified (${artifactsModified.length})</h3>
+      <div>${renderArtifactDiffDetails(stepNumber, artifactsModified)}</div>
+    </section>
+    <section class="drawer-section">
+      <h3>Issues (${issues.length})</h3>
+      ${issues.length ? `<ul class="result-list">${issues.map((issue) => `<li>${escapeHtml(String(issue))}</li>`).join("")}</ul>` : '<p class="empty">None</p>'}
+    </section>
+    <section class="drawer-section">
+      <h3>Metadata</h3>
+      <div class="json-tree">${renderValueTree(result.metadata ?? {})}</div>
+    </section>
+  `;
 }
 
 function renderFeed(runData, events, stepMeta) {
@@ -780,16 +911,7 @@ function renderFeed(runData, events, stepMeta) {
       const stepEvents = stepEventsForStep(events, step.step_number);
       const isPending = !started && step.status !== "completed" && step.status !== "failed" && step.status !== "running";
 
-      const outSectionId = `feed-out-${step.step_number}`;
-      const errSectionId = `feed-err-${step.step_number}`;
-      const resultSectionId = `feed-result-${step.step_number}`;
-
-      // Extract summary from completed event (works for all steps including rework).
-      const completedEvent = [...events].reverse().find(
-        (e) => e.event_type === "step.completed" && e.data?.step === step.step_number
-      );
-      const summary = completedEvent?.data?.result?.summary ||
-        extractStepSummary(state.agentResult, step.step_number);
+      const summary = stepResultSummary(step);
 
       const tokenAlert = meta.tokenLimitExceeded
         ? `<div class="feed-alert feed-alert--token">
@@ -833,18 +955,18 @@ function renderFeed(runData, events, stepMeta) {
                   <p class="feed-summary">${escapeHtml(summary)}</p>
                 </div>
               ` : ""}
-              <details class="feed-section" data-detail-id="${escapeHtml(outSectionId)}" ${state.expandedFeedSections.has(outSectionId) ? "open" : ""}>
-                <summary>Agent Output (${escapeHtml(String(outCount))})</summary>
-                <div class="feed-section-body">${renderAgentOut(stepStdout, stepNumFilter)}</div>
-              </details>
-              <details class="feed-section ${errCount ? "has-errors" : ""}" data-detail-id="${escapeHtml(errSectionId)}" ${state.expandedFeedSections.has(errSectionId) ? "open" : ""}>
-                <summary>Errors (${escapeHtml(String(errCount))})</summary>
-                <div class="feed-section-body">${renderAgentErr(stepStderr, stepNumFilter)}</div>
-              </details>
-              <details class="feed-section" data-detail-id="${escapeHtml(resultSectionId)}" ${state.expandedFeedSections.has(resultSectionId) ? "open" : ""}>
-                <summary>Result JSON</summary>
-                <div class="feed-section-body">${renderResult(completedEvent?.data?.result ? JSON.stringify(completedEvent.data.result) : state.agentResult, completedEvent?.data?.result ? null : step.step_number)}</div>
-              </details>
+              <div class="feed-actions">
+                <button class="feed-action-btn" type="button" data-drawer-action="output" data-step="${escapeHtml(String(step.step_number))}">
+                  Agent Output (${escapeHtml(String(outCount))})
+                </button>
+                <button class="feed-action-btn" type="button" data-drawer-action="result" data-step="${escapeHtml(String(step.step_number))}">
+                  Step Result
+                </button>
+              </div>
+              <div class="feed-events">
+                <span class="feed-event">Agent Output rows: ${escapeHtml(String(outCount))}</span>
+                <span class="feed-event">Errors: ${escapeHtml(String(errCount))}</span>
+              </div>
               ${stepEvents.length ? `
                 <div class="feed-events">
                   ${stepEvents.slice(-4).map((evt) => `<span class="feed-event">${escapeHtml(eventLabel(evt.event_type))} · ${escapeHtml(fmtTime(evt.timestamp))}</span>`).join("")}
@@ -928,14 +1050,13 @@ async function refresh() {
   }
 
   try {
-    const [runData, eventsRes, plannerStdout, plannerStderr, agentStdout, agentStderr, agentResult] = await Promise.all([
+    const [runData, eventsRes, plannerStdout, plannerStderr, agentStdout, agentStderr] = await Promise.all([
       fetchJson(`/api/run?project=${encodeURIComponent(project)}&run=${encodeURIComponent(run)}`),
       fetchJson(`/api/events?project=${encodeURIComponent(project)}&run=${encodeURIComponent(run)}&limit=800`),
       fetchText(`/api/log?project=${encodeURIComponent(project)}&run=${encodeURIComponent(run)}&kind=planner_stdout&lines=1000`).catch(() => ""),
       fetchText(`/api/log?project=${encodeURIComponent(project)}&run=${encodeURIComponent(run)}&kind=planner_stderr&lines=400`).catch(() => ""),
       fetchText(`/api/log?project=${encodeURIComponent(project)}&run=${encodeURIComponent(run)}&kind=agent_stdout&lines=1400`).catch(() => ""),
       fetchText(`/api/log?project=${encodeURIComponent(project)}&run=${encodeURIComponent(run)}&kind=agent_stderr&lines=1400`).catch(() => ""),
-      fetchText(`/api/log?project=${encodeURIComponent(project)}&run=${encodeURIComponent(run)}&kind=agent_result&lines=1400`).catch(() => ""),
     ]);
 
     state.runData = runData;
@@ -944,7 +1065,6 @@ async function refresh() {
     state.plannerStderr = plannerStderr;
     state.agentStdout = agentStdout;
     state.agentStderr = agentStderr;
-    state.agentResult = agentResult;
     state.stepMeta = buildStepMeta(runData, state.events);
 
     await fetchStepLogs(runData.steps ?? []);
@@ -972,6 +1092,9 @@ async function refresh() {
     renderSidebarPlan(runData, state.events);
     renderReviewPanel(state.reviews);
     renderFeed(runData, state.events, state.stepMeta);
+    if (state.drawer.open) {
+      void renderDrawer();
+    }
 
     // Restore scroll positions after DOM has been repainted
     requestAnimationFrame(() => {
@@ -1009,6 +1132,17 @@ sidebarSteps.addEventListener("click", (event) => {
   if (card) card.scrollIntoView({ behavior: "smooth", block: "start" });
 });
 
+runFeed.addEventListener("click", (event) => {
+  const actionBtn = event.target.closest("[data-drawer-action]");
+  if (!actionBtn) return;
+  const mode = actionBtn.dataset.drawerAction;
+  const stepNumber = Number(actionBtn.dataset.step);
+  if (!Number.isFinite(stepNumber)) return;
+  if (mode === "output" || mode === "result") {
+    openDrawer(mode, stepNumber);
+  }
+});
+
 // Toggle JSON blocks in agent output
 runFeed.addEventListener("click", (event) => {
   const row = event.target.closest(".log-row");
@@ -1044,11 +1178,36 @@ sidebarPlan.addEventListener(
     if (!(details instanceof HTMLDetailsElement)) return;
     const detailId = details.dataset.detailId;
     if (!detailId) return;
-    if (details.open) state.expandedPlanDetails.add(detailId);
-    else state.expandedPlanDetails.delete(detailId);
+  if (details.open) state.expandedPlanDetails.add(detailId);
+  else state.expandedPlanDetails.delete(detailId);
   },
   true
 );
+
+detailDrawer.addEventListener("toggle", (event) => {
+  const details = event.target;
+  if (!(details instanceof HTMLDetailsElement)) return;
+  const artifactPath = details.dataset.artifactPath;
+  const step = Number(details.dataset.step);
+  if (!artifactPath || !Number.isFinite(step)) return;
+  const key = `step-${step}:${artifactPath}`;
+  if (details.open) {
+    state.expandedReviewSections.add(key);
+    if (!state.artifactDiffs.has(key)) {
+      void loadDrawerArtifactDiff(step, artifactPath, details);
+    }
+  } else {
+    state.expandedReviewSections.delete(key);
+  }
+}, true);
+
+detailDrawerBackdrop.addEventListener("click", closeDrawer);
+detailDrawerClose.addEventListener("click", closeDrawer);
+window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && state.drawer.open) {
+    closeDrawer();
+  }
+});
 
 refreshBtn.addEventListener("click", refresh);
 
