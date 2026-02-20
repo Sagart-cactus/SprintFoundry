@@ -238,6 +238,51 @@ describe("CodexRuntime local_sdk mode", () => {
     const constructorEnv = mockCodexConstructorCalls[0].env;
     expect(constructorEnv.MY_CUSTOM_VAR).toBe("custom-value");
   });
+
+  it("uses workspace .agent-task.md content as primary SDK prompt when present", async () => {
+    await fs.writeFile(
+      path.join(tmpDir, ".agent-task.md"),
+      "# SDK Task\n\nFollow this instruction from workspace task file.",
+      "utf-8"
+    );
+    const runtime = new CodexRuntime();
+    await runtime.runStep(makeContext(tmpDir, { task: "Fallback task should not be primary" }));
+
+    const prompt = vi.mocked(mockRunFn).mock.calls[0]?.[0] as string;
+    expect(prompt).toContain("# .agent-task.md");
+    expect(prompt).toContain("Follow this instruction from workspace task file.");
+    expect(prompt).toContain("Primary task: Fallback task should not be primary");
+  });
+
+  it("falls back to synthesized prompt when workspace .agent-task.md is absent", async () => {
+    const runtime = new CodexRuntime();
+    await runtime.runStep(makeContext(tmpDir, { task: "Use synthesized task prompt" }));
+
+    const prompt = vi.mocked(mockRunFn).mock.calls[0]?.[0] as string;
+    expect(prompt).toContain("Read .agent-task.md and AGENTS.md");
+    expect(prompt).toContain("Primary task: Use synthesized task prompt");
+  });
+
+  it("enforces SDK timeout and still writes debug artifacts", async () => {
+    mockRunFn.mockImplementation(() => new Promise(() => {}));
+    const runtime = new CodexRuntime();
+    await expect(
+      runtime.runStep(
+        makeContext(tmpDir, {
+          stepNumber: 8,
+          stepAttempt: 2,
+          timeoutMinutes: 0.0005,
+        })
+      )
+    ).rejects.toThrow(/Codex SDK run timed out/);
+
+    const stepDebugPath = path.join(
+      tmpDir,
+      ".codex-runtime.step-8.attempt-2.debug.json"
+    );
+    const debugContent = JSON.parse(await fs.readFile(stepDebugPath, "utf-8"));
+    expect(debugContent.runtime_mode).toBe("local_sdk");
+  });
 });
 
 describe("CodexRuntime local_process mode (unchanged behavior)", () => {
