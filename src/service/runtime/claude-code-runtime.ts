@@ -4,6 +4,7 @@ import * as fs from "fs/promises";
 import { query, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentRuntime, RuntimeStepContext, RuntimeStepResult } from "./types.js";
 import { runProcess, parseTokenUsage } from "./process-utils.js";
+import type { RuntimeMetadataEnvelope } from "../../shared/types.js";
 
 export class ClaudeCodeRuntime implements AgentRuntime {
   async runStep(config: RuntimeStepContext): Promise<RuntimeStepResult> {
@@ -48,9 +49,21 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       },
     });
     await this.copyLatestLogs(paths.stepStdoutPath, paths.stepStderrPath, paths.latestStdoutPath, paths.latestStderrPath);
+    const runtimeId = this.extractSessionIdFromOutput(result.stdout) ?? result.runtimeId;
+    const runtimeMetadata = this.buildRuntimeMetadata(config, runtimeId, {
+      resume: this.buildResumeMetadata(config),
+      provider_metadata: {
+        output_parsing: "jsonl",
+        session_id_source: "stdout_json_line",
+      },
+    });
     return {
       tokens_used: result.tokensUsed,
-      runtime_id: this.extractSessionIdFromOutput(result.stdout) ?? result.runtimeId,
+      runtime_id: runtimeId,
+      resume_used: runtimeMetadata.resume?.used,
+      resume_failed: runtimeMetadata.resume?.failed,
+      resume_fallback: runtimeMetadata.resume?.fallback_to_fresh,
+      runtime_metadata: runtimeMetadata,
     };
   }
 
@@ -170,11 +183,27 @@ export class ClaudeCodeRuntime implements AgentRuntime {
 
     const usage = this.normalizeUsage(finalResultMessage.usage);
     const tokensUsed = this.tokensFromUsage(usage);
+    const runtimeMetadata = this.buildRuntimeMetadata(config, runtimeId, {
+      usage,
+      billing: {
+        cost_usd: finalResultMessage.total_cost_usd,
+        cost_source: "runtime_reported",
+      },
+      resume: this.buildResumeMetadata(config),
+      provider_metadata: {
+        output_parsing: "sdk_stream",
+        session_id_source: "sdk_message",
+      },
+    });
     return {
       tokens_used: tokensUsed,
       runtime_id: runtimeId,
       cost_usd: finalResultMessage.total_cost_usd,
       usage,
+      resume_used: runtimeMetadata.resume?.used,
+      resume_failed: runtimeMetadata.resume?.failed,
+      resume_fallback: runtimeMetadata.resume?.fallback_to_fresh,
+      runtime_metadata: runtimeMetadata,
     };
   }
 
@@ -313,9 +342,15 @@ export class ClaudeCodeRuntime implements AgentRuntime {
             reject(new Error(`Agent container ${config.agent} exited with code ${code}`));
             return;
           }
+          const runtimeMetadata = this.buildRuntimeMetadata(config, containerName, {
+            provider_metadata: {
+              output_parsing: "container_stdout",
+            },
+          });
           resolve({
             tokens_used: parseTokenUsage(stdout),
             runtime_id: containerName,
+            runtime_metadata: runtimeMetadata,
           });
         });
       });
@@ -386,5 +421,34 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       paths.latestStdoutPath,
       paths.latestStderrPath
     );
+  }
+
+  private buildRuntimeMetadata(
+    config: RuntimeStepContext,
+    runtimeId: string,
+    extras?: Omit<RuntimeMetadataEnvelope, "schema_version" | "runtime">
+  ): RuntimeMetadataEnvelope {
+    return {
+      schema_version: 1,
+      runtime: {
+        provider: config.runtime.provider,
+        mode: config.runtime.mode,
+        runtime_id: runtimeId,
+        step_attempt: config.stepAttempt,
+      },
+      ...extras,
+    };
+  }
+
+  private buildResumeMetadata(config: RuntimeStepContext): RuntimeMetadataEnvelope["resume"] | undefined {
+    if (!config.resumeSessionId) return undefined;
+    return {
+      requested: true,
+      used: true,
+      failed: false,
+      fallback_to_fresh: false,
+      source_session_id: config.resumeSessionId,
+      reason: config.resumeReason,
+    };
   }
 }

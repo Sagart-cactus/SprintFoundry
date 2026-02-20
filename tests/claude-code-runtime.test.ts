@@ -112,6 +112,17 @@ describe("ClaudeCodeRuntime", () => {
     expect(result.runtime_id).toBe("sdk-session-123");
     expect(result.cost_usd).toBe(0.42);
     expect(result.usage).toMatchObject({ input_tokens: 12, output_tokens: 30 });
+    expect(result.runtime_metadata).toMatchObject({
+      schema_version: 1,
+      runtime: {
+        provider: "claude-code",
+        mode: "local_sdk",
+        runtime_id: "sdk-session-123",
+        step_attempt: 1,
+      },
+      usage: { input_tokens: 12, output_tokens: 30 },
+      billing: { cost_usd: 0.42, cost_source: "runtime_reported" },
+    });
 
     const stdoutLog = await fs.readFile(path.join(tmpDir, ".claude-runtime.stdout.log"), "utf-8");
     const stderrLog = await fs.readFile(path.join(tmpDir, ".claude-runtime.stderr.log"), "utf-8");
@@ -155,13 +166,21 @@ describe("ClaudeCodeRuntime", () => {
     })());
 
     const runtime = new ClaudeCodeRuntime();
-    await runtime.runStep({
+    const result = await runtime.runStep({
       ...makeContext(tmpDir),
       resumeSessionId: "session-old-222",
     });
 
     const call = (mockQuery as any).mock.calls[0][0];
     expect(call.options.resume).toBe("session-old-222");
+    expect(result.resume_used).toBe(true);
+    expect(result.runtime_metadata?.resume).toMatchObject({
+      requested: true,
+      used: true,
+      failed: false,
+      fallback_to_fresh: false,
+      source_session_id: "session-old-222",
+    });
   });
 
   it("times out local SDK execution using AbortController", async () => {
@@ -214,6 +233,14 @@ describe("ClaudeCodeRuntime", () => {
     expect((mockSpawn as any).mock.calls[0][0]).toBe("docker");
     expect(result.runtime_id).toContain("sprintfoundry-developer-");
     expect(result.tokens_used).toBe(9);
+    expect(result.runtime_metadata).toMatchObject({
+      schema_version: 1,
+      runtime: {
+        provider: "claude-code",
+        mode: "container",
+        step_attempt: 1,
+      },
+    });
     expect(latestDebug.runtime_command).toBe("docker");
     expect(latestDebug.runtime_mode).toBe("container");
     expect(stepDebug.runtime_provider).toBe("claude-code");
@@ -244,6 +271,15 @@ describe("ClaudeCodeRuntime", () => {
 
     expect(result.tokens_used).toBe(77);
     expect(result.runtime_id).toBe("local-claude-cli-abc");
+    expect(result.runtime_metadata).toMatchObject({
+      schema_version: 1,
+      runtime: {
+        provider: "claude-code",
+        mode: "local_process",
+        runtime_id: "local-claude-cli-abc",
+        step_attempt: 1,
+      },
+    });
 
     const latestDebug = JSON.parse(
       await fs.readFile(path.join(tmpDir, ".claude-runtime.debug.json"), "utf-8")

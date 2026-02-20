@@ -932,7 +932,7 @@ describe("OrchestrationService", () => {
       step_number: 1,
       step_attempt: 1,
       runtime_provider: "claude-code",
-      runtime_mode: "local_process",
+      runtime_mode: "local_sdk",
       session_id: "session-dev-123",
       updated_at: new Date().toISOString(),
     });
@@ -958,10 +958,46 @@ describe("OrchestrationService", () => {
     expect(reworkStarted.data.resume_used).toBe(true);
     expect(reworkStarted.data.resume_failed).toBe(false);
     expect(reworkStarted.data.resume_fallback).toBe(false);
+    expect(reworkStarted.data.runtime_metadata).toMatchObject({
+      schema_version: 1,
+      runtime: {
+        provider: "claude-code",
+        mode: "local_sdk",
+        step_attempt: 1,
+      },
+      resume: {
+        requested: true,
+        used: true,
+        failed: false,
+        fallback_to_fresh: false,
+        source_session_id: "session-dev-123",
+        reason: "rework_plan",
+      },
+    });
     expect(reworkCompleted.data.resume_used).toBe(true);
     expect(reworkCompleted.data.resume_failed).toBe(false);
     expect(reworkCompleted.data.resume_fallback).toBe(false);
     expect(reworkCompleted.data.token_savings).toEqual({ cached_input_tokens: 240 });
+    expect(reworkCompleted.data.runtime_metadata).toMatchObject({
+      schema_version: 1,
+      runtime: {
+        provider: "claude-code",
+        mode: "local_sdk",
+        runtime_id: "session-dev-resumed",
+        step_attempt: 1,
+      },
+      resume: {
+        requested: true,
+        used: true,
+        failed: false,
+        fallback_to_fresh: false,
+        source_session_id: "session-dev-123",
+        reason: "rework_plan",
+      },
+      token_savings: {
+        cached_input_tokens: 240,
+      },
+    });
 
     const recordedReworkSession = mockSessionStore.record.mock.calls
       .map((call: any[]) => call[1])
@@ -970,6 +1006,25 @@ describe("OrchestrationService", () => {
     expect(recordedReworkSession.resume_failed).toBe(false);
     expect(recordedReworkSession.resume_fallback).toBe(false);
     expect(recordedReworkSession.token_savings_cached_input_tokens).toBe(240);
+
+    const reworkStepExecution = run.steps.find((entry) => entry.step_number === 901);
+    expect(reworkStepExecution?.runtime_metadata).toMatchObject({
+      schema_version: 1,
+      runtime: {
+        provider: "claude-code",
+        mode: "local_sdk",
+        runtime_id: "session-dev-resumed",
+      },
+      resume: {
+        requested: true,
+        used: true,
+        failed: false,
+        fallback_to_fresh: false,
+      },
+      token_savings: {
+        cached_input_tokens: 240,
+      },
+    });
   });
 
   it("records resume fallback telemetry when resumed rework succeeds via fresh fallback", async () => {
@@ -1037,7 +1092,7 @@ describe("OrchestrationService", () => {
       step_number: 1,
       step_attempt: 1,
       runtime_provider: "claude-code",
-      runtime_mode: "local_process",
+      runtime_mode: "local_sdk",
       session_id: "session-dev-123",
       updated_at: new Date().toISOString(),
     });
@@ -1114,7 +1169,7 @@ describe("OrchestrationService", () => {
       step_number: 1,
       step_attempt: 1,
       runtime_provider: "claude-code",
-      runtime_mode: "local_process",
+      runtime_mode: "local_sdk",
       session_id: "session-dev-123",
       updated_at: new Date().toISOString(),
     });
@@ -1129,6 +1184,21 @@ describe("OrchestrationService", () => {
     expect(failed.data.resume_used).toBe(true);
     expect(failed.data.resume_failed).toBe(true);
     expect(failed.data.resume_fallback).toBe(false);
+    expect(failed.data.runtime_metadata).toMatchObject({
+      schema_version: 1,
+      runtime: {
+        provider: "claude-code",
+        mode: "local_sdk",
+      },
+      resume: {
+        requested: true,
+        used: true,
+        failed: true,
+        fallback_to_fresh: false,
+        source_session_id: "session-dev-123",
+        reason: "rework_plan",
+      },
+    });
   });
 
   it("emits resume telemetry on step.failed when resume fallback attempt also fails", async () => {
@@ -1191,7 +1261,7 @@ describe("OrchestrationService", () => {
       step_number: 1,
       step_attempt: 1,
       runtime_provider: "claude-code",
-      runtime_mode: "local_process",
+      runtime_mode: "local_sdk",
       session_id: "session-dev-123",
       updated_at: new Date().toISOString(),
     });
@@ -1206,6 +1276,21 @@ describe("OrchestrationService", () => {
     expect(failed.data.resume_used).toBe(true);
     expect(failed.data.resume_failed).toBe(true);
     expect(failed.data.resume_fallback).toBe(true);
+    expect(failed.data.runtime_metadata).toMatchObject({
+      schema_version: 1,
+      runtime: {
+        provider: "claude-code",
+        mode: "local_sdk",
+      },
+      resume: {
+        requested: true,
+        used: true,
+        failed: true,
+        fallback_to_fresh: true,
+        source_session_id: "session-dev-123",
+        reason: "rework_plan",
+      },
+    });
   });
 
   it("quality gate runs after developer-role steps", async () => {

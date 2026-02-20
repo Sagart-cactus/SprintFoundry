@@ -97,6 +97,20 @@ describe("CodexRuntime local_sdk mode", () => {
     expect(result.resume_used).toBe(false);
     expect(result.resume_failed).toBe(false);
     expect(result.resume_fallback).toBe(false);
+    expect(result.runtime_metadata).toMatchObject({
+      schema_version: 1,
+      runtime: {
+        provider: "codex",
+        mode: "local_sdk",
+        runtime_id: "thread-sdk-123",
+        step_attempt: 1,
+      },
+      usage: {
+        input_tokens: 100,
+        cached_input_tokens: 0,
+        output_tokens: 50,
+      },
+    });
   });
 
   it("passes OPENAI_API_KEY and OPENAI_MODEL in env to Codex constructor", async () => {
@@ -389,6 +403,13 @@ describe("CodexRuntime local_sdk mode", () => {
     expect(result.resume_used).toBe(true);
     expect(result.resume_failed).toBe(false);
     expect(result.resume_fallback).toBe(false);
+    expect(result.runtime_metadata?.resume).toMatchObject({
+      requested: true,
+      used: true,
+      failed: false,
+      fallback_to_fresh: false,
+      source_session_id: "sdk-session-111",
+    });
   });
 
   it("falls back to fresh SDK thread once when resumeThread fails with invalid session", async () => {
@@ -404,6 +425,13 @@ describe("CodexRuntime local_sdk mode", () => {
     expect(result.resume_used).toBe(true);
     expect(result.resume_failed).toBe(true);
     expect(result.resume_fallback).toBe(true);
+    expect(result.runtime_metadata?.resume).toMatchObject({
+      requested: true,
+      used: true,
+      failed: true,
+      fallback_to_fresh: true,
+      source_session_id: "sdk-session-222",
+    });
   });
 
   it("does not fallback in SDK mode for non-session resume errors", async () => {
@@ -443,6 +471,7 @@ describe("CodexRuntime local_sdk mode", () => {
       cached_input_tokens: 700,
       output_tokens: 60,
     });
+    expect(result.runtime_metadata?.token_savings).toEqual({ cached_input_tokens: 700 });
   });
 });
 
@@ -479,6 +508,47 @@ describe("CodexRuntime local_process mode (unchanged behavior)", () => {
     expect(runProcess).toHaveBeenCalledOnce();
     expect(result.tokens_used).toBe(200);
     expect(result.runtime_id).toBe("local-codex-process-123");
+    expect(result.runtime_metadata).toMatchObject({
+      schema_version: 1,
+      runtime: {
+        provider: "codex",
+        mode: "local_process",
+        runtime_id: "local-codex-process-123",
+      },
+    });
+  });
+
+  it("extracts usage/token_savings from local_process JSON output when present", async () => {
+    vi.mocked(runProcess).mockResolvedValueOnce({
+      tokensUsed: 350,
+      runtimeId: "local-codex-process-usage",
+      stdout: JSON.stringify({
+        usage: {
+          input_tokens: 200,
+          cached_input_tokens: 120,
+          output_tokens: 150,
+        },
+      }),
+      stderr: "",
+    } as any);
+
+    const runtime = new CodexRuntime();
+    const result = await runtime.runStep(
+      makeContext(tmpDir, { runtime: { provider: "codex", mode: "local_process" } })
+    );
+
+    expect(result.usage).toEqual({
+      input_tokens: 200,
+      cached_input_tokens: 120,
+      output_tokens: 150,
+    });
+    expect(result.token_savings).toEqual({ cached_input_tokens: 120 });
+    expect(result.runtime_metadata?.usage).toEqual({
+      input_tokens: 200,
+      cached_input_tokens: 120,
+      output_tokens: 150,
+    });
+    expect(result.runtime_metadata?.token_savings).toEqual({ cached_input_tokens: 120 });
   });
 
   it("does not forward unrelated parent env secrets (local_process security)", async () => {
@@ -589,6 +659,13 @@ describe("CodexRuntime local_process mode (unchanged behavior)", () => {
     expect(result.resume_used).toBe(true);
     expect(result.resume_failed).toBe(true);
     expect(result.resume_fallback).toBe(true);
+    expect(result.runtime_metadata?.resume).toMatchObject({
+      requested: true,
+      used: true,
+      failed: true,
+      fallback_to_fresh: true,
+      source_session_id: "process-session-999",
+    });
   });
 
   it("fails local_process step when resume and single fallback both fail", async () => {

@@ -17,6 +17,7 @@ import type {
   PlatformConfig,
   ProjectConfig,
   RuntimeConfig,
+  RuntimeMetadataEnvelope,
 } from "../shared/types.js";
 import { RuntimeFactory } from "./runtime/runtime-factory.js";
 import { CodexSkillManager } from "./runtime/codex-skill-manager.js";
@@ -61,6 +62,7 @@ export interface AgentRunResult {
   resume_failed?: boolean;
   resume_fallback?: boolean;
   token_savings?: Record<string, number>;
+  runtime_metadata?: RuntimeMetadataEnvelope;
 }
 
 export class AgentRunner {
@@ -137,6 +139,7 @@ export class AgentRunner {
         resume_fallback: result.resume_fallback,
         token_savings: result.token_savings,
       },
+      runtime_metadata: result.runtime_metadata,
     };
 
     const duration = (Date.now() - startTime) / 1000;
@@ -154,6 +157,7 @@ export class AgentRunner {
       resume_failed: result.resume_failed,
       resume_fallback: result.resume_fallback,
       token_savings: result.token_savings,
+      runtime_metadata: result.runtime_metadata,
     };
   }
 

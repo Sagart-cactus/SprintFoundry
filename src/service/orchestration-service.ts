@@ -24,6 +24,7 @@ import type {
   EventType,
   RunStatus,
   RuntimeConfig,
+  RuntimeMetadataEnvelope,
 } from "../shared/types.js";
 import { PlanValidator } from "./plan-validator.js";
 import { AgentRunner } from "./agent-runner.js";
@@ -363,6 +364,7 @@ export class OrchestrationService {
       completed_at: null,
       result: null,
       rework_count: currentRework,
+      runtime_metadata: null,
     };
     run.steps.push(stepExec);
 
@@ -382,12 +384,22 @@ export class OrchestrationService {
     };
     let finalResumeTelemetry = { ...initialResumeTelemetry };
     let tokenSavings: Record<string, number> | undefined;
+    let runtimeMetadata = this.buildRuntimeMetadataEnvelope({
+      runtime,
+      stepAttempt: currentRework + 1,
+      runtimeId: "",
+      resumeSessionId,
+      resumeReason,
+      resumeTelemetry: initialResumeTelemetry,
+    });
+    stepExec.runtime_metadata = runtimeMetadata;
 
     await this.emitEvent(run.run_id, "step.started", {
       step: step.step_number,
       agent: step.agent,
       task: step.task,
       ...initialResumeTelemetry,
+      runtime_metadata: runtimeMetadata,
     });
 
     const apiKey = this.resolveApiKey(modelConfig.provider, runtime);
@@ -479,6 +491,17 @@ export class OrchestrationService {
         resume_fallback: result.resume_fallback ?? initialResumeTelemetry.resume_fallback,
       };
       tokenSavings = result.token_savings;
+      runtimeMetadata = this.buildRuntimeMetadataEnvelope({
+        runtime,
+        stepAttempt: currentRework + 1,
+        runtimeId: result.container_id,
+        runtimeMetadata: result.runtime_metadata,
+        resumeSessionId,
+        resumeReason,
+        resumeTelemetry: finalResumeTelemetry,
+        tokenSavings,
+      });
+      stepExec.runtime_metadata = runtimeMetadata;
 
       await this.recordRuntimeSession(
         workspacePath,
@@ -521,6 +544,7 @@ export class OrchestrationService {
             error: `Git checkpoint commit failed: ${message}`,
             ...finalResumeTelemetry,
             ...(tokenSavings ? { token_savings: tokenSavings } : {}),
+            runtime_metadata: runtimeMetadata,
           });
           run.status = "failed";
           run.error = `Git checkpoint commit failed at step ${step.step_number}: ${message}`;
@@ -534,6 +558,7 @@ export class OrchestrationService {
           artifacts: result.agentResult.artifacts_created,
           ...finalResumeTelemetry,
           ...(tokenSavings ? { token_savings: tokenSavings } : {}),
+          runtime_metadata: runtimeMetadata,
         });
 
         // Run quality gate after developer-role steps
@@ -594,6 +619,7 @@ export class OrchestrationService {
             reason: "max_rework_exceeded",
             ...finalResumeTelemetry,
             ...(tokenSavings ? { token_savings: tokenSavings } : {}),
+            runtime_metadata: runtimeMetadata,
           });
           return "failed";
         }
@@ -645,6 +671,7 @@ export class OrchestrationService {
         issues: result.agentResult.issues,
         ...finalResumeTelemetry,
         ...(tokenSavings ? { token_savings: tokenSavings } : {}),
+        runtime_metadata: runtimeMetadata,
       });
       return "failed";
     } catch (error) {
@@ -656,11 +683,23 @@ export class OrchestrationService {
         resume_failed: errorResumeTelemetry.resume_failed ?? finalResumeTelemetry.resume_failed,
         resume_fallback: errorResumeTelemetry.resume_fallback ?? finalResumeTelemetry.resume_fallback,
       };
+      runtimeMetadata = this.buildRuntimeMetadataEnvelope({
+        runtime,
+        stepAttempt: currentRework + 1,
+        runtimeId: runtimeMetadata.runtime.runtime_id,
+        runtimeMetadata,
+        resumeSessionId,
+        resumeReason,
+        resumeTelemetry: terminalResumeTelemetry,
+        tokenSavings,
+      });
+      stepExec.runtime_metadata = runtimeMetadata;
       await this.emitEvent(run.run_id, "step.failed", {
         step: step.step_number,
         error: error instanceof Error ? error.message : String(error),
         ...terminalResumeTelemetry,
         ...(tokenSavings ? { token_savings: tokenSavings } : {}),
+        runtime_metadata: runtimeMetadata,
       });
       return "failed";
     }
@@ -739,6 +778,66 @@ export class OrchestrationService {
           ? withTelemetry.resume_fallback
           : undefined,
     };
+  }
+
+  private buildRuntimeMetadataEnvelope(params: {
+    runtime: RuntimeConfig;
+    stepAttempt: number;
+    runtimeId: string;
+    runtimeMetadata?: RuntimeMetadataEnvelope;
+    resumeSessionId?: string;
+    resumeReason?: string;
+    resumeTelemetry?: {
+      resume_used: boolean;
+      resume_failed: boolean;
+      resume_fallback: boolean;
+    };
+    tokenSavings?: Record<string, number>;
+  }): RuntimeMetadataEnvelope {
+    const merged: RuntimeMetadataEnvelope = {
+      schema_version: 1,
+      runtime: {
+        provider: params.runtime.provider,
+        mode: params.runtime.mode,
+        runtime_id: params.runtimeId,
+        step_attempt: params.stepAttempt,
+      },
+      ...(params.runtimeMetadata ?? {}),
+    };
+    merged.runtime = {
+      provider: params.runtime.provider,
+      mode: params.runtime.mode,
+      runtime_id: params.runtimeId || params.runtimeMetadata?.runtime.runtime_id || "",
+      step_attempt: params.stepAttempt,
+    };
+    if (params.resumeTelemetry) {
+      merged.resume = {
+        requested: Boolean(params.resumeSessionId),
+        used: params.resumeTelemetry.resume_used,
+        failed: params.resumeTelemetry.resume_failed,
+        fallback_to_fresh: params.resumeTelemetry.resume_fallback,
+        ...(params.resumeSessionId ? { source_session_id: params.resumeSessionId } : {}),
+        ...(params.resumeReason ? { reason: params.resumeReason } : {}),
+      };
+    } else if (params.resumeSessionId || params.resumeReason) {
+      merged.resume = {
+        requested: Boolean(params.resumeSessionId),
+        used: Boolean(params.resumeSessionId),
+        failed: false,
+        fallback_to_fresh: false,
+        ...(params.resumeSessionId ? { source_session_id: params.resumeSessionId } : {}),
+        ...(params.resumeReason ? { reason: params.resumeReason } : {}),
+      };
+    }
+    if (params.tokenSavings) {
+      merged.token_savings = {
+        ...(merged.token_savings ?? {}),
+        ...(typeof params.tokenSavings.cached_input_tokens === "number"
+          ? { cached_input_tokens: params.tokenSavings.cached_input_tokens }
+          : {}),
+      };
+    }
+    return merged;
   }
 
   // ---- Human Review ----
