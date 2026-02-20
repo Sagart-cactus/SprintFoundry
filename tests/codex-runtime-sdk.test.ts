@@ -288,6 +288,47 @@ describe("CodexRuntime local_sdk mode", () => {
     expect(debugContent.runtime_mode).toBe("local_sdk");
   });
 
+  it("treats non-positive SDK timeout as immediate timeout to match local_process semantics", async () => {
+    mockRunFn.mockImplementation(() => new Promise(() => {}));
+    const runtime = new CodexRuntime();
+    const startedAt = Date.now();
+    await expect(
+      runtime.runStep(
+        makeContext(tmpDir, {
+          timeoutMinutes: 0,
+        })
+      )
+    ).rejects.toThrow(/Codex SDK run timed out after 0ms/);
+
+    const elapsedMs = Date.now() - startedAt;
+    expect(elapsedMs).toBeLessThan(500);
+  });
+
+  it("passes AbortSignal to SDK turn and aborts it on timeout", async () => {
+    let observedSignal: AbortSignal | undefined;
+    mockRunFn.mockImplementation(
+      (_prompt: string, options?: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          observedSignal = options?.signal;
+          observedSignal?.addEventListener("abort", () => {
+            reject(new Error("aborted"));
+          });
+        })
+    );
+
+    const runtime = new CodexRuntime();
+    await expect(
+      runtime.runStep(
+        makeContext(tmpDir, {
+          timeoutMinutes: 0.0005,
+        })
+      )
+    ).rejects.toThrow(/Codex SDK run timed out/);
+
+    expect(observedSignal).toBeDefined();
+    expect(observedSignal?.aborted).toBe(true);
+  });
+
   it("falls back to synthesized prompt when workspace .agent-task.md is empty", async () => {
     await fs.writeFile(path.join(tmpDir, ".agent-task.md"), "   \n\n", "utf-8");
     const runtime = new CodexRuntime();

@@ -238,7 +238,7 @@ export class CodexRuntime implements AgentRuntime {
     }
     const thread = codex.startThread(threadOptions);
     const turn = await this.runSdkTurnWithTimeout(
-      () => thread.run(prompt),
+      (signal) => thread.run(prompt, { signal }),
       config.timeoutMinutes * 60 * 1000,
       config
     );
@@ -348,28 +348,38 @@ export class CodexRuntime implements AgentRuntime {
   }
 
   private async runSdkTurnWithTimeout<T>(
-    run: () => Promise<T>,
+    run: (signal: AbortSignal) => Promise<T>,
     timeoutMs: number,
     config: RuntimeStepContext
   ): Promise<T> {
-    if (!(timeoutMs > 0)) return run();
-
+    const controller = new AbortController();
+    const effectiveTimeoutMs = Math.max(0, timeoutMs);
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-    const timeoutPromise = new Promise<never>((_resolve, reject) => {
-      timeoutHandle = setTimeout(() => {
-        reject(
-          new Error(
-            `Codex SDK run timed out after ${timeoutMs}ms (step=${config.stepNumber}, attempt=${config.stepAttempt})`
-          )
-        );
-      }, timeoutMs);
-    });
 
-    try {
-      return await Promise.race([run(), timeoutPromise]);
-    } finally {
-      if (timeoutHandle) clearTimeout(timeoutHandle);
-    }
+    const runResultPromise = run(controller.signal);
+    return await new Promise<T>((resolve, reject) => {
+      let settled = false;
+      const settle = (handler: () => void) => {
+        if (settled) return;
+        settled = true;
+        if (timeoutHandle !== undefined) {
+          clearTimeout(timeoutHandle);
+        }
+        handler();
+      };
+      const timeoutError = new Error(
+        `Codex SDK run timed out after ${effectiveTimeoutMs}ms (step=${config.stepNumber}, attempt=${config.stepAttempt})`
+      );
+      timeoutHandle = setTimeout(() => {
+        controller.abort(timeoutError);
+        settle(() => reject(timeoutError));
+      }, effectiveTimeoutMs);
+
+      runResultPromise.then(
+        (turn) => settle(() => resolve(turn)),
+        (error) => settle(() => reject(error))
+      );
+    });
   }
 
   private extractSdkTokensUsed(turn: unknown): number {
