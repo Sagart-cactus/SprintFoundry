@@ -23,31 +23,42 @@ const STORE_DIR = ".sprintfoundry";
 const STORE_NAME = "sessions.json";
 
 export class RuntimeSessionStore {
+  private writeQueues = new Map<string, Promise<void>>();
+
   private getStorePath(workspacePath: string): string {
     return path.join(workspacePath, STORE_DIR, STORE_NAME);
   }
 
   async record(workspacePath: string, record: RuntimeSessionRecord): Promise<void> {
     const storePath = this.getStorePath(workspacePath);
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
-    const current = await this.read(workspacePath);
+    const previous = this.writeQueues.get(storePath) ?? Promise.resolve();
+    const nextWrite = previous
+      .catch(() => undefined)
+      .then(async () => {
+        await fs.mkdir(path.dirname(storePath), { recursive: true });
+        const current = await this.read(workspacePath);
+        const next = current.sessions.filter(
+          (s) =>
+            !(
+              s.run_id === record.run_id &&
+              s.agent === record.agent &&
+              s.step_number === record.step_number &&
+              s.step_attempt === record.step_attempt
+            )
+        );
+        next.push(record);
+        await fs.writeFile(
+          storePath,
+          JSON.stringify({ version: 1, sessions: next }, null, 2),
+          "utf-8"
+        );
+      });
+    this.writeQueues.set(storePath, nextWrite);
+    await nextWrite;
 
-    const next = current.sessions.filter(
-      (s) =>
-        !(
-          s.run_id === record.run_id &&
-          s.agent === record.agent &&
-          s.step_number === record.step_number &&
-          s.step_attempt === record.step_attempt
-        )
-    );
-    next.push(record);
-
-    await fs.writeFile(
-      storePath,
-      JSON.stringify({ version: 1, sessions: next }, null, 2),
-      "utf-8"
-    );
+    if (this.writeQueues.get(storePath) === nextWrite) {
+      this.writeQueues.delete(storePath);
+    }
   }
 
   async findLatestByAgent(

@@ -36,4 +36,40 @@ describe("RuntimeSessionStore", () => {
 
     await fs.rm(workspace, { recursive: true, force: true });
   });
+
+  it("does not lose records when writes happen concurrently", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "runtime-session-store-race-"));
+    const store = new RuntimeSessionStore();
+
+    await Promise.all([
+      store.record(workspace, {
+        run_id: "run-race",
+        agent: "developer",
+        step_number: 1,
+        step_attempt: 1,
+        runtime_provider: "codex",
+        runtime_mode: "local_process",
+        session_id: "session-a",
+        updated_at: "2026-02-19T00:00:00.000Z",
+      }),
+      store.record(workspace, {
+        run_id: "run-race",
+        agent: "qa",
+        step_number: 2,
+        step_attempt: 1,
+        runtime_provider: "claude-code",
+        runtime_mode: "local_process",
+        session_id: "session-b",
+        updated_at: "2026-02-19T00:00:01.000Z",
+      }),
+    ]);
+
+    const raw = JSON.parse(
+      await fs.readFile(path.join(workspace, ".sprintfoundry", "sessions.json"), "utf-8")
+    ) as { sessions: Array<{ session_id: string }> };
+    const ids = raw.sessions.map((s) => s.session_id).sort();
+    expect(ids).toEqual(["session-a", "session-b"]);
+
+    await fs.rm(workspace, { recursive: true, force: true });
+  });
 });
