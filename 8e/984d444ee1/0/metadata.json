@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "8e984d444ee1",
+  "session_id": "2c688bc7-0d89-4aad-9eed-1783625f7eea",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-19T00:16:05.800271Z",
+  "branch": "feat/#11-spike-evaluate-claude-agent-sdk-integration-patter",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".agent-result.json",
+    "artifacts/bugs.md",
+    "artifacts/test-report.json",
+    "spike/claude-sdk-poc.test.ts",
+    "vitest.config.spike.ts"
+  ],
+  "agent": "Claude Code",
+  "token_usage": {
+    "input_tokens": 912,
+    "cache_creation_tokens": 64867,
+    "cache_read_tokens": 1549451,
+    "output_tokens": 428,
+    "api_call_count": 26
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-19T00:16:05.734091Z",
+    "agent_lines": 337,
+    "human_added": 125,
+    "human_modified": 84,
+    "human_removed": 0,
+    "total_committed": 546,
+    "agent_percentage": 61.72161172161172
+  }
+}

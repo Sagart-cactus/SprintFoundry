@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "1506a384a770",
+  "strategy": "auto-commit",
+  "branch": "feat/overhaul-ui",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "config/project-sprintfoundry-claude.yaml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/15/06a384a770/0/metadata.json",
+      "transcript": "/15/06a384a770/0/full.jsonl",
+      "context": "",
+      "content_hash": "/15/06a384a770/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 9,
+    "cache_creation_tokens": 21257,
+    "cache_read_tokens": 233309,
+    "output_tokens": 929,
+    "api_call_count": 7
+  }
+}

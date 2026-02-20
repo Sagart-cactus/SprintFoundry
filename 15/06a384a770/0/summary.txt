@@ -1,0 +1,8 @@
+Good catch. It's actually fine — the `type` field is the default ticket source, but the `--source` CLI flag overrides which fetcher method is called at runtime. The fetcher always reads from the same `config` dict regardless of `type`. So:
+
+- `--source linear` → calls `fetchLinear()` → reads `config.api_key`
+- `--source github` → calls `fetchGitHub()` → reads `config.token`, `config.owner`, `config.repo`
+
+Both sets of keys coexist in the same config block without conflict. The `type: linear` just indicates the default/primary source, but it doesn't restrict which source can be used via `--source`.
+
+Want me to proceed with starting the monitor and both runs?
