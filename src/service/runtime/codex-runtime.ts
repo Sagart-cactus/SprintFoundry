@@ -26,6 +26,7 @@ const FORWARDED_PARENT_ENV_KEYS = [
   "SSL_CERT_DIR",
   "NODE_EXTRA_CA_CERTS",
 ] as const;
+// Explicit opt-in guard for a narrow local CLI compatibility fallback.
 const CODEX_HOME_FALLBACK_ENV_FLAG = "SPRINTFOUNDRY_ENABLE_CODEX_HOME_AUTH_FALLBACK";
 const CODEX_AUTH_HEADER_ERROR_SIGNATURE =
   "401 Unauthorized: Missing bearer or basic authentication in header";
@@ -414,9 +415,12 @@ export class CodexRuntime implements AgentRuntime {
       const firstStderr = await fs
         .readFile(params.outputPaths.firstStderrPath, "utf-8")
         .catch(() => "");
-      // Security rationale: this retry can only happen when a trusted auth-header signature
-      // is seen on stderr and the fallback flag is explicitly enabled. We avoid stdout-triggered
-      // retries to prevent spoofable model output from mutating execution environment behavior.
+      // Keep behavior decision: preserve a single bounded retry for local CLI auth-header 401s.
+      // Simplification rejected: removing this retry regresses staged CODEX_HOME compatibility.
+      // Security guardrails:
+      // - opt-in only via CODEX_HOME_FALLBACK_ENV_FLAG;
+      // - trusted stderr signature only (never stdout);
+      // - single retry without CODEX_HOME, then normal error propagation.
       if (
         this.shouldRetryWithoutCodexHome(
           params.env,
@@ -503,10 +507,10 @@ export class CodexRuntime implements AgentRuntime {
     stderrOutput: string,
     codexHomeFallbackEnabled: boolean
   ): boolean {
-    // Security rationale:
-    // - opt-in only: retry is disabled unless an explicit env flag enables it;
-    // - trusted signal only: match auth-header signature from process stderr, not stdout;
-    // - bounded behavior: only retry after a non-zero process exit to avoid silent loops.
+    // Guarded fallback contract:
+    // - opt-in only: disabled unless explicit flag enables it;
+    // - trusted signal only: exact auth-header signature from stderr (not stdout);
+    // - bounded behavior: requires non-zero process exit and retries only once upstream.
     if (!env.CODEX_HOME || !codexHomeFallbackEnabled) return false;
     if (!(error instanceof Error)) return false;
     const errorMessage = error.message.toLowerCase();

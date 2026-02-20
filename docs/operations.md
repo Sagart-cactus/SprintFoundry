@@ -91,6 +91,15 @@ Planner/runtime failures:
 Git auth failures:
 - verify `project.repo` auth settings and token/SSH key
 
+Codex CLI 401 when using staged `CODEX_HOME`:
+- current behavior keeps a guarded single retry path (simplification to "no retry" was rejected)
+- retry is disabled by default; opt in with `SPRINTFOUNDRY_ENABLE_CODEX_HOME_AUTH_FALLBACK=1`
+- retry only triggers when stderr includes:
+  - `401 Unauthorized: Missing bearer or basic authentication in header`
+- retry runs once without `CODEX_HOME` and writes retry logs:
+  - `.codex-runtime.step-<n>.attempt-<m>.retry.stdout.log`
+  - `.codex-runtime.step-<n>.attempt-<m>.retry.stderr.log`
+
 ## Cleanup
 
 Run workspaces are created under:
