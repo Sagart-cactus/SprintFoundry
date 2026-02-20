@@ -76,6 +76,14 @@ vi.mock("../src/service/event-store.js", () => ({
   },
 }));
 
+vi.mock("../src/service/runtime-session-store.js", () => ({
+  RuntimeSessionStore: class {
+    record = vi.fn();
+    findLatestByAgent = vi.fn().mockResolvedValue(null);
+    constructor(..._args: any[]) {}
+  },
+}));
+
 const { OrchestrationService } = await import(
   "../src/service/orchestration-service.js"
 );
@@ -86,6 +94,7 @@ describe("OrchestrationService", () => {
   let mockAgentRunner: any;
   let mockTicketFetcher: any;
   let mockGitManager: any;
+  let mockSessionStore: any;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -100,6 +109,7 @@ describe("OrchestrationService", () => {
     mockAgentRunner = (service as any).agentRunner;
     mockTicketFetcher = (service as any).tickets;
     mockGitManager = (service as any).git;
+    mockSessionStore = (service as any).sessions;
   });
 
   it("handleTask with source=prompt creates ticket from prompt text", async () => {
@@ -863,7 +873,7 @@ describe("OrchestrationService", () => {
           tokens_used: 100,
           cost_usd: 0.01,
           duration_seconds: 5,
-          container_id: "local-1",
+          container_id: "session-dev-initial",
         };
       }
       if (config.agent === "code-review") {
@@ -877,7 +887,7 @@ describe("OrchestrationService", () => {
             tokens_used: 100,
             cost_usd: 0.01,
             duration_seconds: 5,
-            container_id: "local-2",
+            container_id: "session-review-1",
           };
         }
         return {
@@ -885,7 +895,7 @@ describe("OrchestrationService", () => {
           tokens_used: 100,
           cost_usd: 0.01,
           duration_seconds: 5,
-          container_id: "local-3",
+          container_id: "session-review-2",
         };
       }
       // qa
@@ -894,7 +904,7 @@ describe("OrchestrationService", () => {
         tokens_used: 100,
         cost_usd: 0.01,
         duration_seconds: 5,
-        container_id: "local-4",
+        container_id: "session-qa-1",
       };
     });
 
@@ -903,11 +913,27 @@ describe("OrchestrationService", () => {
         makeStep({ step_number: 901, agent: "developer", task: "Fix review findings" }),
       ],
     });
+    mockSessionStore.findLatestByAgent.mockResolvedValue({
+      run_id: "any",
+      agent: "developer",
+      step_number: 1,
+      step_attempt: 1,
+      runtime_provider: "claude-code",
+      runtime_mode: "local_process",
+      session_id: "session-dev-123",
+      updated_at: new Date().toISOString(),
+    });
 
     const run = await service.handleTask("p1", "prompt", "Build feature");
 
     expect(run.status).toBe("completed");
     expect(mockOrchestratorAgent.planRework).toHaveBeenCalledTimes(1);
+    const reworkCall = mockAgentRunner.run.mock.calls
+      .map((call: any[]) => call[0])
+      .find((cfg: any) => cfg.stepNumber === 901);
+    expect(reworkCall.resumeSessionId).toBe("session-dev-123");
+    expect(reworkCall.resumeReason).toBe("rework_plan");
+    expect(mockSessionStore.record).toHaveBeenCalled();
   });
 
   it("quality gate runs after developer-role steps", async () => {

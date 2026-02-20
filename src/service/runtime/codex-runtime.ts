@@ -57,7 +57,7 @@ export class CodexRuntime implements AgentRuntime {
     const hasBypassFlag = runtimeArgs.includes("--dangerously-bypass-approvals-and-sandbox");
     const args = [
       "exec",
-      prompt,
+      ...(config.resumeSessionId ? ["resume", config.resumeSessionId, prompt] : [prompt]),
       "--json",
       ...(hasSandboxFlag || hasBypassFlag ? [] : ["--sandbox", "workspace-write"]),
     ];
@@ -185,7 +185,7 @@ export class CodexRuntime implements AgentRuntime {
 
     return {
       tokens_used: result.tokensUsed,
-      runtime_id: result.runtimeId,
+      runtime_id: this.extractSessionIdFromOutput(result.stdout) ?? result.runtimeId,
     };
   }
 
@@ -229,13 +229,25 @@ export class CodexRuntime implements AgentRuntime {
     );
 
     const codex = new Codex({ env: env as Record<string, string> });
-    const thread = codex.startThread({
-      workingDirectory: config.workspacePath,
-      model: config.modelConfig.model,
-      sandboxMode: "workspace-write",
-      approvalPolicy: "never",
-      skipGitRepoCheck: true,
-    });
+    const codexWithResume = codex as {
+      resumeThread?: (sessionId: string) => { id?: string | null; run: (prompt: string) => Promise<{ usage?: { input_tokens?: number; output_tokens?: number } }> };
+      startThread: (args: {
+        workingDirectory: string;
+        model: string;
+        sandboxMode: "workspace-write";
+        approvalPolicy: "never";
+        skipGitRepoCheck: true;
+      }) => { id?: string | null; run: (prompt: string) => Promise<{ usage?: { input_tokens?: number; output_tokens?: number } }> };
+    };
+    const thread = config.resumeSessionId && typeof codexWithResume.resumeThread === "function"
+      ? codexWithResume.resumeThread(config.resumeSessionId)
+      : codexWithResume.startThread({
+          workingDirectory: config.workspacePath,
+          model: config.modelConfig.model,
+          sandboxMode: "workspace-write",
+          approvalPolicy: "never",
+          skipGitRepoCheck: true,
+        });
     const turn = await thread.run(prompt);
 
     return {
@@ -261,6 +273,32 @@ export class CodexRuntime implements AgentRuntime {
       env[key] = value;
     }
     return env;
+  }
+
+  private extractSessionIdFromOutput(stdout: string): string | null {
+    const trimmed = stdout.trim();
+    if (!trimmed) return null;
+    for (const line of trimmed.split(/\r?\n/)) {
+      const candidate = this.extractSessionIdFromJson(line.trim());
+      if (candidate) return candidate;
+    }
+    return this.extractSessionIdFromJson(trimmed);
+  }
+
+  private extractSessionIdFromJson(jsonText: string): string | null {
+    if (!jsonText || (!jsonText.startsWith("{") && !jsonText.startsWith("["))) return null;
+    try {
+      const parsed = JSON.parse(jsonText) as Record<string, unknown>;
+      const sessionId = parsed["session_id"];
+      if (typeof sessionId === "string" && sessionId.trim()) return sessionId;
+      const threadId = parsed["thread_id"];
+      if (typeof threadId === "string" && threadId.trim()) return threadId;
+      const id = parsed["id"];
+      if (typeof id === "string" && id.trim().startsWith("thread-")) return id;
+      return null;
+    } catch {
+      return null;
+    }
   }
 
   private shouldRetryWithoutCodexHome(
