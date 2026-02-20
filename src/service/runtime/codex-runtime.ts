@@ -3,6 +3,7 @@ import { runProcess } from "./process-utils.js";
 import { Codex } from "@openai/codex-sdk";
 import * as path from "path";
 import * as fs from "fs/promises";
+import type { RuntimeMetadataEnvelope } from "../../shared/types.js";
 
 const FORWARDED_PARENT_ENV_KEYS = [
   "PATH",
@@ -194,12 +195,29 @@ export class CodexRuntime implements AgentRuntime {
       result = await runWithCurrentEnv(args);
     }
 
+    const usage = this.extractProcessUsage(result.stdout);
+    const tokenSavings = usage ? this.extractTokenSavings(usage) : undefined;
+    const runtimeMetadata = this.buildRuntimeMetadata(config, result.runtimeId, {
+      usage,
+      resume: this.buildResumeMetadata(config, {
+        resume_used: resumeUsed,
+        resume_failed: resumeFailed,
+        resume_fallback: resumeFallback,
+      }),
+      token_savings: tokenSavings,
+      provider_metadata: {
+        output_parsing: usage ? "single_json" : "none",
+      },
+    });
     return {
       tokens_used: result.tokensUsed,
       runtime_id: result.runtimeId,
+      usage,
       resume_used: resumeUsed,
       resume_failed: resumeFailed,
       resume_fallback: resumeFallback,
+      token_savings: tokenSavings,
+      runtime_metadata: runtimeMetadata,
     };
   }
 
@@ -289,14 +307,29 @@ export class CodexRuntime implements AgentRuntime {
           });
         }
         const usage = this.extractSdkUsage(freshTurn);
+        const tokenSavings = this.extractTokenSavings(usage);
+        const runtimeMetadata = this.buildRuntimeMetadata(config, this.extractSdkRuntimeId(freshThread), {
+          usage,
+          resume: this.buildResumeMetadata(config, {
+            resume_used: resumeUsed,
+            resume_failed: resumeFailed,
+            resume_fallback: resumeFallback,
+          }),
+          token_savings: tokenSavings,
+          provider_metadata: {
+            output_parsing: "sdk_turn",
+            session_id_source: "sdk_thread",
+          },
+        });
         return {
           tokens_used: this.extractSdkTokensUsed(usage),
           runtime_id: this.extractSdkRuntimeId(freshThread),
           usage,
-          token_savings: this.extractTokenSavings(usage),
+          token_savings: tokenSavings,
           resume_used: resumeUsed,
           resume_failed: resumeFailed,
           resume_fallback: resumeFallback,
+          runtime_metadata: runtimeMetadata,
         };
       }
       try {
@@ -306,14 +339,29 @@ export class CodexRuntime implements AgentRuntime {
           config
         );
         const usage = this.extractSdkUsage(resumedTurn);
+        const tokenSavings = this.extractTokenSavings(usage);
+        const runtimeMetadata = this.buildRuntimeMetadata(config, this.extractSdkRuntimeId(resumedThread), {
+          usage,
+          resume: this.buildResumeMetadata(config, {
+            resume_used: resumeUsed,
+            resume_failed: resumeFailed,
+            resume_fallback: resumeFallback,
+          }),
+          token_savings: tokenSavings,
+          provider_metadata: {
+            output_parsing: "sdk_turn",
+            session_id_source: "sdk_thread",
+          },
+        });
         return {
           tokens_used: this.extractSdkTokensUsed(usage),
           runtime_id: this.extractSdkRuntimeId(resumedThread),
           usage,
-          token_savings: this.extractTokenSavings(usage),
+          token_savings: tokenSavings,
           resume_used: resumeUsed,
           resume_failed: resumeFailed,
           resume_fallback: resumeFallback,
+          runtime_metadata: runtimeMetadata,
         };
       } catch (error) {
         throw this.withResumeTelemetry(error, {
@@ -331,15 +379,30 @@ export class CodexRuntime implements AgentRuntime {
       config
     );
     const usage = this.extractSdkUsage(turn);
+    const tokenSavings = this.extractTokenSavings(usage);
+    const runtimeMetadata = this.buildRuntimeMetadata(config, this.extractSdkRuntimeId(thread), {
+      usage,
+      resume: this.buildResumeMetadata(config, {
+        resume_used: resumeUsed,
+        resume_failed: resumeFailed,
+        resume_fallback: resumeFallback,
+      }),
+      token_savings: tokenSavings,
+      provider_metadata: {
+        output_parsing: "sdk_turn",
+        session_id_source: "sdk_thread",
+      },
+    });
 
     return {
       tokens_used: this.extractSdkTokensUsed(usage),
       runtime_id: this.extractSdkRuntimeId(thread),
       usage,
-      token_savings: this.extractTokenSavings(usage),
+      token_savings: tokenSavings,
       resume_used: resumeUsed,
       resume_failed: resumeFailed,
       resume_fallback: resumeFallback,
+      runtime_metadata: runtimeMetadata,
     };
   }
 
@@ -635,11 +698,80 @@ export class CodexRuntime implements AgentRuntime {
     };
   }
 
+  private extractProcessUsage(stdout: string): Record<string, number> | undefined {
+    const trimmed = stdout.trim();
+    if (!trimmed) return undefined;
+    const candidates = trimmed.split(/\r?\n/).reverse();
+    for (const candidate of candidates) {
+      const usage = this.extractUsageFromJsonCandidate(candidate.trim());
+      if (usage) return usage;
+    }
+    return this.extractUsageFromJsonCandidate(trimmed);
+  }
+
+  private extractUsageFromJsonCandidate(jsonText: string): Record<string, number> | undefined {
+    if (!jsonText || (!jsonText.startsWith("{") && !jsonText.startsWith("["))) return undefined;
+    try {
+      const parsed = JSON.parse(jsonText) as Record<string, unknown>;
+      const usageRecord =
+        parsed["usage"] && typeof parsed["usage"] === "object" && parsed["usage"] !== null
+          ? (parsed["usage"] as Record<string, unknown>)
+          : undefined;
+      if (!usageRecord) return undefined;
+      const normalized: Record<string, number> = {};
+      for (const [key, value] of Object.entries(usageRecord)) {
+        if (typeof value === "number" && Number.isFinite(value)) {
+          normalized[key] = value;
+          continue;
+        }
+        if (typeof value === "string") {
+          const parsedNumber = Number(value);
+          if (Number.isFinite(parsedNumber)) normalized[key] = parsedNumber;
+        }
+      }
+      return Object.keys(normalized).length > 0 ? normalized : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   private extractTokenSavings(usage: Record<string, number>): Record<string, number> | undefined {
     const cachedInputTokens = usage.cached_input_tokens ?? 0;
     if (cachedInputTokens <= 0) return undefined;
     return {
       cached_input_tokens: cachedInputTokens,
+    };
+  }
+
+  private buildRuntimeMetadata(
+    config: RuntimeStepContext,
+    runtimeId: string,
+    extras?: Omit<RuntimeMetadataEnvelope, "schema_version" | "runtime">
+  ): RuntimeMetadataEnvelope {
+    return {
+      schema_version: 1,
+      runtime: {
+        provider: config.runtime.provider,
+        mode: config.runtime.mode,
+        runtime_id: runtimeId,
+        step_attempt: config.stepAttempt,
+      },
+      ...extras,
+    };
+  }
+
+  private buildResumeMetadata(
+    config: RuntimeStepContext,
+    telemetry: ResumeTelemetry
+  ): RuntimeMetadataEnvelope["resume"] | undefined {
+    if (!config.resumeSessionId && !telemetry.resume_used) return undefined;
+    return {
+      requested: Boolean(config.resumeSessionId),
+      used: telemetry.resume_used,
+      failed: telemetry.resume_failed,
+      fallback_to_fresh: telemetry.resume_fallback,
+      source_session_id: config.resumeSessionId,
+      reason: config.resumeReason,
     };
   }
 

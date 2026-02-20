@@ -110,6 +110,33 @@ export interface RuntimeConfig {
   model_reasoning_effort?: "minimal" | "low" | "medium" | "high" | "xhigh";
 }
 
+export interface RuntimeMetadataEnvelope {
+  schema_version: 1;
+  runtime: {
+    provider: RuntimeProvider;
+    mode: RuntimeMode;
+    runtime_id: string;
+    step_attempt: number;
+  };
+  usage?: Record<string, number>;
+  billing?: {
+    cost_usd?: number;
+    cost_source?: "runtime_reported" | "estimated";
+  };
+  resume?: {
+    requested: boolean;
+    used: boolean;
+    failed: boolean;
+    fallback_to_fresh: boolean;
+    source_session_id?: string;
+    reason?: string;
+  };
+  token_savings?: {
+    cached_input_tokens?: number;
+  };
+  provider_metadata?: Record<string, unknown>;
+}
+
 export interface CodexSkillDefinition {
   path: string; // repo-relative or absolute path to skill directory containing SKILL.md
 }
@@ -296,6 +323,7 @@ export interface StepExecution {
   completed_at: Date | null;
   result: AgentResult | null;
   rework_count: number;
+  runtime_metadata?: RuntimeMetadataEnvelope | null;
 }
 
 export interface AgentResult {

@@ -311,6 +311,15 @@ describe("AgentRunner", () => {
     expect(mockClaudeSdkQuery).toHaveBeenCalledTimes(1);
     expect(result.agentResult.status).toBe("complete");
     expect(result.cost_usd).toBe(0.123);
+    expect(result.agentResult.metadata.runtime).toBeDefined();
+    expect(result.agentResult.metadata.runtime_metadata).toMatchObject({
+      schema_version: 1,
+      runtime: {
+        provider: "claude-code",
+        mode: "local_sdk",
+        step_attempt: 1,
+      },
+    });
   });
 
   it("spawnContainer constructs correct docker args with volume mounts", async () => {

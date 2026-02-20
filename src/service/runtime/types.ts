@@ -13,6 +13,7 @@ import type {
   AgentCliFlags,
   ContainerResources,
   StepExecution,
+  RuntimeMetadataEnvelope,
 } from "../../shared/types.js";
 
 export interface RuntimeStepContext {
@@ -51,6 +52,7 @@ export interface RuntimeStepResult {
   resume_failed?: boolean;
   resume_fallback?: boolean;
   token_savings?: Record<string, number>;
+  runtime_metadata?: RuntimeMetadataEnvelope;
 }
 
 export interface AgentRuntime {
