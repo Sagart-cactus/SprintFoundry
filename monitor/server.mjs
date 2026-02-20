@@ -23,6 +23,78 @@ const LOG_KIND_TO_FILES = {
   agent_result: [".agent-result.json"],
 };
 
+function parseResultJson(raw) {
+  if (!raw || !raw.trim()) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+async function readStepResult(runPath, stepNumber, maxCompletedStep = null) {
+  const resultsDir = path.join(runPath, ".sprintfoundry", "step-results");
+  const resultPattern = new RegExp(`^step-${stepNumber}\\.attempt-(\\d+)\\.[^.]+\\.json$`);
+  const resultEntries = await fs.readdir(resultsDir, { withFileTypes: true }).catch(() => []);
+  let bestSnapshot = null;
+  for (const entry of resultEntries) {
+    if (!entry.isFile()) continue;
+    const match = entry.name.match(resultPattern);
+    if (!match) continue;
+    const attempt = Number(match[1]);
+    if (!bestSnapshot || attempt >= bestSnapshot.attempt) {
+      bestSnapshot = {
+        path: path.join(resultsDir, entry.name),
+        attempt: Number.isFinite(attempt) ? attempt : 0,
+      };
+    }
+  }
+  if (bestSnapshot) {
+    const raw = await fs.readFile(bestSnapshot.path, "utf-8").catch(() => "");
+    const parsed = parseResultJson(raw);
+    if (parsed) {
+      return {
+        result: parsed,
+        source: "step_snapshot",
+      };
+    }
+  }
+
+  const contextDir = path.join(runPath, ".agent-context");
+  const contextEntries = await fs.readdir(contextDir, { withFileTypes: true }).catch(() => []);
+  const contextMatches = contextEntries
+    .filter((entry) => entry.isFile() && entry.name.startsWith(`step-${stepNumber}-`) && entry.name.endsWith(".json"))
+    .map((entry) => entry.name);
+  if (contextMatches.length > 0) {
+    const bestContextFile = contextMatches.sort().at(-1);
+    if (bestContextFile) {
+      const raw = await fs.readFile(path.join(contextDir, bestContextFile), "utf-8").catch(() => "");
+      const parsed = parseResultJson(raw);
+      if (parsed) {
+        return {
+          result: parsed,
+          source: "agent_context",
+        };
+      }
+    }
+  }
+
+  // Only use .agent-result.json for the latest completed step; for older steps this would be stale.
+  if (maxCompletedStep != null && stepNumber === maxCompletedStep) {
+    const latestRaw = await fs.readFile(path.join(runPath, ".agent-result.json"), "utf-8").catch(() => "");
+    const latestParsed = parseResultJson(latestRaw);
+    if (latestParsed) {
+      return {
+        result: latestParsed,
+        source: "latest_agent_result",
+      };
+    }
+  }
+
+  return { result: null, source: "none" };
+}
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -185,8 +257,26 @@ async function loadRun(projectId, runId) {
   const events = await readEvents(runPath);
   const planEvent = events.find((e) => e.event_type === "task.plan_generated");
   const step_models = await loadStepModels(runPath);
+  const maxCompletedStep = summary.steps
+    .filter((step) => step.status === "completed" || step.status === "failed")
+    .map((step) => step.step_number)
+    .sort((a, b) => b - a)[0] ?? null;
+  const steps = await Promise.all(
+    (summary.steps ?? []).map(async (step) => {
+      const { result } = await readStepResult(runPath, step.step_number, maxCompletedStep);
+      const summaryText =
+        typeof result?.summary === "string" && result.summary.trim()
+          ? result.summary.trim()
+          : null;
+      return {
+        ...step,
+        result_summary: summaryText,
+      };
+    })
+  );
   return {
     ...summary,
+    steps,
     plan: planEvent?.data?.plan ?? null,
     step_models,
   };
@@ -416,6 +506,30 @@ const server = http.createServer(async (req, res) => {
       }
       const text = await readLogText(project, run, kind, lines, Number.isFinite(stepNumber) ? stepNumber : null);
       sendText(res, 200, text);
+      return;
+    }
+
+    if (pathname === "/api/step-result") {
+      const project = reqUrl.searchParams.get("project");
+      const run = reqUrl.searchParams.get("run");
+      const stepParam = reqUrl.searchParams.get("step");
+      const stepNumber = Number(stepParam);
+      if (!project || !run || !Number.isFinite(stepNumber)) {
+        sendJson(res, 400, { error: "Missing or invalid project/run/step query params" });
+        return;
+      }
+      const runPath = safeJoin(runsRoot, project, run);
+      const runSummary = await loadRunSummary(project, run, runPath);
+      const maxCompletedStep = runSummary.steps
+        .filter((step) => step.status === "completed" || step.status === "failed")
+        .map((step) => step.step_number)
+        .sort((a, b) => b - a)[0] ?? null;
+      const payload = await readStepResult(runPath, stepNumber, maxCompletedStep);
+      sendJson(res, 200, {
+        step: stepNumber,
+        source: payload.source,
+        result: payload.result,
+      });
       return;
     }
 

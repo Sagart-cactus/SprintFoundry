@@ -225,6 +225,30 @@ describe("AgentRunner", () => {
     expect(parsed.issues).toContain("Missing required fields in .agent-result.json");
   });
 
+  it("persistStepResultSnapshot writes per-step result file", async () => {
+    const workspacePath = path.join(tmpDir, "workspace-step-snapshot");
+    await fs.mkdir(workspacePath, { recursive: true });
+    const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig());
+
+    await (runner as any).persistStepResultSnapshot(
+      workspacePath,
+      7,
+      2,
+      "code-review",
+      makeResult({ summary: "Snapshot saved" })
+    );
+
+    const snapshotPath = path.join(
+      workspacePath,
+      ".sprintfoundry",
+      "step-results",
+      "step-7.attempt-2.code-review.json"
+    );
+    const raw = await fs.readFile(snapshotPath, "utf-8");
+    const parsed = JSON.parse(raw);
+    expect(parsed.summary).toBe("Snapshot saved");
+  });
+
   it("parseTokenUsage extracts from JSON output", () => {
     const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig());
     const output = JSON.stringify({ usage: { total_tokens: 1234 } });

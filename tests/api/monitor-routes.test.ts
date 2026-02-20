@@ -168,3 +168,11 @@ describe("GET /api/files", () => {
     expect(JSON.parse(body)).toHaveProperty("error");
   });
 });
+
+describe("GET /api/step-result", () => {
+  it("returns 400 when project/run/step params are missing", async () => {
+    const { status, body } = await get(`${BASE}/api/step-result`);
+    expect(status).toBe(400);
+    expect(JSON.parse(body)).toHaveProperty("error");
+  });
+});

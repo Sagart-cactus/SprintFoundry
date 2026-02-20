@@ -138,6 +138,13 @@ export class AgentRunner {
         token_savings: result.token_savings,
       },
     };
+    await this.persistStepResultSnapshot(
+      config.workspacePath,
+      config.stepNumber,
+      config.stepAttempt,
+      config.agent,
+      agentResult
+    );
 
     const duration = (Date.now() - startTime) / 1000;
     const costUsd =
@@ -589,6 +596,23 @@ export class AgentRunner {
         metadata: {},
       };
     }
+  }
+
+  private async persistStepResultSnapshot(
+    workspacePath: string,
+    stepNumber: number,
+    stepAttempt: number,
+    agent: AgentType,
+    result: AgentResult
+  ): Promise<void> {
+    const dir = path.join(workspacePath, ".sprintfoundry", "step-results");
+    await fs.mkdir(dir, { recursive: true });
+    const safeAgent = agent.replace(/[^a-z0-9_-]/gi, "-");
+    const filePath = path.join(
+      dir,
+      `step-${stepNumber}.attempt-${stepAttempt}.${safeAgent}.json`
+    );
+    await fs.writeFile(filePath, JSON.stringify(result, null, 2), "utf-8");
   }
 
   // ---- Utilities ----
