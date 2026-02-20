@@ -126,8 +126,23 @@ export class GitManager {
 
     // Use GitHub CLI if available, otherwise return placeholder
     try {
+      const currentBranch = this.currentBranchName(workspacePath);
+      const owner = this.githubOwnerFromRepoUrl(this.repoConfig.url);
+      const headSpec = owner ? `${owner}:${currentBranch}` : currentBranch;
       const result = this.exec(
-        ["gh", "pr", "create", "--title", title, "--body", body, "--base", this.repoConfig.default_branch],
+        [
+          "gh",
+          "pr",
+          "create",
+          "--title",
+          title,
+          "--body",
+          body,
+          "--base",
+          this.repoConfig.default_branch,
+          "--head",
+          headSpec,
+        ],
         workspacePath
       );
       return result.trim();
@@ -139,21 +154,43 @@ export class GitManager {
   private buildBranchName(ticket: TicketDetails): string {
     const { prefix, include_ticket_id, naming } = this.branchStrategy;
     const parts: string[] = [];
+    const separator = naming === "snake_case" ? "_" : "-";
 
     if (include_ticket_id) {
-      parts.push(ticket.id.toLowerCase());
+      parts.push(this.sanitizeBranchSegment(ticket.id, separator));
     }
 
     // Slugify the title
-    const slug = ticket.title
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, naming === "snake_case" ? "_" : "-")
-      .replace(/^[-_]+|[-_]+$/g, "")
-      .slice(0, 50);
+    const slug = this.sanitizeBranchSegment(ticket.title, separator).slice(0, 50);
 
     parts.push(slug);
 
-    return prefix + parts.join(naming === "snake_case" ? "_" : "-");
+    return prefix + parts.join(separator);
+  }
+
+  private sanitizeBranchSegment(value: string, separator: "-" | "_"): string {
+    const sanitized = value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, separator)
+      .replace(/^[-_]+|[-_]+$/g, "");
+    return sanitized || "work";
+  }
+
+  private currentBranchName(workspacePath: string): string {
+    const branch = this.exec(["git", "rev-parse", "--abbrev-ref", "HEAD"], workspacePath).trim();
+    if (!branch) {
+      throw new Error("Unable to resolve current git branch for PR creation");
+    }
+    return branch;
+  }
+
+  private githubOwnerFromRepoUrl(url: string): string | null {
+    const cleaned = url.replace(/^https?:\/\/[^@]+@/, "https://");
+    const sshMatch = cleaned.match(/^git@github\.com:([^/]+)\/[^/]+(?:\.git)?$/i);
+    if (sshMatch) return sshMatch[1];
+    const httpsMatch = cleaned.match(/^https?:\/\/github\.com\/([^/]+)\/[^/]+(?:\.git)?$/i);
+    if (httpsMatch) return httpsMatch[1];
+    return null;
   }
 
   private buildPRBody(run: TaskRun): string {

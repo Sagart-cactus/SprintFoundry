@@ -1,7 +1,7 @@
 {
   "sdkVersion": "0.104.0",
   "mode": "preflight",
-  "model": "gpt-5.3-codex",
+  "model": "gpt-5",
   "workspacePath": "(not created)",
   "checks": [
     {
