@@ -119,6 +119,7 @@ describe("CodexRuntime security handling", () => {
 
   it("does not retry without explicit fallback flag even when stderr has trusted auth signature", async () => {
     const trustedAuthMessage = "401 Unauthorized: Missing bearer or basic authentication in header";
+    delete process.env.SPRINTFOUNDRY_ENABLE_CODEX_HOME_AUTH_FALLBACK;
 
     (runProcess as any).mockImplementationOnce(
       async (_command: string, _args: string[], options: { outputFiles?: { stderrPath?: string } }) => {
@@ -134,6 +135,9 @@ describe("CodexRuntime security handling", () => {
       runtime: {
         provider: "codex",
         mode: "local_process",
+        env: {
+          SPRINTFOUNDRY_ENABLE_CODEX_HOME_AUTH_FALLBACK: "0",
+        },
       },
       codexHomeDir: path.join(tmpDir, ".codex-home"),
       codexSkillNames: ["security-policy"],

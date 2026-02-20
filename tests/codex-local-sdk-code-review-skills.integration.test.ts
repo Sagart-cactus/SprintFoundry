@@ -289,8 +289,11 @@ describe("Codex local_sdk integration for code-review staged skills", () => {
     const [command, args, options] = processCall;
     expect(command).toBe("codex");
     expect(args[0]).toBe("exec");
-    expect(args[1]).toContain("Primary task: Validate staged Codex skills are available and used");
-    expect(args[1]).toContain(
+    const promptArg = args.find((arg) =>
+      arg.includes("Primary task: Validate staged Codex skills are available and used")
+    );
+    expect(promptArg).toBeDefined();
+    expect(promptArg).toContain(
       "Skills available in CODEX_HOME: code-quality, error-handling, performance-review"
     );
     expect(options.cwd).toBe(workspacePath);
