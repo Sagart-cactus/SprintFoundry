@@ -304,6 +304,24 @@ describe("CodexRuntime local_sdk mode", () => {
     expect(elapsedMs).toBeLessThan(500);
   });
 
+  it("times out immediately even when SDK run would resolve immediately", async () => {
+    mockRunFn.mockResolvedValue({
+      usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 },
+      finalResponse: "ok",
+    });
+    const runtime = new CodexRuntime();
+
+    await expect(
+      runtime.runStep(
+        makeContext(tmpDir, {
+          timeoutMinutes: 0,
+        })
+      )
+    ).rejects.toThrow(/Codex SDK run timed out after 0ms/);
+
+    expect(mockRunFn).not.toHaveBeenCalled();
+  });
+
   it("passes AbortSignal to SDK turn and aborts it on timeout", async () => {
     let observedSignal: AbortSignal | undefined;
     mockRunFn.mockImplementation(

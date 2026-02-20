@@ -354,8 +354,16 @@ export class CodexRuntime implements AgentRuntime {
   ): Promise<T> {
     const controller = new AbortController();
     const effectiveTimeoutMs = Math.max(0, timeoutMs);
-    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const timeoutError = new Error(
+      `Codex SDK run timed out after ${effectiveTimeoutMs}ms (step=${config.stepNumber}, attempt=${config.stepAttempt})`
+    );
 
+    if (effectiveTimeoutMs === 0) {
+      controller.abort(timeoutError);
+      throw timeoutError;
+    }
+
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     const runResultPromise = run(controller.signal);
     return await new Promise<T>((resolve, reject) => {
       let settled = false;
@@ -367,9 +375,6 @@ export class CodexRuntime implements AgentRuntime {
         }
         handler();
       };
-      const timeoutError = new Error(
-        `Codex SDK run timed out after ${effectiveTimeoutMs}ms (step=${config.stepNumber}, attempt=${config.stepAttempt})`
-      );
       timeoutHandle = setTimeout(() => {
         controller.abort(timeoutError);
         settle(() => reject(timeoutError));
