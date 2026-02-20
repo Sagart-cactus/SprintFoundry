@@ -123,6 +123,20 @@ describe("GitManager", () => {
     expect(name).toContain("proj-42");
   });
 
+  it("buildBranchName sanitizes ticket IDs with symbols like #", () => {
+    const git = new GitManager(
+      makeRepoConfig(),
+      makeBranchStrategy({ include_ticket_id: true })
+    );
+
+    const name = (git as any).buildBranchName(
+      makeTicket({ id: "#21", title: "Validate Runtime Resume" })
+    );
+
+    expect(name).toBe("feat/21-validate-runtime-resume");
+    expect(name).not.toContain("#");
+  });
+
   it("buildBranchName truncates to 50 chars in slug", () => {
     const git = new GitManager(
       makeRepoConfig(),
@@ -171,6 +185,9 @@ describe("GitManager", () => {
 
   it("createPullRequest pushes branch then calls gh pr create", async () => {
     (mockSpawnSync as any).mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "git" && args[0] === "rev-parse") {
+        return { status: 0, stdout: "feat/21-resume-fix\n", stderr: "" };
+      }
       if (cmd === "gh") {
         return { status: 0, stdout: "https://github.com/test/repo/pull/1\n", stderr: "" };
       }
@@ -210,10 +227,15 @@ describe("GitManager", () => {
     expect(ghIdx).toBeGreaterThan(pushIdx);
     expect(commands[ghIdx].args).toContain("pr");
     expect(commands[ghIdx].args).toContain("create");
+    expect(commands[ghIdx].args).toContain("--head");
+    expect(commands[ghIdx].args).toContain("test:feat/21-resume-fix");
   });
 
   it("createPullRequest returns manual message when gh pr create fails", async () => {
     (mockSpawnSync as any).mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "git" && args[0] === "rev-parse") {
+        return { status: 0, stdout: "feat/21-resume-fix\n", stderr: "" };
+      }
       if (cmd === "gh") {
         return { status: 1, stdout: "", stderr: "gh not found" };
       }
@@ -512,6 +534,9 @@ describe("GitManager", () => {
 
   it("commitStepCheckpoint: PR creation still works after per-step commits (gh pr create path)", async () => {
     (mockSpawnSync as any).mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "git" && args[0] === "rev-parse") {
+        return { status: 0, stdout: "feat/99-step-checkpoints\n", stderr: "" };
+      }
       if (cmd === "gh") {
         return { status: 0, stdout: "https://github.com/test/repo/pull/99\n", stderr: "" };
       }
@@ -546,5 +571,7 @@ describe("GitManager", () => {
     expect(ghCall).toBeDefined();
     expect(ghCall[1]).toContain("pr");
     expect(ghCall[1]).toContain("create");
+    expect(ghCall[1]).toContain("--head");
+    expect(ghCall[1]).toContain("test:feat/99-step-checkpoints");
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseTokenUsage } from "../src/service/runtime/process-utils.js";
+import { parseTokenUsage, parseRuntimeId } from "../src/service/runtime/process-utils.js";
 
 describe("parseTokenUsage", () => {
   it("parses Claude usage.total_tokens", () => {
@@ -48,5 +48,35 @@ describe("parseTokenUsage", () => {
   it("returns 0 when token info is absent", () => {
     const output = "no token info here";
     expect(parseTokenUsage(output)).toBe(0);
+  });
+});
+
+describe("parseRuntimeId", () => {
+  it("extracts Codex thread_id from JSONL output", () => {
+    const output = [
+      JSON.stringify({ type: "thread.started", thread_id: "019c7c09-e8f0-7bd0-a22f-035f072fdf4f" }),
+      JSON.stringify({ type: "turn.started" }),
+    ].join("\n");
+
+    expect(parseRuntimeId("codex", output)).toBe("019c7c09-e8f0-7bd0-a22f-035f072fdf4f");
+  });
+
+  it("extracts Codex thread_id from single JSON output", () => {
+    const output = JSON.stringify({
+      type: "thread.started",
+      thread_id: "019c7c07-9552-7523-95f7-d4c87803dc9f",
+    });
+
+    expect(parseRuntimeId("codex", output)).toBe("019c7c07-9552-7523-95f7-d4c87803dc9f");
+  });
+
+  it("returns null for codex output without thread.started event", () => {
+    const output = JSON.stringify({ type: "turn.completed", usage: { input_tokens: 1, output_tokens: 2 } });
+    expect(parseRuntimeId("codex", output)).toBeNull();
+  });
+
+  it("returns null for non-codex commands", () => {
+    const output = JSON.stringify({ type: "thread.started", thread_id: "thread-abc" });
+    expect(parseRuntimeId("claude", output)).toBeNull();
   });
 });

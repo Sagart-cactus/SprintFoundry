@@ -1,0 +1,152 @@
+# SprintFoundry — Project Configuration
+# All platform agents + planner run on Codex
+
+project_id: sprintfoundry-codex-all
+name: SprintFoundry (Codex All Agents)
+
+stack: js
+
+agents:
+  - product
+  - architect
+  - developer
+  - go-developer
+  - code-review
+  - qa
+  - go-qa
+  - security
+  - ui-ux
+  - devops
+
+repo:
+  url: git@github.com:Sagart-cactus/SprintFoundry.git
+  default_branch: main
+
+api_keys:
+  openai: ${SPRINTFOUNDRY_OPENAI_KEY}
+
+model_overrides:
+  orchestrator:
+    provider: openai
+    model: gpt-5.3-codex
+  product:
+    provider: openai
+    model: gpt-5.3-codex
+  architect:
+    provider: openai
+    model: gpt-5.3-codex
+  developer:
+    provider: openai
+    model: gpt-5.3-codex
+  go-developer:
+    provider: openai
+    model: gpt-5.3-codex
+  code-review:
+    provider: openai
+    model: gpt-5.3-codex
+  qa:
+    provider: openai
+    model: gpt-5.3-codex
+  go-qa:
+    provider: openai
+    model: gpt-5.3-codex
+  security:
+    provider: openai
+    model: gpt-5.3-codex
+  ui-ux:
+    provider: openai
+    model: gpt-5.3-codex
+  devops:
+    provider: openai
+    model: gpt-5.3-codex
+
+runtime_overrides:
+  product:
+    provider: codex
+    mode: local_process
+    model_reasoning_effort: medium
+    args:
+      - --dangerously-bypass-approvals-and-sandbox
+  architect:
+    provider: codex
+    mode: local_process
+    model_reasoning_effort: medium
+    args:
+      - --dangerously-bypass-approvals-and-sandbox
+  developer:
+    provider: codex
+    mode: local_process
+    model_reasoning_effort: medium
+    args:
+      - --dangerously-bypass-approvals-and-sandbox
+  go-developer:
+    provider: codex
+    mode: local_process
+    model_reasoning_effort: medium
+    args:
+      - --dangerously-bypass-approvals-and-sandbox
+  code-review:
+    provider: codex
+    mode: local_process
+    model_reasoning_effort: medium
+    args:
+      - --dangerously-bypass-approvals-and-sandbox
+  qa:
+    provider: codex
+    mode: local_process
+    model_reasoning_effort: medium
+    args:
+      - --dangerously-bypass-approvals-and-sandbox
+  go-qa:
+    provider: codex
+    mode: local_process
+    model_reasoning_effort: medium
+    args:
+      - --dangerously-bypass-approvals-and-sandbox
+  security:
+    provider: codex
+    mode: local_process
+    model_reasoning_effort: medium
+    args:
+      - --dangerously-bypass-approvals-and-sandbox
+  ui-ux:
+    provider: codex
+    mode: local_process
+    model_reasoning_effort: medium
+    args:
+      - --dangerously-bypass-approvals-and-sandbox
+  devops:
+    provider: codex
+    mode: local_process
+    model_reasoning_effort: medium
+    args:
+      - --dangerously-bypass-approvals-and-sandbox
+
+planner_runtime_override:
+  provider: codex
+  mode: local_process
+  model_reasoning_effort: high
+  args:
+    - --model
+    - gpt-5.3-codex
+    - --dangerously-bypass-approvals-and-sandbox
+
+budget_overrides:
+  per_agent_tokens: 1000000
+  per_task_total_tokens: 6000000
+  per_task_max_cost_usd: 60.00
+
+branch_strategy:
+  prefix: feat/
+  include_ticket_id: true
+  naming: kebab-case
+
+integrations:
+  ticket_source:
+    type: github
+    config:
+      token: ${GITHUB_TOKEN}
+      owner: Sagart-cactus
+      repo: SprintFoundry
+
+rules: []
