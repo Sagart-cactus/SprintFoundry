@@ -65,7 +65,7 @@ describe("CodexRuntime security handling", () => {
     expect(firstCallEnv.UNRELATED_PARENT_SECRET).toBeUndefined();
   });
 
-  it("does not drop CODEX_HOME based on a spoofable stdout string", async () => {
+  it("does not drop CODEX_HOME based on a spoofable stdout string even when fallback is enabled", async () => {
     const spoofedAuthMessage = "401 Unauthorized: Missing bearer or basic authentication in header";
 
     (runProcess as any)
@@ -84,6 +84,13 @@ describe("CodexRuntime security handling", () => {
 
     const runtime = new CodexRuntime();
     const context = makeContext(tmpDir, {
+      runtime: {
+        provider: "codex",
+        mode: "local_process",
+        env: {
+          SPRINTFOUNDRY_ENABLE_CODEX_HOME_AUTH_FALLBACK: "1",
+        },
+      },
       codexHomeDir: path.join(tmpDir, ".codex-home"),
       codexSkillNames: ["security-policy"],
     });

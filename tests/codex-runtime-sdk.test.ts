@@ -238,6 +238,125 @@ describe("CodexRuntime local_sdk mode", () => {
     const constructorEnv = mockCodexConstructorCalls[0].env;
     expect(constructorEnv.MY_CUSTOM_VAR).toBe("custom-value");
   });
+
+  it("uses workspace .agent-task.md content as primary SDK prompt when present", async () => {
+    await fs.writeFile(
+      path.join(tmpDir, ".agent-task.md"),
+      "# SDK Task\n\nFollow this instruction from workspace task file.",
+      "utf-8"
+    );
+    const runtime = new CodexRuntime();
+    await runtime.runStep(makeContext(tmpDir, { task: "Fallback task should not be primary" }));
+
+    const prompt = vi.mocked(mockRunFn).mock.calls[0]?.[0] as string;
+    expect(prompt).toContain("# .agent-task.md");
+    expect(prompt).toContain("Follow this instruction from workspace task file.");
+    expect(prompt).toContain("Primary task: Fallback task should not be primary");
+  });
+
+  it("falls back to synthesized prompt when workspace .agent-task.md is absent", async () => {
+    const runtime = new CodexRuntime();
+    await runtime.runStep(makeContext(tmpDir, { task: "Use synthesized task prompt" }));
+
+    const prompt = vi.mocked(mockRunFn).mock.calls[0]?.[0] as string;
+    expect(prompt).toContain("Read .agent-task.md and AGENTS.md");
+    expect(prompt).toContain("Primary task: Use synthesized task prompt");
+  });
+
+  it("enforces SDK timeout and still writes debug artifacts", async () => {
+    mockRunFn.mockImplementation(() => new Promise(() => {}));
+    const runtime = new CodexRuntime();
+    const startedAt = Date.now();
+    await expect(
+      runtime.runStep(
+        makeContext(tmpDir, {
+          stepNumber: 8,
+          stepAttempt: 2,
+          timeoutMinutes: 0.0005,
+        })
+      )
+    ).rejects.toThrow(/Codex SDK run timed out/);
+    const elapsedMs = Date.now() - startedAt;
+    expect(elapsedMs).toBeGreaterThanOrEqual(20);
+    expect(elapsedMs).toBeLessThan(2000);
+
+    const stepDebugPath = path.join(
+      tmpDir,
+      ".codex-runtime.step-8.attempt-2.debug.json"
+    );
+    const debugContent = JSON.parse(await fs.readFile(stepDebugPath, "utf-8"));
+    expect(debugContent.runtime_mode).toBe("local_sdk");
+  });
+
+  it("treats non-positive SDK timeout as immediate timeout to match local_process semantics", async () => {
+    mockRunFn.mockImplementation(() => new Promise(() => {}));
+    const runtime = new CodexRuntime();
+    const startedAt = Date.now();
+    await expect(
+      runtime.runStep(
+        makeContext(tmpDir, {
+          timeoutMinutes: 0,
+        })
+      )
+    ).rejects.toThrow(/Codex SDK run timed out after 0ms/);
+
+    const elapsedMs = Date.now() - startedAt;
+    expect(elapsedMs).toBeLessThan(500);
+  });
+
+  it("times out immediately even when SDK run would resolve immediately", async () => {
+    mockRunFn.mockResolvedValue({
+      usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 },
+      finalResponse: "ok",
+    });
+    const runtime = new CodexRuntime();
+
+    await expect(
+      runtime.runStep(
+        makeContext(tmpDir, {
+          timeoutMinutes: 0,
+        })
+      )
+    ).rejects.toThrow(/Codex SDK run timed out after 0ms/);
+
+    expect(mockRunFn).not.toHaveBeenCalled();
+  });
+
+  it("passes AbortSignal to SDK turn and aborts it on timeout", async () => {
+    let observedSignal: AbortSignal | undefined;
+    mockRunFn.mockImplementation(
+      (_prompt: string, options?: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          observedSignal = options?.signal;
+          observedSignal?.addEventListener("abort", () => {
+            reject(new Error("aborted"));
+          });
+        })
+    );
+
+    const runtime = new CodexRuntime();
+    await expect(
+      runtime.runStep(
+        makeContext(tmpDir, {
+          timeoutMinutes: 0.0005,
+        })
+      )
+    ).rejects.toThrow(/Codex SDK run timed out/);
+
+    expect(observedSignal).toBeDefined();
+    expect(observedSignal?.aborted).toBe(true);
+  });
+
+  it("falls back to synthesized prompt when workspace .agent-task.md is empty", async () => {
+    await fs.writeFile(path.join(tmpDir, ".agent-task.md"), "   \n\n", "utf-8");
+    const runtime = new CodexRuntime();
+    await runtime.runStep(makeContext(tmpDir, { task: "Use fallback when task file is empty" }));
+
+    const prompt = vi.mocked(mockRunFn).mock.calls[0]?.[0] as string;
+    expect(prompt).toContain("Read .agent-task.md and AGENTS.md");
+    expect(prompt).not.toContain("# .agent-task.md");
+    expect(prompt).toContain("Primary task: Use fallback when task file is empty");
+  });
 });
 
 describe("CodexRuntime local_process mode (unchanged behavior)", () => {
@@ -322,6 +441,21 @@ describe("CodexRuntime local_process mode (unchanged behavior)", () => {
 
     const args = vi.mocked(runProcess).mock.calls[0][1] as string[];
     expect(args.some((arg) => arg.includes("model_reasoning_effort"))).toBe(false);
+  });
+
+  it("keeps synthesized prompt contract in local_process mode", async () => {
+    const runtime = new CodexRuntime();
+    await runtime.runStep(
+      makeContext(tmpDir, {
+        task: "Process mode task contract",
+        runtime: { provider: "codex", mode: "local_process" },
+      })
+    );
+
+    const args = vi.mocked(runProcess).mock.calls[0][1] as string[];
+    expect(args[0]).toBe("exec");
+    expect(args[1]).toContain("Primary task: Process mode task contract");
+    expect(args[1]).toContain("Read .agent-task.md and AGENTS.md");
   });
 });
 

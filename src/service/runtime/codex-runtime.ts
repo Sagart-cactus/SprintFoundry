@@ -38,18 +38,7 @@ export class CodexRuntime implements AgentRuntime {
     if (config.runtime.mode === "local_sdk") return this.runSdk(config);
     await fs.mkdir(config.workspacePath, { recursive: true });
 
-    const prompt = [
-      "You are executing one agent step in SprintFoundry.",
-      `Primary task: ${config.task}`,
-      "Read .agent-task.md and AGENTS.md, then complete the actual work requested there.",
-      config.codexSkillNames && config.codexSkillNames.length > 0
-        ? `Skills available in CODEX_HOME: ${config.codexSkillNames.join(", ")}. Use them when relevant.`
-        : "No additional runtime skills were provided for this step.",
-      "Create/modify the required project artifacts and code files first.",
-      "Do not stop after only updating .agent-result.json.",
-      "Only after doing the real work, write .agent-result.json with accurate status and artifact lists.",
-      "If truly blocked, set status=blocked or needs_rework with concrete issues.",
-    ].join("\n");
+    const prompt = this.buildSynthesizedPrompt(config);
     const runtimeArgs = config.runtime.args ?? [];
     const hasSandboxFlag = runtimeArgs.includes("--sandbox") || runtimeArgs.includes("-s");
     const hasBypassFlag = runtimeArgs.includes("--dangerously-bypass-approvals-and-sandbox");
@@ -129,6 +118,9 @@ export class CodexRuntime implements AgentRuntime {
       );
     } catch (error) {
       const firstStderr = await fs.readFile(baseOutputFiles.stderrPath, "utf-8").catch(() => "");
+      // Security rationale: this retry can only happen when a trusted auth-header signature
+      // is seen on stderr and the fallback flag is explicitly enabled. We avoid stdout-triggered
+      // retries to prevent spoofable model output from mutating execution environment behavior.
       if (this.shouldRetryWithoutCodexHome(env, error, firstStderr, codexHomeFallbackEnabled)) {
         console.warn(
           "[codex-runtime] Retrying once without CODEX_HOME after trusted auth-header failure."
@@ -197,18 +189,7 @@ export class CodexRuntime implements AgentRuntime {
   private async runSdk(config: RuntimeStepContext): Promise<RuntimeStepResult> {
     await fs.mkdir(config.workspacePath, { recursive: true });
 
-    const prompt = [
-      "You are executing one agent step in SprintFoundry.",
-      `Primary task: ${config.task}`,
-      "Read .agent-task.md and AGENTS.md, then complete the actual work requested there.",
-      config.codexSkillNames && config.codexSkillNames.length > 0
-        ? `Skills available in CODEX_HOME: ${config.codexSkillNames.join(", ")}. Use them when relevant.`
-        : "No additional runtime skills were provided for this step.",
-      "Create/modify the required project artifacts and code files first.",
-      "Do not stop after only updating .agent-result.json.",
-      "Only after doing the real work, write .agent-result.json with accurate status and artifact lists.",
-      "If truly blocked, set status=blocked or needs_rework with concrete issues.",
-    ].join("\n");
+    const prompt = await this.buildSdkPrompt(config);
 
     const env = this.buildRuntimeEnv(config);
 
@@ -256,11 +237,15 @@ export class CodexRuntime implements AgentRuntime {
       threadOptions.modelReasoningEffort = sdkReasoningEffort;
     }
     const thread = codex.startThread(threadOptions);
-    const turn = await thread.run(prompt);
+    const turn = await this.runSdkTurnWithTimeout(
+      (signal) => thread.run(prompt, { signal }),
+      config.timeoutMinutes * 60 * 1000,
+      config
+    );
 
     return {
-      tokens_used: (turn.usage?.input_tokens ?? 0) + (turn.usage?.output_tokens ?? 0),
-      runtime_id: thread.id ?? "",
+      tokens_used: this.extractSdkTokensUsed(turn),
+      runtime_id: this.extractSdkRuntimeId(thread),
     };
   }
 
@@ -301,12 +286,119 @@ export class CodexRuntime implements AgentRuntime {
     stderrOutput: string,
     codexHomeFallbackEnabled: boolean
   ): boolean {
+    // Security rationale:
+    // - opt-in only: retry is disabled unless an explicit env flag enables it;
+    // - trusted signal only: match auth-header signature from process stderr, not stdout;
+    // - bounded behavior: only retry after a non-zero process exit to avoid silent loops.
     if (!env.CODEX_HOME || !codexHomeFallbackEnabled) return false;
     if (!(error instanceof Error)) return false;
     const errorMessage = error.message.toLowerCase();
     const hasExitCodeSignal = /exited with code\s+[1-9]\d*/i.test(errorMessage);
     const trustedAuthSignal = stderrOutput.includes(CODEX_AUTH_HEADER_ERROR_SIGNATURE);
     return hasExitCodeSignal && trustedAuthSignal;
+  }
+
+  private buildSynthesizedPrompt(config: RuntimeStepContext): string {
+    return [
+      "You are executing one agent step in SprintFoundry.",
+      `Primary task: ${config.task}`,
+      "Read .agent-task.md and AGENTS.md, then complete the actual work requested there.",
+      config.codexSkillNames && config.codexSkillNames.length > 0
+        ? `Skills available in CODEX_HOME: ${config.codexSkillNames.join(", ")}. Use them when relevant.`
+        : "No additional runtime skills were provided for this step.",
+      "Create/modify the required project artifacts and code files first.",
+      "Do not stop after only updating .agent-result.json.",
+      "Only after doing the real work, write .agent-result.json with accurate status and artifact lists.",
+      "If truly blocked, set status=blocked or needs_rework with concrete issues.",
+    ].join("\n");
+  }
+
+  private async buildSdkPrompt(config: RuntimeStepContext): Promise<string> {
+    const taskPrompt = await this.readWorkspaceTaskPrompt(config.workspacePath);
+    if (!taskPrompt) {
+      return this.buildSynthesizedPrompt(config);
+    }
+    return [
+      "You are executing one agent step in SprintFoundry.",
+      `Primary task: ${config.task}`,
+      "Follow the workspace task file contents below as the primary step instructions.",
+      "",
+      "# .agent-task.md",
+      taskPrompt,
+      "",
+      config.codexSkillNames && config.codexSkillNames.length > 0
+        ? `Skills available in CODEX_HOME: ${config.codexSkillNames.join(", ")}. Use them when relevant.`
+        : "No additional runtime skills were provided for this step.",
+      "Create/modify the required project artifacts and code files first.",
+      "Do not stop after only updating .agent-result.json.",
+      "Only after doing the real work, write .agent-result.json with accurate status and artifact lists.",
+      "If truly blocked, set status=blocked or needs_rework with concrete issues.",
+    ].join("\n");
+  }
+
+  private async readWorkspaceTaskPrompt(workspacePath: string): Promise<string | undefined> {
+    const taskPath = path.join(workspacePath, ".agent-task.md");
+    try {
+      const taskPrompt = await fs.readFile(taskPath, "utf-8");
+      const trimmed = taskPrompt.trim();
+      return trimmed.length > 0 ? trimmed : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async runSdkTurnWithTimeout<T>(
+    run: (signal: AbortSignal) => Promise<T>,
+    timeoutMs: number,
+    config: RuntimeStepContext
+  ): Promise<T> {
+    const controller = new AbortController();
+    const effectiveTimeoutMs = Math.max(0, timeoutMs);
+    const timeoutError = new Error(
+      `Codex SDK run timed out after ${effectiveTimeoutMs}ms (step=${config.stepNumber}, attempt=${config.stepAttempt})`
+    );
+
+    if (effectiveTimeoutMs === 0) {
+      controller.abort(timeoutError);
+      throw timeoutError;
+    }
+
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const runResultPromise = run(controller.signal);
+    return await new Promise<T>((resolve, reject) => {
+      let settled = false;
+      const settle = (handler: () => void) => {
+        if (settled) return;
+        settled = true;
+        if (timeoutHandle !== undefined) {
+          clearTimeout(timeoutHandle);
+        }
+        handler();
+      };
+      timeoutHandle = setTimeout(() => {
+        controller.abort(timeoutError);
+        settle(() => reject(timeoutError));
+      }, effectiveTimeoutMs);
+
+      runResultPromise.then(
+        (turn) => settle(() => resolve(turn)),
+        (error) => settle(() => reject(error))
+      );
+    });
+  }
+
+  private extractSdkTokensUsed(turn: unknown): number {
+    if (!turn || typeof turn !== "object") return 0;
+    const usage =
+      (turn as { usage?: { input_tokens?: number; output_tokens?: number } | null }).usage ??
+      null;
+    return (usage?.input_tokens ?? 0) + (usage?.output_tokens ?? 0);
+  }
+
+  private extractSdkRuntimeId(thread: unknown): string {
+    if (!thread || typeof thread !== "object") return "";
+    const id = (thread as { id?: unknown }).id;
+    return typeof id === "string" ? id : "";
   }
 
   private async writeDebugFiles(
