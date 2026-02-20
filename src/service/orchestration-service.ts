@@ -650,10 +650,16 @@ export class OrchestrationService {
     } catch (error) {
       stepExec.status = "failed";
       stepExec.completed_at = new Date();
+      const errorResumeTelemetry = this.extractResumeTelemetry(error);
+      const terminalResumeTelemetry = {
+        resume_used: errorResumeTelemetry.resume_used ?? finalResumeTelemetry.resume_used,
+        resume_failed: errorResumeTelemetry.resume_failed ?? finalResumeTelemetry.resume_failed,
+        resume_fallback: errorResumeTelemetry.resume_fallback ?? finalResumeTelemetry.resume_fallback,
+      };
       await this.emitEvent(run.run_id, "step.failed", {
         step: step.step_number,
         error: error instanceof Error ? error.message : String(error),
-        ...finalResumeTelemetry,
+        ...terminalResumeTelemetry,
         ...(tokenSavings ? { token_savings: tokenSavings } : {}),
       });
       return "failed";
@@ -708,6 +714,31 @@ export class OrchestrationService {
     if (runtimeId.startsWith("local-")) return false;
     if (runtimeId.startsWith("sprintfoundry-")) return false;
     return true;
+  }
+
+  private extractResumeTelemetry(
+    error: unknown
+  ): Partial<{
+    resume_used: boolean;
+    resume_failed: boolean;
+    resume_fallback: boolean;
+  }> {
+    if (!error || typeof error !== "object") return {};
+    const withTelemetry = error as Partial<{
+      resume_used: unknown;
+      resume_failed: unknown;
+      resume_fallback: unknown;
+    }>;
+    return {
+      resume_used:
+        typeof withTelemetry.resume_used === "boolean" ? withTelemetry.resume_used : undefined,
+      resume_failed:
+        typeof withTelemetry.resume_failed === "boolean" ? withTelemetry.resume_failed : undefined,
+      resume_fallback:
+        typeof withTelemetry.resume_fallback === "boolean"
+          ? withTelemetry.resume_fallback
+          : undefined,
+    };
   }
 
   // ---- Human Review ----

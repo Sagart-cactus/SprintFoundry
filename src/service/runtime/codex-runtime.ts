@@ -34,6 +34,11 @@ type CodexThreadHandle = {
   id?: unknown;
   run: (prompt: string, options?: { signal?: AbortSignal }) => Promise<unknown>;
 };
+type ResumeTelemetry = {
+  resume_used: boolean;
+  resume_failed: boolean;
+  resume_fallback: boolean;
+};
 
 export class CodexRuntime implements AgentRuntime {
   async runStep(config: RuntimeStepContext): Promise<RuntimeStepResult> {
@@ -162,15 +167,27 @@ export class CodexRuntime implements AgentRuntime {
       try {
         result = await runWithCurrentEnv(resumeArgs);
       } catch (error) {
-        if (!this.isInvalidOrExpiredResumeError(error)) {
-          throw error;
-        }
         resumeFailed = true;
+        if (!this.isInvalidOrExpiredResumeError(error)) {
+          throw this.withResumeTelemetry(error, {
+            resume_used: resumeUsed,
+            resume_failed: resumeFailed,
+            resume_fallback: resumeFallback,
+          });
+        }
         resumeFallback = true;
         console.warn(
           `[codex-runtime] Resume run failed for session ${config.resumeSessionId}; retrying with fresh run.`
         );
-        result = await runWithCurrentEnv(args);
+        try {
+          result = await runWithCurrentEnv(args);
+        } catch (fallbackError) {
+          throw this.withResumeTelemetry(fallbackError, {
+            resume_used: resumeUsed,
+            resume_failed: resumeFailed,
+            resume_fallback: resumeFallback,
+          });
+        }
       }
     } else {
       result = await runWithCurrentEnv(args);
@@ -239,8 +256,49 @@ export class CodexRuntime implements AgentRuntime {
     let resumeFailed = false;
     let resumeFallback = false;
     if (config.resumeSessionId) {
+      let resumedThread: CodexThreadHandle | null = null;
       try {
-        const resumedThread = await this.startOrResumeSdkThread(codex, config, threadOptions);
+        resumedThread = await this.startOrResumeSdkThread(codex, config, threadOptions);
+      } catch (error) {
+        resumeFailed = true;
+        if (!this.isInvalidOrExpiredResumeError(error)) {
+          throw this.withResumeTelemetry(error, {
+            resume_used: resumeUsed,
+            resume_failed: resumeFailed,
+            resume_fallback: resumeFallback,
+          });
+        }
+        resumeFallback = true;
+        console.warn(
+          `[codex-runtime] Resume run failed for session ${config.resumeSessionId}; retrying with fresh SDK thread.`
+        );
+        const freshThread = codex.startThread(threadOptions);
+        let freshTurn;
+        try {
+          freshTurn = await this.runSdkTurnWithTimeout(
+            (signal) => freshThread.run(prompt, { signal }),
+            config.timeoutMinutes * 60 * 1000,
+            config
+          );
+        } catch (fallbackError) {
+          throw this.withResumeTelemetry(fallbackError, {
+            resume_used: resumeUsed,
+            resume_failed: resumeFailed,
+            resume_fallback: resumeFallback,
+          });
+        }
+        const usage = this.extractSdkUsage(freshTurn);
+        return {
+          tokens_used: this.extractSdkTokensUsed(usage),
+          runtime_id: this.extractSdkRuntimeId(freshThread),
+          usage,
+          token_savings: this.extractTokenSavings(usage),
+          resume_used: resumeUsed,
+          resume_failed: resumeFailed,
+          resume_fallback: resumeFallback,
+        };
+      }
+      try {
         const resumedTurn = await this.runSdkTurnWithTimeout(
           (signal) => resumedThread.run(prompt, { signal }),
           config.timeoutMinutes * 60 * 1000,
@@ -257,30 +315,11 @@ export class CodexRuntime implements AgentRuntime {
           resume_fallback: resumeFallback,
         };
       } catch (error) {
-        if (!this.isInvalidOrExpiredResumeError(error)) {
-          throw error;
-        }
-        resumeFailed = true;
-        resumeFallback = true;
-        console.warn(
-          `[codex-runtime] Resume run failed for session ${config.resumeSessionId}; retrying with fresh SDK thread.`
-        );
-        const freshThread = codex.startThread(threadOptions);
-        const freshTurn = await this.runSdkTurnWithTimeout(
-          (signal) => freshThread.run(prompt, { signal }),
-          config.timeoutMinutes * 60 * 1000,
-          config
-        );
-        const usage = this.extractSdkUsage(freshTurn);
-        return {
-          tokens_used: this.extractSdkTokensUsed(usage),
-          runtime_id: this.extractSdkRuntimeId(freshThread),
-          usage,
-          token_savings: this.extractTokenSavings(usage),
+        throw this.withResumeTelemetry(error, {
           resume_used: resumeUsed,
           resume_failed: resumeFailed,
           resume_fallback: resumeFallback,
-        };
+        });
       }
     }
 
@@ -603,13 +642,12 @@ export class CodexRuntime implements AgentRuntime {
   private isInvalidOrExpiredResumeError(error: unknown): boolean {
     const message = this.resumeErrorMessage(error).toLowerCase();
     if (!message) return false;
-    return [
-      "expired",
-      "not found",
-      "invalid session",
-      "invalid thread",
-      "unknown session",
-    ].some((signature) => message.includes(signature));
+    const hasResumeSubject =
+      /\b(session|thread|resume)\b/.test(message) ||
+      /\bsession[_\s-]*id\b/.test(message) ||
+      /\bthread[_\s-]*id\b/.test(message);
+    if (!hasResumeSubject) return false;
+    return /\b(invalid|expired|not found|unknown)\b/.test(message);
   }
 
   private resumeErrorMessage(error: unknown): string {
@@ -637,6 +675,19 @@ export class CodexRuntime implements AgentRuntime {
     if (!thread || typeof thread !== "object") return "";
     const id = (thread as { id?: unknown }).id;
     return typeof id === "string" ? id : "";
+  }
+
+  private withResumeTelemetry(
+    error: unknown,
+    telemetry: ResumeTelemetry
+  ): Error & ResumeTelemetry {
+    const baseError =
+      error instanceof Error ? error : new Error(typeof error === "string" ? error : String(error));
+    const enriched = baseError as Error & ResumeTelemetry;
+    enriched.resume_used = telemetry.resume_used;
+    enriched.resume_failed = telemetry.resume_failed;
+    enriched.resume_fallback = telemetry.resume_fallback;
+    return enriched;
   }
 
   private async writeDebugFiles(

@@ -417,6 +417,17 @@ describe("CodexRuntime local_sdk mode", () => {
     expect(mockStartThreadFn).not.toHaveBeenCalled();
   });
 
+  it("does not fallback in SDK mode for generic 'not found' errors without session/thread context", async () => {
+    mockResumeThreadFn.mockRejectedValueOnce(new Error("artifact not found"));
+    const runtime = new CodexRuntime();
+    await expect(
+      runtime.runStep(makeContext(tmpDir, { resumeSessionId: "sdk-session-334" }))
+    ).rejects.toThrow(/artifact not found/);
+
+    expect(mockResumeThreadFn).toHaveBeenCalledOnce();
+    expect(mockStartThreadFn).not.toHaveBeenCalled();
+  });
+
   it("exposes optional token-savings hook when SDK reports cached_input_tokens", async () => {
     mockRunFn.mockResolvedValue({
       usage: { input_tokens: 120, cached_input_tokens: 700, output_tokens: 60 },
