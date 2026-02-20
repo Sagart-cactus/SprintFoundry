@@ -56,6 +56,11 @@ export interface AgentRunResult {
   cost_usd: number;
   duration_seconds: number;
   container_id: string;
+  usage?: Record<string, number>;
+  resume_used?: boolean;
+  resume_failed?: boolean;
+  resume_fallback?: boolean;
+  token_savings?: Record<string, number>;
 }
 
 export class AgentRunner {
@@ -123,6 +128,16 @@ export class AgentRunner {
 
     // 4. Read the agent's result file
     const agentResult = await this.readAgentResult(config.workspacePath);
+    agentResult.metadata = {
+      ...(agentResult.metadata ?? {}),
+      runtime: {
+        usage: result.usage,
+        resume_used: result.resume_used,
+        resume_failed: result.resume_failed,
+        resume_fallback: result.resume_fallback,
+        token_savings: result.token_savings,
+      },
+    };
 
     const duration = (Date.now() - startTime) / 1000;
     const costUsd =
@@ -134,6 +149,11 @@ export class AgentRunner {
       cost_usd: costUsd,
       duration_seconds: duration,
       container_id: result.runtime_id,
+      usage: result.usage,
+      resume_used: result.resume_used,
+      resume_failed: result.resume_failed,
+      resume_fallback: result.resume_fallback,
+      token_savings: result.token_savings,
     };
   }
 

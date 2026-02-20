@@ -29,6 +29,16 @@ const FORWARDED_PARENT_ENV_KEYS = [
 const CODEX_HOME_FALLBACK_ENV_FLAG = "SPRINTFOUNDRY_ENABLE_CODEX_HOME_AUTH_FALLBACK";
 const CODEX_AUTH_HEADER_ERROR_SIGNATURE =
   "401 Unauthorized: Missing bearer or basic authentication in header";
+type ProcessRunResult = Awaited<ReturnType<typeof runProcess>>;
+type CodexThreadHandle = {
+  id?: unknown;
+  run: (prompt: string, options?: { signal?: AbortSignal }) => Promise<unknown>;
+};
+type ResumeTelemetry = {
+  resume_used: boolean;
+  resume_failed: boolean;
+  resume_fallback: boolean;
+};
 
 export class CodexRuntime implements AgentRuntime {
   async runStep(config: RuntimeStepContext): Promise<RuntimeStepResult> {
@@ -36,6 +46,10 @@ export class CodexRuntime implements AgentRuntime {
       throw new Error("Codex runtime supports only local_process and local_sdk modes");
     }
     if (config.runtime.mode === "local_sdk") return this.runSdk(config);
+    return this.runLocalProcess(config);
+  }
+
+  private async runLocalProcess(config: RuntimeStepContext): Promise<RuntimeStepResult> {
     await fs.mkdir(config.workspacePath, { recursive: true });
 
     const prompt = this.buildSynthesizedPrompt(config);
@@ -79,6 +93,7 @@ export class CodexRuntime implements AgentRuntime {
       step_attempt: config.stepAttempt,
       runtime_command: config.runtime.command ?? "codex",
       runtime_mode: config.runtime.mode,
+      resume_session_id: config.resumeSessionId ?? "",
       runtime_args: runtimeArgs,
       has_sandbox_flag: hasSandboxFlag,
       has_bypass_flag: hasBypassFlag,
@@ -101,88 +116,89 @@ export class CodexRuntime implements AgentRuntime {
       stderrPath: stepPaths.stderrPath,
     };
 
-    let result;
-    try {
-      result = await runProcess(command, [...runtimeArgs, ...args], {
-        cwd: config.workspacePath,
+    const runWithCurrentEnv = async (cliArgs: string[]) => {
+      const processResult = await this.runProcessWithCodexHomeFallback({
+        command,
+        runtimeArgs,
+        execArgs: cliArgs,
+        config,
         env,
-        timeoutMs: config.timeoutMinutes * 60 * 1000,
-        parseTokensFromStdout: true,
-        outputFiles: baseOutputFiles,
+        codexHomeFallbackEnabled,
+        outputPaths: {
+          firstStdoutPath: baseOutputFiles.stdoutPath,
+          firstStderrPath: baseOutputFiles.stderrPath,
+          retryStdoutPath: stepPaths.retryStdoutPath,
+          retryStderrPath: stepPaths.retryStderrPath,
+        },
+        debugPayload,
+        debugPaths: {
+          stepDebugPath: stepPaths.debugPath,
+          legacyDebugPath: legacyPaths.debugPath,
+        },
       });
       await this.copyLogPair(
-        baseOutputFiles.stdoutPath,
-        baseOutputFiles.stderrPath,
+        processResult.usedOutputPaths.stdoutPath,
+        processResult.usedOutputPaths.stderrPath,
         legacyPaths.stdoutPath,
         legacyPaths.stderrPath
       );
-    } catch (error) {
-      const firstStderr = await fs.readFile(baseOutputFiles.stderrPath, "utf-8").catch(() => "");
-      // Security rationale: this retry can only happen when a trusted auth-header signature
-      // is seen on stderr and the fallback flag is explicitly enabled. We avoid stdout-triggered
-      // retries to prevent spoofable model output from mutating execution environment behavior.
-      if (this.shouldRetryWithoutCodexHome(env, error, firstStderr, codexHomeFallbackEnabled)) {
+      return processResult.result;
+    };
+
+    const resumeArgs = config.resumeSessionId
+      ? [
+        "exec",
+        "resume",
+        config.resumeSessionId,
+        ...(reasoningEffort && !hasReasoningEffortArg
+          ? ["--config", `model_reasoning_effort=\"${reasoningEffort}\"`]
+          : []),
+        prompt,
+        "--json",
+        ...(hasSandboxFlag || hasBypassFlag ? [] : ["--sandbox", "workspace-write"]),
+      ]
+      : null;
+
+    const resumeUsed = Boolean(config.resumeSessionId);
+    let resumeFailed = false;
+    let resumeFallback = false;
+    let result;
+    if (resumeArgs) {
+      try {
+        result = await runWithCurrentEnv(resumeArgs);
+      } catch (error) {
+        resumeFailed = true;
+        if (!this.isInvalidOrExpiredResumeError(error)) {
+          throw this.withResumeTelemetry(error, {
+            resume_used: resumeUsed,
+            resume_failed: resumeFailed,
+            resume_fallback: resumeFallback,
+          });
+        }
+        resumeFallback = true;
         console.warn(
-          "[codex-runtime] Retrying once without CODEX_HOME after trusted auth-header failure."
+          `[codex-runtime] Resume run failed for session ${config.resumeSessionId}; retrying with fresh run.`
         );
-        const fallbackEnv = { ...env };
-        delete fallbackEnv.CODEX_HOME;
-        await fs.writeFile(
-          stepPaths.debugPath,
-          JSON.stringify(
-            {
-              ...debugPayload,
-              fallback_without_codex_home: true,
-              fallback_reason: "trusted_auth_header_error",
-            },
-            null,
-            2
-          ),
-          "utf-8"
-        );
-        await fs.writeFile(
-          legacyPaths.debugPath,
-          JSON.stringify(
-            {
-              ...debugPayload,
-              fallback_without_codex_home: true,
-              fallback_reason: "trusted_auth_header_error",
-            },
-            null,
-            2
-          ),
-          "utf-8"
-        );
-        result = await runProcess(command, [...runtimeArgs, ...args], {
-          cwd: config.workspacePath,
-          env: fallbackEnv,
-          timeoutMs: config.timeoutMinutes * 60 * 1000,
-          parseTokensFromStdout: true,
-          outputFiles: {
-            stdoutPath: stepPaths.retryStdoutPath,
-            stderrPath: stepPaths.retryStderrPath,
-          },
-        });
-        await this.copyLogPair(
-          stepPaths.retryStdoutPath,
-          stepPaths.retryStderrPath,
-          legacyPaths.stdoutPath,
-          legacyPaths.stderrPath
-        );
-      } else {
-        await this.copyLogPair(
-          baseOutputFiles.stdoutPath,
-          baseOutputFiles.stderrPath,
-          legacyPaths.stdoutPath,
-          legacyPaths.stderrPath
-        );
-        throw error;
+        try {
+          result = await runWithCurrentEnv(args);
+        } catch (fallbackError) {
+          throw this.withResumeTelemetry(fallbackError, {
+            resume_used: resumeUsed,
+            resume_failed: resumeFailed,
+            resume_fallback: resumeFallback,
+          });
+        }
       }
+    } else {
+      result = await runWithCurrentEnv(args);
     }
 
     return {
       tokens_used: result.tokensUsed,
       runtime_id: result.runtimeId,
+      resume_used: resumeUsed,
+      resume_failed: resumeFailed,
+      resume_fallback: resumeFallback,
     };
   }
 
@@ -236,17 +252,218 @@ export class CodexRuntime implements AgentRuntime {
     if (sdkReasoningEffort) {
       threadOptions.modelReasoningEffort = sdkReasoningEffort;
     }
+    const resumeUsed = Boolean(config.resumeSessionId);
+    let resumeFailed = false;
+    let resumeFallback = false;
+    if (config.resumeSessionId) {
+      let resumedThread: CodexThreadHandle | null = null;
+      try {
+        resumedThread = await this.startOrResumeSdkThread(codex, config, threadOptions);
+      } catch (error) {
+        resumeFailed = true;
+        if (!this.isInvalidOrExpiredResumeError(error)) {
+          throw this.withResumeTelemetry(error, {
+            resume_used: resumeUsed,
+            resume_failed: resumeFailed,
+            resume_fallback: resumeFallback,
+          });
+        }
+        resumeFallback = true;
+        console.warn(
+          `[codex-runtime] Resume run failed for session ${config.resumeSessionId}; retrying with fresh SDK thread.`
+        );
+        const freshThread = codex.startThread(threadOptions);
+        let freshTurn;
+        try {
+          freshTurn = await this.runSdkTurnWithTimeout(
+            (signal) => freshThread.run(prompt, { signal }),
+            config.timeoutMinutes * 60 * 1000,
+            config
+          );
+        } catch (fallbackError) {
+          throw this.withResumeTelemetry(fallbackError, {
+            resume_used: resumeUsed,
+            resume_failed: resumeFailed,
+            resume_fallback: resumeFallback,
+          });
+        }
+        const usage = this.extractSdkUsage(freshTurn);
+        return {
+          tokens_used: this.extractSdkTokensUsed(usage),
+          runtime_id: this.extractSdkRuntimeId(freshThread),
+          usage,
+          token_savings: this.extractTokenSavings(usage),
+          resume_used: resumeUsed,
+          resume_failed: resumeFailed,
+          resume_fallback: resumeFallback,
+        };
+      }
+      try {
+        const resumedTurn = await this.runSdkTurnWithTimeout(
+          (signal) => resumedThread.run(prompt, { signal }),
+          config.timeoutMinutes * 60 * 1000,
+          config
+        );
+        const usage = this.extractSdkUsage(resumedTurn);
+        return {
+          tokens_used: this.extractSdkTokensUsed(usage),
+          runtime_id: this.extractSdkRuntimeId(resumedThread),
+          usage,
+          token_savings: this.extractTokenSavings(usage),
+          resume_used: resumeUsed,
+          resume_failed: resumeFailed,
+          resume_fallback: resumeFallback,
+        };
+      } catch (error) {
+        throw this.withResumeTelemetry(error, {
+          resume_used: resumeUsed,
+          resume_failed: resumeFailed,
+          resume_fallback: resumeFallback,
+        });
+      }
+    }
+
     const thread = codex.startThread(threadOptions);
     const turn = await this.runSdkTurnWithTimeout(
       (signal) => thread.run(prompt, { signal }),
       config.timeoutMinutes * 60 * 1000,
       config
     );
+    const usage = this.extractSdkUsage(turn);
 
     return {
-      tokens_used: this.extractSdkTokensUsed(turn),
+      tokens_used: this.extractSdkTokensUsed(usage),
       runtime_id: this.extractSdkRuntimeId(thread),
+      usage,
+      token_savings: this.extractTokenSavings(usage),
+      resume_used: resumeUsed,
+      resume_failed: resumeFailed,
+      resume_fallback: resumeFallback,
     };
+  }
+
+  private async startOrResumeSdkThread(
+    codex: Codex,
+    config: RuntimeStepContext,
+    threadOptions: {
+      workingDirectory: string;
+      model: string;
+      sandboxMode: "workspace-write";
+      approvalPolicy: "never";
+      skipGitRepoCheck: true;
+      modelReasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
+    }
+  ): Promise<CodexThreadHandle> {
+    if (!config.resumeSessionId) {
+      return codex.startThread(threadOptions) as CodexThreadHandle;
+    }
+    const resumableCodex = codex as Codex & {
+      resumeThread: (
+        sessionId: string,
+        options: typeof threadOptions
+      ) => Promise<CodexThreadHandle> | CodexThreadHandle;
+    };
+    return await resumableCodex.resumeThread(config.resumeSessionId, threadOptions);
+  }
+
+  private async runProcessWithCodexHomeFallback(params: {
+    command: string;
+    runtimeArgs: string[];
+    execArgs: string[];
+    config: RuntimeStepContext;
+    env: Record<string, string | undefined>;
+    codexHomeFallbackEnabled: boolean;
+    outputPaths: {
+      firstStdoutPath: string;
+      firstStderrPath: string;
+      retryStdoutPath: string;
+      retryStderrPath: string;
+    };
+    debugPayload: Record<string, unknown>;
+    debugPaths: {
+      stepDebugPath: string;
+      legacyDebugPath: string;
+    };
+  }): Promise<{
+    result: ProcessRunResult;
+    usedOutputPaths: { stdoutPath: string; stderrPath: string };
+  }> {
+    try {
+      const result = await runProcess(
+        params.command,
+        [...params.runtimeArgs, ...params.execArgs],
+        {
+          cwd: params.config.workspacePath,
+          env: params.env,
+          timeoutMs: params.config.timeoutMinutes * 60 * 1000,
+          parseTokensFromStdout: true,
+          outputFiles: {
+            stdoutPath: params.outputPaths.firstStdoutPath,
+            stderrPath: params.outputPaths.firstStderrPath,
+          },
+        }
+      );
+      return {
+        result,
+        usedOutputPaths: {
+          stdoutPath: params.outputPaths.firstStdoutPath,
+          stderrPath: params.outputPaths.firstStderrPath,
+        },
+      };
+    } catch (error) {
+      const firstStderr = await fs
+        .readFile(params.outputPaths.firstStderrPath, "utf-8")
+        .catch(() => "");
+      // Security rationale: this retry can only happen when a trusted auth-header signature
+      // is seen on stderr and the fallback flag is explicitly enabled. We avoid stdout-triggered
+      // retries to prevent spoofable model output from mutating execution environment behavior.
+      if (
+        this.shouldRetryWithoutCodexHome(
+          params.env,
+          error,
+          firstStderr,
+          params.codexHomeFallbackEnabled
+        )
+      ) {
+        console.warn(
+          "[codex-runtime] Retrying once without CODEX_HOME after trusted auth-header failure."
+        );
+        const fallbackEnv = { ...params.env };
+        delete fallbackEnv.CODEX_HOME;
+        const fallbackPayload = {
+          ...params.debugPayload,
+          fallback_without_codex_home: true,
+          fallback_reason: "trusted_auth_header_error",
+        };
+        await this.writeDebugFiles(
+          params.debugPaths.stepDebugPath,
+          params.debugPaths.legacyDebugPath,
+          fallbackPayload
+        );
+        const result = await runProcess(
+          params.command,
+          [...params.runtimeArgs, ...params.execArgs],
+          {
+            cwd: params.config.workspacePath,
+            env: fallbackEnv,
+            timeoutMs: params.config.timeoutMinutes * 60 * 1000,
+            parseTokensFromStdout: true,
+            outputFiles: {
+              stdoutPath: params.outputPaths.retryStdoutPath,
+              stderrPath: params.outputPaths.retryStderrPath,
+            },
+          }
+        );
+        return {
+          result,
+          usedOutputPaths: {
+            stdoutPath: params.outputPaths.retryStdoutPath,
+            stderrPath: params.outputPaths.retryStderrPath,
+          },
+        };
+      }
+      throw error;
+    }
   }
 
   private buildRuntimeEnv(config: RuntimeStepContext): Record<string, string | undefined> {
@@ -387,18 +604,90 @@ export class CodexRuntime implements AgentRuntime {
     });
   }
 
-  private extractSdkTokensUsed(turn: unknown): number {
-    if (!turn || typeof turn !== "object") return 0;
+  private extractSdkTokensUsed(usage: Record<string, number>): number {
+    return (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0);
+  }
+
+  private extractSdkUsage(turn: unknown): Record<string, number> {
+    if (!turn || typeof turn !== "object") {
+      return {
+        input_tokens: 0,
+        cached_input_tokens: 0,
+        output_tokens: 0,
+      };
+    }
     const usage =
-      (turn as { usage?: { input_tokens?: number; output_tokens?: number } | null }).usage ??
-      null;
-    return (usage?.input_tokens ?? 0) + (usage?.output_tokens ?? 0);
+      (turn as {
+        usage?: {
+          input_tokens?: number;
+          cached_input_tokens?: number;
+          output_tokens?: number;
+        } | null;
+      }).usage ?? null;
+    return {
+      input_tokens: usage?.input_tokens ?? 0,
+      cached_input_tokens: usage?.cached_input_tokens ?? 0,
+      output_tokens: usage?.output_tokens ?? 0,
+    };
+  }
+
+  private extractTokenSavings(usage: Record<string, number>): Record<string, number> | undefined {
+    const cachedInputTokens = usage.cached_input_tokens ?? 0;
+    if (cachedInputTokens <= 0) return undefined;
+    return {
+      cached_input_tokens: cachedInputTokens,
+    };
+  }
+
+  private isInvalidOrExpiredResumeError(error: unknown): boolean {
+    const message = this.resumeErrorMessage(error).toLowerCase();
+    if (!message) return false;
+    const hasResumeSubject =
+      /\b(session|thread|resume)\b/.test(message) ||
+      /\bsession[_\s-]*id\b/.test(message) ||
+      /\bthread[_\s-]*id\b/.test(message);
+    if (!hasResumeSubject) return false;
+    return /\b(invalid|expired|not found|unknown)\b/.test(message);
+  }
+
+  private resumeErrorMessage(error: unknown): string {
+    if (!error) return "";
+    if (error instanceof Error) {
+      const parts = [error.message];
+      const maybeCode = (error as Error & { code?: unknown; category?: unknown; name?: unknown });
+      if (typeof maybeCode.code === "string") parts.push(maybeCode.code);
+      if (typeof maybeCode.category === "string") parts.push(maybeCode.category);
+      if (typeof maybeCode.name === "string") parts.push(maybeCode.name);
+      return parts.filter(Boolean).join(" ");
+    }
+    if (typeof error === "string") return error;
+    if (typeof error === "object") {
+      try {
+        return JSON.stringify(error);
+      } catch {
+        return String(error);
+      }
+    }
+    return String(error);
   }
 
   private extractSdkRuntimeId(thread: unknown): string {
     if (!thread || typeof thread !== "object") return "";
     const id = (thread as { id?: unknown }).id;
     return typeof id === "string" ? id : "";
+  }
+
+  private withResumeTelemetry(
+    error: unknown,
+    telemetry: ResumeTelemetry
+  ): Error & ResumeTelemetry {
+    const baseError =
+      error instanceof Error ? error : new Error(typeof error === "string" ? error : String(error));
+    const enriched = baseError as Error & ResumeTelemetry;
+    enriched.resume_used = telemetry.resume_used;
+    enriched.resume_failed = telemetry.resume_failed;
+    enriched.resume_fallback = telemetry.resume_fallback;
+    return enriched;
   }
 
   private async writeDebugFiles(

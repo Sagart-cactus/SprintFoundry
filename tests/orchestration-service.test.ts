@@ -868,6 +868,19 @@ describe("OrchestrationService", () => {
     let crCallCount = 0;
     mockAgentRunner.run.mockImplementation(async (config: any) => {
       if (config.agent === "developer") {
+        if (config.stepNumber === 901) {
+          return {
+            agentResult: makeResult({ summary: "Developer rework complete from resumed context" }),
+            tokens_used: 80,
+            cost_usd: 0.01,
+            duration_seconds: 4,
+            container_id: "session-dev-resumed",
+            resume_used: true,
+            resume_failed: false,
+            resume_fallback: false,
+            token_savings: { cached_input_tokens: 240 },
+          };
+        }
         return {
           agentResult: makeResult(),
           tokens_used: 100,
@@ -934,6 +947,265 @@ describe("OrchestrationService", () => {
     expect(reworkCall.resumeSessionId).toBe("session-dev-123");
     expect(reworkCall.resumeReason).toBe("rework_plan");
     expect(mockSessionStore.record).toHaveBeenCalled();
+
+    const storedEvents = ((service as any).events.store as any).mock.calls.map((c: any[]) => c[0]);
+    const reworkStarted = storedEvents.find(
+      (event: any) => event.event_type === "step.started" && event.data.step === 901
+    );
+    const reworkCompleted = storedEvents.find(
+      (event: any) => event.event_type === "step.completed" && event.data.step === 901
+    );
+    expect(reworkStarted.data.resume_used).toBe(true);
+    expect(reworkStarted.data.resume_failed).toBe(false);
+    expect(reworkStarted.data.resume_fallback).toBe(false);
+    expect(reworkCompleted.data.resume_used).toBe(true);
+    expect(reworkCompleted.data.resume_failed).toBe(false);
+    expect(reworkCompleted.data.resume_fallback).toBe(false);
+    expect(reworkCompleted.data.token_savings).toEqual({ cached_input_tokens: 240 });
+
+    const recordedReworkSession = mockSessionStore.record.mock.calls
+      .map((call: any[]) => call[1])
+      .find((entry: any) => entry.step_number === 901);
+    expect(recordedReworkSession.resume_used).toBe(true);
+    expect(recordedReworkSession.resume_failed).toBe(false);
+    expect(recordedReworkSession.resume_fallback).toBe(false);
+    expect(recordedReworkSession.token_savings_cached_input_tokens).toBe(240);
+  });
+
+  it("records resume fallback telemetry when resumed rework succeeds via fresh fallback", async () => {
+    const plan = makePlan({
+      steps: [
+        makeStep({ step_number: 1, agent: "developer", task: "Write code" }),
+        makeStep({ step_number: 2, agent: "code-review", task: "Review code", depends_on: [1] }),
+      ],
+    });
+    mockOrchestratorAgent.generatePlan.mockResolvedValue(plan);
+
+    let crCallCount = 0;
+    mockAgentRunner.run.mockImplementation(async (config: any) => {
+      if (config.agent === "developer" && config.stepNumber === 901) {
+        return {
+          agentResult: makeResult({ summary: "Rework complete after resume fallback" }),
+          tokens_used: 120,
+          cost_usd: 0.02,
+          duration_seconds: 6,
+          container_id: "session-dev-fallback",
+          resume_used: true,
+          resume_failed: true,
+          resume_fallback: true,
+        };
+      }
+      if (config.agent === "developer") {
+        return {
+          agentResult: makeResult(),
+          tokens_used: 100,
+          cost_usd: 0.01,
+          duration_seconds: 5,
+          container_id: "session-dev-initial",
+        };
+      }
+      crCallCount++;
+      if (crCallCount === 1) {
+        return {
+          agentResult: makeReworkResult({
+            rework_target: "developer",
+            rework_reason: "MUST_FIX items found",
+          }),
+          tokens_used: 90,
+          cost_usd: 0.01,
+          duration_seconds: 5,
+          container_id: "session-review-1",
+        };
+      }
+      return {
+        agentResult: makeResult({ summary: "Code review passed" }),
+        tokens_used: 90,
+        cost_usd: 0.01,
+        duration_seconds: 5,
+        container_id: "session-review-2",
+      };
+    });
+
+    mockOrchestratorAgent.planRework.mockResolvedValue({
+      steps: [
+        makeStep({ step_number: 901, agent: "developer", task: "Fix review findings" }),
+      ],
+    });
+    mockSessionStore.findLatestByAgent.mockResolvedValue({
+      run_id: "any",
+      agent: "developer",
+      step_number: 1,
+      step_attempt: 1,
+      runtime_provider: "claude-code",
+      runtime_mode: "local_process",
+      session_id: "session-dev-123",
+      updated_at: new Date().toISOString(),
+    });
+
+    const run = await service.handleTask("p1", "prompt", "Build feature");
+    expect(run.status).toBe("completed");
+
+    const storedEvents = ((service as any).events.store as any).mock.calls.map((c: any[]) => c[0]);
+    const reworkCompleted = storedEvents.find(
+      (event: any) => event.event_type === "step.completed" && event.data.step === 901
+    );
+    expect(reworkCompleted.data.resume_used).toBe(true);
+    expect(reworkCompleted.data.resume_failed).toBe(true);
+    expect(reworkCompleted.data.resume_fallback).toBe(true);
+  });
+
+  it("emits resume telemetry on step.failed when resumed rework fails without fallback", async () => {
+    const plan = makePlan({
+      steps: [
+        makeStep({ step_number: 1, agent: "developer", task: "Write code" }),
+        makeStep({ step_number: 2, agent: "code-review", task: "Review code", depends_on: [1] }),
+      ],
+    });
+    mockOrchestratorAgent.generatePlan.mockResolvedValue(plan);
+
+    let crCallCount = 0;
+    mockAgentRunner.run.mockImplementation(async (config: any) => {
+      if (config.agent === "developer" && config.stepNumber === 901) {
+        const err = new Error("resume execution failed: rate limit");
+        (err as any).resume_used = true;
+        (err as any).resume_failed = true;
+        (err as any).resume_fallback = false;
+        throw err;
+      }
+      if (config.agent === "developer") {
+        return {
+          agentResult: makeResult(),
+          tokens_used: 100,
+          cost_usd: 0.01,
+          duration_seconds: 5,
+          container_id: "session-dev-initial",
+        };
+      }
+      crCallCount++;
+      if (crCallCount === 1) {
+        return {
+          agentResult: makeReworkResult({
+            rework_target: "developer",
+            rework_reason: "MUST_FIX items found",
+          }),
+          tokens_used: 90,
+          cost_usd: 0.01,
+          duration_seconds: 5,
+          container_id: "session-review-1",
+        };
+      }
+      return {
+        agentResult: makeResult({ summary: "Code review passed" }),
+        tokens_used: 90,
+        cost_usd: 0.01,
+        duration_seconds: 5,
+        container_id: "session-review-2",
+      };
+    });
+
+    mockOrchestratorAgent.planRework.mockResolvedValue({
+      steps: [
+        makeStep({ step_number: 901, agent: "developer", task: "Fix review findings" }),
+      ],
+    });
+    mockSessionStore.findLatestByAgent.mockResolvedValue({
+      run_id: "any",
+      agent: "developer",
+      step_number: 1,
+      step_attempt: 1,
+      runtime_provider: "claude-code",
+      runtime_mode: "local_process",
+      session_id: "session-dev-123",
+      updated_at: new Date().toISOString(),
+    });
+
+    const run = await service.handleTask("p1", "prompt", "Build feature");
+    expect(run.status).toBe("failed");
+
+    const storedEvents = ((service as any).events.store as any).mock.calls.map((c: any[]) => c[0]);
+    const failed = storedEvents.find(
+      (event: any) => event.event_type === "step.failed" && event.data.step === 901
+    );
+    expect(failed.data.resume_used).toBe(true);
+    expect(failed.data.resume_failed).toBe(true);
+    expect(failed.data.resume_fallback).toBe(false);
+  });
+
+  it("emits resume telemetry on step.failed when resume fallback attempt also fails", async () => {
+    const plan = makePlan({
+      steps: [
+        makeStep({ step_number: 1, agent: "developer", task: "Write code" }),
+        makeStep({ step_number: 2, agent: "code-review", task: "Review code", depends_on: [1] }),
+      ],
+    });
+    mockOrchestratorAgent.generatePlan.mockResolvedValue(plan);
+
+    let crCallCount = 0;
+    mockAgentRunner.run.mockImplementation(async (config: any) => {
+      if (config.agent === "developer" && config.stepNumber === 901) {
+        const err = new Error("resume invalid, fallback fresh run failed");
+        (err as any).resume_used = true;
+        (err as any).resume_failed = true;
+        (err as any).resume_fallback = true;
+        throw err;
+      }
+      if (config.agent === "developer") {
+        return {
+          agentResult: makeResult(),
+          tokens_used: 100,
+          cost_usd: 0.01,
+          duration_seconds: 5,
+          container_id: "session-dev-initial",
+        };
+      }
+      crCallCount++;
+      if (crCallCount === 1) {
+        return {
+          agentResult: makeReworkResult({
+            rework_target: "developer",
+            rework_reason: "MUST_FIX items found",
+          }),
+          tokens_used: 90,
+          cost_usd: 0.01,
+          duration_seconds: 5,
+          container_id: "session-review-1",
+        };
+      }
+      return {
+        agentResult: makeResult({ summary: "Code review passed" }),
+        tokens_used: 90,
+        cost_usd: 0.01,
+        duration_seconds: 5,
+        container_id: "session-review-2",
+      };
+    });
+
+    mockOrchestratorAgent.planRework.mockResolvedValue({
+      steps: [
+        makeStep({ step_number: 901, agent: "developer", task: "Fix review findings" }),
+      ],
+    });
+    mockSessionStore.findLatestByAgent.mockResolvedValue({
+      run_id: "any",
+      agent: "developer",
+      step_number: 1,
+      step_attempt: 1,
+      runtime_provider: "claude-code",
+      runtime_mode: "local_process",
+      session_id: "session-dev-123",
+      updated_at: new Date().toISOString(),
+    });
+
+    const run = await service.handleTask("p1", "prompt", "Build feature");
+    expect(run.status).toBe("failed");
+
+    const storedEvents = ((service as any).events.store as any).mock.calls.map((c: any[]) => c[0]);
+    const failed = storedEvents.find(
+      (event: any) => event.event_type === "step.failed" && event.data.step === 901
+    );
+    expect(failed.data.resume_used).toBe(true);
+    expect(failed.data.resume_failed).toBe(true);
+    expect(failed.data.resume_fallback).toBe(true);
   });
 
   it("quality gate runs after developer-role steps", async () => {

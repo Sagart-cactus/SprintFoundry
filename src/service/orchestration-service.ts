@@ -366,12 +366,6 @@ export class OrchestrationService {
     };
     run.steps.push(stepExec);
 
-    await this.emitEvent(run.run_id, "step.started", {
-      step: step.step_number,
-      agent: step.agent,
-      task: step.task,
-    });
-
     // Resolve model + budget for this agent (project overrides > platform defaults)
     const modelConfig = this.resolveModel(step.agent);
     const runtime = this.resolveRuntimeForAgent(step.agent);
@@ -381,6 +375,20 @@ export class OrchestrationService {
       ? await this.sessions.findLatestByAgent(workspacePath, run.run_id, step.agent)
       : null;
     const resumeSessionId = resumeSession?.session_id;
+    const initialResumeTelemetry = {
+      resume_used: Boolean(resumeSessionId),
+      resume_failed: false,
+      resume_fallback: false,
+    };
+    let finalResumeTelemetry = { ...initialResumeTelemetry };
+    let tokenSavings: Record<string, number> | undefined;
+
+    await this.emitEvent(run.run_id, "step.started", {
+      step: step.step_number,
+      agent: step.agent,
+      task: step.task,
+      ...initialResumeTelemetry,
+    });
 
     const apiKey = this.resolveApiKey(modelConfig.provider, runtime);
 
@@ -465,8 +473,24 @@ export class OrchestrationService {
       stepExec.container_id = result.container_id;
       stepExec.result = result.agentResult;
       stepExec.completed_at = new Date();
+      finalResumeTelemetry = {
+        resume_used: result.resume_used ?? initialResumeTelemetry.resume_used,
+        resume_failed: result.resume_failed ?? initialResumeTelemetry.resume_failed,
+        resume_fallback: result.resume_fallback ?? initialResumeTelemetry.resume_fallback,
+      };
+      tokenSavings = result.token_savings;
 
-      await this.recordRuntimeSession(workspacePath, run.run_id, step, currentRework + 1, runtime, result.container_id, resumeReason);
+      await this.recordRuntimeSession(
+        workspacePath,
+        run.run_id,
+        step,
+        currentRework + 1,
+        runtime,
+        result.container_id,
+        resumeReason,
+        finalResumeTelemetry,
+        tokenSavings
+      );
 
       // Update run totals
       run.total_tokens_used += result.tokens_used;
@@ -495,6 +519,8 @@ export class OrchestrationService {
           await this.emitEvent(run.run_id, "step.failed", {
             step: step.step_number,
             error: `Git checkpoint commit failed: ${message}`,
+            ...finalResumeTelemetry,
+            ...(tokenSavings ? { token_savings: tokenSavings } : {}),
           });
           run.status = "failed";
           run.error = `Git checkpoint commit failed at step ${step.step_number}: ${message}`;
@@ -506,6 +532,8 @@ export class OrchestrationService {
           step: step.step_number,
           tokens: result.tokens_used,
           artifacts: result.agentResult.artifacts_created,
+          ...finalResumeTelemetry,
+          ...(tokenSavings ? { token_savings: tokenSavings } : {}),
         });
 
         // Run quality gate after developer-role steps
@@ -564,6 +592,8 @@ export class OrchestrationService {
           await this.emitEvent(run.run_id, "step.failed", {
             step: step.step_number,
             reason: "max_rework_exceeded",
+            ...finalResumeTelemetry,
+            ...(tokenSavings ? { token_savings: tokenSavings } : {}),
           });
           return "failed";
         }
@@ -613,14 +643,24 @@ export class OrchestrationService {
         step: step.step_number,
         reason: result.agentResult.status,
         issues: result.agentResult.issues,
+        ...finalResumeTelemetry,
+        ...(tokenSavings ? { token_savings: tokenSavings } : {}),
       });
       return "failed";
     } catch (error) {
       stepExec.status = "failed";
       stepExec.completed_at = new Date();
+      const errorResumeTelemetry = this.extractResumeTelemetry(error);
+      const terminalResumeTelemetry = {
+        resume_used: errorResumeTelemetry.resume_used ?? finalResumeTelemetry.resume_used,
+        resume_failed: errorResumeTelemetry.resume_failed ?? finalResumeTelemetry.resume_failed,
+        resume_fallback: errorResumeTelemetry.resume_fallback ?? finalResumeTelemetry.resume_fallback,
+      };
       await this.emitEvent(run.run_id, "step.failed", {
         step: step.step_number,
         error: error instanceof Error ? error.message : String(error),
+        ...terminalResumeTelemetry,
+        ...(tokenSavings ? { token_savings: tokenSavings } : {}),
       });
       return "failed";
     }
@@ -633,7 +673,13 @@ export class OrchestrationService {
     stepAttempt: number,
     runtime: RuntimeConfig,
     runtimeId: string,
-    resumeReason?: string
+    resumeReason?: string,
+    resumeTelemetry?: {
+      resume_used: boolean;
+      resume_failed: boolean;
+      resume_fallback: boolean;
+    },
+    tokenSavings?: Record<string, number>
   ): Promise<void> {
     if (!this.isResumableRuntime(runtime)) return;
     const sessionId = runtimeId.trim();
@@ -647,6 +693,13 @@ export class OrchestrationService {
       runtime_mode: runtime.mode,
       session_id: sessionId,
       resume_reason: resumeReason,
+      resume_used: resumeTelemetry?.resume_used,
+      resume_failed: resumeTelemetry?.resume_failed,
+      resume_fallback: resumeTelemetry?.resume_fallback,
+      token_savings_cached_input_tokens:
+        typeof tokenSavings?.cached_input_tokens === "number"
+          ? tokenSavings.cached_input_tokens
+          : undefined,
       updated_at: new Date().toISOString(),
     });
   }
@@ -661,6 +714,31 @@ export class OrchestrationService {
     if (runtimeId.startsWith("local-")) return false;
     if (runtimeId.startsWith("sprintfoundry-")) return false;
     return true;
+  }
+
+  private extractResumeTelemetry(
+    error: unknown
+  ): Partial<{
+    resume_used: boolean;
+    resume_failed: boolean;
+    resume_fallback: boolean;
+  }> {
+    if (!error || typeof error !== "object") return {};
+    const withTelemetry = error as Partial<{
+      resume_used: unknown;
+      resume_failed: unknown;
+      resume_fallback: unknown;
+    }>;
+    return {
+      resume_used:
+        typeof withTelemetry.resume_used === "boolean" ? withTelemetry.resume_used : undefined,
+      resume_failed:
+        typeof withTelemetry.resume_failed === "boolean" ? withTelemetry.resume_failed : undefined,
+      resume_fallback:
+        typeof withTelemetry.resume_fallback === "boolean"
+          ? withTelemetry.resume_fallback
+          : undefined,
+    };
   }
 
   // ---- Human Review ----
