@@ -1,0 +1,1 @@
+Done. After every clone + branch creation, `entire enable --strategy auto-commit` will now run on the cloned directory. It's best-effort — if `entire` isn't installed or fails, it logs a message and continues without blocking the run.

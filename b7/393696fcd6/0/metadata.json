@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "b7393696fcd6",
+  "session_id": "a8c494cd-36fa-4cf0-81dc-fe7410e740a9",
+  "strategy": "auto-commit",
+  "created_at": "2026-02-14T17:31:56.357586Z",
+  "branch": "feat/#6-add-git-commit-checkpoint-after-each-completed-age",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".agent-result.json",
+    "artifacts/test-report.json"
+  ],
+  "agent": "Claude Code",
+  "checkpoint_transcript_start": 1,
+  "transcript_lines_at_start": 1,
+  "token_usage": {
+    "input_tokens": 17,
+    "cache_creation_tokens": 47414,
+    "cache_read_tokens": 763433,
+    "output_tokens": 49,
+    "api_call_count": 15
+  }
+}
