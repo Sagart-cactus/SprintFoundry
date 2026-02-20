@@ -8,7 +8,6 @@ import type { RuntimeStepContext } from "../src/service/runtime/types.js";
 // Defined before any dynamic imports so they are initialized by the time factories are invoked.
 const mockRunFn = vi.fn();
 const mockStartThreadFn = vi.fn();
-const mockResumeThreadFn = vi.fn();
 const mockCodexConstructorCalls: Array<{ env: Record<string, string> }> = [];
 
 // vi.mock is hoisted, but factory bodies run lazily (at first import).
@@ -17,7 +16,7 @@ vi.mock("@openai/codex-sdk", () => ({
   // Regular function (not arrow) so it can be used as a constructor with `new`.
   Codex: function MockCodex(this: any, opts: { env: Record<string, string> }) {
     mockCodexConstructorCalls.push({ env: opts?.env ?? {} });
-    return { startThread: mockStartThreadFn, resumeThread: mockResumeThreadFn };
+    return { startThread: mockStartThreadFn };
   },
 }));
 
@@ -51,8 +50,6 @@ function makeContext(
     cliFlags: overrides?.cliFlags,
     containerResources: overrides?.containerResources,
     containerImage: overrides?.containerImage,
-    resumeSessionId: overrides?.resumeSessionId,
-    resumeReason: overrides?.resumeReason,
   };
 }
 
@@ -71,7 +68,6 @@ describe("CodexRuntime local_sdk mode", () => {
       finalResponse: "",
     });
     mockStartThreadFn.mockReturnValue({ id: "thread-sdk-123", run: mockRunFn });
-    mockResumeThreadFn.mockReturnValue({ id: "thread-sdk-resume-123", run: mockRunFn });
   });
 
   afterEach(async () => {
@@ -147,6 +143,51 @@ describe("CodexRuntime local_sdk mode", () => {
     });
   });
 
+  it("passes modelReasoningEffort to SDK when model is codex", async () => {
+    const runtime = new CodexRuntime();
+    await runtime.runStep(
+      makeContext(tmpDir, {
+        modelConfig: { provider: "openai", model: "gpt-5.3-codex" },
+        runtime: {
+          provider: "codex",
+          mode: "local_sdk",
+          model_reasoning_effort: "high",
+        },
+      })
+    );
+
+    expect(mockStartThreadFn).toHaveBeenCalledWith({
+      workingDirectory: tmpDir,
+      model: "gpt-5.3-codex",
+      sandboxMode: "workspace-write",
+      approvalPolicy: "never",
+      skipGitRepoCheck: true,
+      modelReasoningEffort: "high",
+    });
+  });
+
+  it("ignores modelReasoningEffort for non-codex SDK models", async () => {
+    const runtime = new CodexRuntime();
+    await runtime.runStep(
+      makeContext(tmpDir, {
+        modelConfig: { provider: "openai", model: "gpt-4.1" },
+        runtime: {
+          provider: "codex",
+          mode: "local_sdk",
+          model_reasoning_effort: "high",
+        },
+      })
+    );
+
+    expect(mockStartThreadFn).toHaveBeenCalledWith({
+      workingDirectory: tmpDir,
+      model: "gpt-4.1",
+      sandboxMode: "workspace-write",
+      approvalPolicy: "never",
+      skipGitRepoCheck: true,
+    });
+  });
+
   it("writes step-prefixed debug files to workspace", async () => {
     const runtime = new CodexRuntime();
     await runtime.runStep(makeContext(tmpDir, { stepNumber: 3, stepAttempt: 2 }));
@@ -196,19 +237,6 @@ describe("CodexRuntime local_sdk mode", () => {
 
     const constructorEnv = mockCodexConstructorCalls[0].env;
     expect(constructorEnv.MY_CUSTOM_VAR).toBe("custom-value");
-  });
-
-  it("resumes SDK thread when resumeSessionId is provided", async () => {
-    const runtime = new CodexRuntime();
-    const result = await runtime.runStep(
-      makeContext(tmpDir, {
-        resumeSessionId: "thread-old-111",
-      })
-    );
-
-    expect(mockResumeThreadFn).toHaveBeenCalledWith("thread-old-111");
-    expect(mockStartThreadFn).not.toHaveBeenCalled();
-    expect(result.runtime_id).toBe("thread-sdk-resume-123");
   });
 });
 
@@ -261,17 +289,39 @@ describe("CodexRuntime local_process mode (unchanged behavior)", () => {
     expect(callEnv.UNRELATED_PARENT_SECRET).toBeUndefined();
   });
 
-  it("uses codex exec resume when resumeSessionId is provided", async () => {
+  it("passes model_reasoning_effort config for codex local_process model", async () => {
     const runtime = new CodexRuntime();
     await runtime.runStep(
       makeContext(tmpDir, {
-        runtime: { provider: "codex", mode: "local_process" },
-        resumeSessionId: "thread-abc-123",
+        modelConfig: { provider: "openai", model: "gpt-5.3-codex" },
+        runtime: {
+          provider: "codex",
+          mode: "local_process",
+          model_reasoning_effort: "medium",
+        },
       })
     );
 
     const args = vi.mocked(runProcess).mock.calls[0][1] as string[];
-    expect(args.slice(0, 4)).toEqual(["exec", "resume", "thread-abc-123", expect.any(String)]);
+    expect(args).toContain("--config");
+    expect(args).toContain('model_reasoning_effort="medium"');
+  });
+
+  it("ignores model_reasoning_effort config for non-codex local_process model", async () => {
+    const runtime = new CodexRuntime();
+    await runtime.runStep(
+      makeContext(tmpDir, {
+        modelConfig: { provider: "openai", model: "gpt-4.1" },
+        runtime: {
+          provider: "codex",
+          mode: "local_process",
+          model_reasoning_effort: "medium",
+        },
+      })
+    );
+
+    const args = vi.mocked(runProcess).mock.calls[0][1] as string[];
+    expect(args.some((arg) => arg.includes("model_reasoning_effort"))).toBe(false);
   });
 });
 

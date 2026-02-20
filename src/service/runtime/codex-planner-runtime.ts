@@ -55,9 +55,20 @@ Set "model" for each step to the agent model that should run that step.`;
     const runtimeArgs = runtime.args ?? [];
     const hasSandboxFlag = runtimeArgs.includes("--sandbox") || runtimeArgs.includes("-s");
     const hasBypassFlag = runtimeArgs.includes("--dangerously-bypass-approvals-and-sandbox");
+    const plannerModel = this.resolvePlannerModel();
+    const reasoningEffort = this.resolveModelReasoningEffort(
+      runtime.model_reasoning_effort,
+      plannerModel
+    );
+    const hasReasoningEffortArg = runtimeArgs.some(
+      (arg) => arg.includes("model_reasoning_effort")
+    );
     await runProcess(runtime.command ?? "codex", [
       ...runtimeArgs,
       "exec",
+      ...(reasoningEffort && !hasReasoningEffortArg
+        ? ["--config", `model_reasoning_effort=\"${reasoningEffort}\"`]
+        : []),
       "Read .planner-task.md and return only the JSON plan with no markdown fences.",
       "--json",
       "--output-last-message",
@@ -148,5 +159,22 @@ Set "model" for each step to the agent model that should run that step.`;
       this.platformConfig.defaults.model_per_agent.developer?.model ??
       ""
     );
+  }
+
+  private resolvePlannerModel(): string {
+    return (
+      this.projectConfig.model_overrides?.orchestrator?.model ??
+      this.platformConfig.defaults.model_per_agent.orchestrator?.model ??
+      this.platformConfig.defaults.model_per_agent.developer?.model ??
+      ""
+    );
+  }
+
+  private resolveModelReasoningEffort(
+    effort: ReturnType<CodexPlannerRuntime["resolvePlannerRuntime"]>["model_reasoning_effort"] | undefined,
+    model: string
+  ): ReturnType<CodexPlannerRuntime["resolvePlannerRuntime"]>["model_reasoning_effort"] | undefined {
+    if (!effort) return undefined;
+    return /codex/i.test(model) ? effort : undefined;
   }
 }
