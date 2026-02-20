@@ -29,6 +29,11 @@ const FORWARDED_PARENT_ENV_KEYS = [
 const CODEX_HOME_FALLBACK_ENV_FLAG = "SPRINTFOUNDRY_ENABLE_CODEX_HOME_AUTH_FALLBACK";
 const CODEX_AUTH_HEADER_ERROR_SIGNATURE =
   "401 Unauthorized: Missing bearer or basic authentication in header";
+type ProcessRunResult = Awaited<ReturnType<typeof runProcess>>;
+type CodexThreadHandle = {
+  id?: unknown;
+  run: (prompt: string, options?: { signal?: AbortSignal }) => Promise<unknown>;
+};
 
 export class CodexRuntime implements AgentRuntime {
   async runStep(config: RuntimeStepContext): Promise<RuntimeStepResult> {
@@ -36,6 +41,10 @@ export class CodexRuntime implements AgentRuntime {
       throw new Error("Codex runtime supports only local_process and local_sdk modes");
     }
     if (config.runtime.mode === "local_sdk") return this.runSdk(config);
+    return this.runLocalProcess(config);
+  }
+
+  private async runLocalProcess(config: RuntimeStepContext): Promise<RuntimeStepResult> {
     await fs.mkdir(config.workspacePath, { recursive: true });
 
     const prompt = this.buildSynthesizedPrompt(config);
@@ -79,6 +88,7 @@ export class CodexRuntime implements AgentRuntime {
       step_attempt: config.stepAttempt,
       runtime_command: config.runtime.command ?? "codex",
       runtime_mode: config.runtime.mode,
+      resume_session_id: config.resumeSessionId ?? "",
       runtime_args: runtimeArgs,
       has_sandbox_flag: hasSandboxFlag,
       has_bypass_flag: hasBypassFlag,
@@ -101,83 +111,61 @@ export class CodexRuntime implements AgentRuntime {
       stderrPath: stepPaths.stderrPath,
     };
 
-    let result;
-    try {
-      result = await runProcess(command, [...runtimeArgs, ...args], {
-        cwd: config.workspacePath,
+    const runWithCurrentEnv = async (cliArgs: string[]) => {
+      const processResult = await this.runProcessWithCodexHomeFallback({
+        command,
+        runtimeArgs,
+        execArgs: cliArgs,
+        config,
         env,
-        timeoutMs: config.timeoutMinutes * 60 * 1000,
-        parseTokensFromStdout: true,
-        outputFiles: baseOutputFiles,
+        codexHomeFallbackEnabled,
+        outputPaths: {
+          firstStdoutPath: baseOutputFiles.stdoutPath,
+          firstStderrPath: baseOutputFiles.stderrPath,
+          retryStdoutPath: stepPaths.retryStdoutPath,
+          retryStderrPath: stepPaths.retryStderrPath,
+        },
+        debugPayload,
+        debugPaths: {
+          stepDebugPath: stepPaths.debugPath,
+          legacyDebugPath: legacyPaths.debugPath,
+        },
       });
       await this.copyLogPair(
-        baseOutputFiles.stdoutPath,
-        baseOutputFiles.stderrPath,
+        processResult.usedOutputPaths.stdoutPath,
+        processResult.usedOutputPaths.stderrPath,
         legacyPaths.stdoutPath,
         legacyPaths.stderrPath
       );
-    } catch (error) {
-      const firstStderr = await fs.readFile(baseOutputFiles.stderrPath, "utf-8").catch(() => "");
-      // Security rationale: this retry can only happen when a trusted auth-header signature
-      // is seen on stderr and the fallback flag is explicitly enabled. We avoid stdout-triggered
-      // retries to prevent spoofable model output from mutating execution environment behavior.
-      if (this.shouldRetryWithoutCodexHome(env, error, firstStderr, codexHomeFallbackEnabled)) {
+      return processResult.result;
+    };
+
+    const resumeArgs = config.resumeSessionId
+      ? [
+        "exec",
+        "resume",
+        config.resumeSessionId,
+        ...(reasoningEffort && !hasReasoningEffortArg
+          ? ["--config", `model_reasoning_effort=\"${reasoningEffort}\"`]
+          : []),
+        prompt,
+        "--json",
+        ...(hasSandboxFlag || hasBypassFlag ? [] : ["--sandbox", "workspace-write"]),
+      ]
+      : null;
+
+    let result;
+    if (resumeArgs) {
+      try {
+        result = await runWithCurrentEnv(resumeArgs);
+      } catch (error) {
         console.warn(
-          "[codex-runtime] Retrying once without CODEX_HOME after trusted auth-header failure."
+          `[codex-runtime] Resume run failed for session ${config.resumeSessionId}; retrying with fresh run.`
         );
-        const fallbackEnv = { ...env };
-        delete fallbackEnv.CODEX_HOME;
-        await fs.writeFile(
-          stepPaths.debugPath,
-          JSON.stringify(
-            {
-              ...debugPayload,
-              fallback_without_codex_home: true,
-              fallback_reason: "trusted_auth_header_error",
-            },
-            null,
-            2
-          ),
-          "utf-8"
-        );
-        await fs.writeFile(
-          legacyPaths.debugPath,
-          JSON.stringify(
-            {
-              ...debugPayload,
-              fallback_without_codex_home: true,
-              fallback_reason: "trusted_auth_header_error",
-            },
-            null,
-            2
-          ),
-          "utf-8"
-        );
-        result = await runProcess(command, [...runtimeArgs, ...args], {
-          cwd: config.workspacePath,
-          env: fallbackEnv,
-          timeoutMs: config.timeoutMinutes * 60 * 1000,
-          parseTokensFromStdout: true,
-          outputFiles: {
-            stdoutPath: stepPaths.retryStdoutPath,
-            stderrPath: stepPaths.retryStderrPath,
-          },
-        });
-        await this.copyLogPair(
-          stepPaths.retryStdoutPath,
-          stepPaths.retryStderrPath,
-          legacyPaths.stdoutPath,
-          legacyPaths.stderrPath
-        );
-      } else {
-        await this.copyLogPair(
-          baseOutputFiles.stdoutPath,
-          baseOutputFiles.stderrPath,
-          legacyPaths.stdoutPath,
-          legacyPaths.stderrPath
-        );
-        throw error;
+        result = await runWithCurrentEnv(args);
       }
+    } else {
+      result = await runWithCurrentEnv(args);
     }
 
     return {
@@ -236,6 +224,35 @@ export class CodexRuntime implements AgentRuntime {
     if (sdkReasoningEffort) {
       threadOptions.modelReasoningEffort = sdkReasoningEffort;
     }
+    if (config.resumeSessionId) {
+      try {
+        const resumedThread = await this.startOrResumeSdkThread(codex, config, threadOptions);
+        const resumedTurn = await this.runSdkTurnWithTimeout(
+          (signal) => resumedThread.run(prompt, { signal }),
+          config.timeoutMinutes * 60 * 1000,
+          config
+        );
+        return {
+          tokens_used: this.extractSdkTokensUsed(resumedTurn),
+          runtime_id: this.extractSdkRuntimeId(resumedThread),
+        };
+      } catch {
+        console.warn(
+          `[codex-runtime] Resume run failed for session ${config.resumeSessionId}; retrying with fresh SDK thread.`
+        );
+        const freshThread = codex.startThread(threadOptions);
+        const freshTurn = await this.runSdkTurnWithTimeout(
+          (signal) => freshThread.run(prompt, { signal }),
+          config.timeoutMinutes * 60 * 1000,
+          config
+        );
+        return {
+          tokens_used: this.extractSdkTokensUsed(freshTurn),
+          runtime_id: this.extractSdkRuntimeId(freshThread),
+        };
+      }
+    }
+
     const thread = codex.startThread(threadOptions);
     const turn = await this.runSdkTurnWithTimeout(
       (signal) => thread.run(prompt, { signal }),
@@ -247,6 +264,130 @@ export class CodexRuntime implements AgentRuntime {
       tokens_used: this.extractSdkTokensUsed(turn),
       runtime_id: this.extractSdkRuntimeId(thread),
     };
+  }
+
+  private async startOrResumeSdkThread(
+    codex: Codex,
+    config: RuntimeStepContext,
+    threadOptions: {
+      workingDirectory: string;
+      model: string;
+      sandboxMode: "workspace-write";
+      approvalPolicy: "never";
+      skipGitRepoCheck: true;
+      modelReasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
+    }
+  ): Promise<CodexThreadHandle> {
+    if (!config.resumeSessionId) {
+      return codex.startThread(threadOptions) as CodexThreadHandle;
+    }
+    const resumableCodex = codex as Codex & {
+      resumeThread: (
+        sessionId: string,
+        options: typeof threadOptions
+      ) => Promise<CodexThreadHandle> | CodexThreadHandle;
+    };
+    return await resumableCodex.resumeThread(config.resumeSessionId, threadOptions);
+  }
+
+  private async runProcessWithCodexHomeFallback(params: {
+    command: string;
+    runtimeArgs: string[];
+    execArgs: string[];
+    config: RuntimeStepContext;
+    env: Record<string, string | undefined>;
+    codexHomeFallbackEnabled: boolean;
+    outputPaths: {
+      firstStdoutPath: string;
+      firstStderrPath: string;
+      retryStdoutPath: string;
+      retryStderrPath: string;
+    };
+    debugPayload: Record<string, unknown>;
+    debugPaths: {
+      stepDebugPath: string;
+      legacyDebugPath: string;
+    };
+  }): Promise<{
+    result: ProcessRunResult;
+    usedOutputPaths: { stdoutPath: string; stderrPath: string };
+  }> {
+    try {
+      const result = await runProcess(
+        params.command,
+        [...params.runtimeArgs, ...params.execArgs],
+        {
+          cwd: params.config.workspacePath,
+          env: params.env,
+          timeoutMs: params.config.timeoutMinutes * 60 * 1000,
+          parseTokensFromStdout: true,
+          outputFiles: {
+            stdoutPath: params.outputPaths.firstStdoutPath,
+            stderrPath: params.outputPaths.firstStderrPath,
+          },
+        }
+      );
+      return {
+        result,
+        usedOutputPaths: {
+          stdoutPath: params.outputPaths.firstStdoutPath,
+          stderrPath: params.outputPaths.firstStderrPath,
+        },
+      };
+    } catch (error) {
+      const firstStderr = await fs
+        .readFile(params.outputPaths.firstStderrPath, "utf-8")
+        .catch(() => "");
+      // Security rationale: this retry can only happen when a trusted auth-header signature
+      // is seen on stderr and the fallback flag is explicitly enabled. We avoid stdout-triggered
+      // retries to prevent spoofable model output from mutating execution environment behavior.
+      if (
+        this.shouldRetryWithoutCodexHome(
+          params.env,
+          error,
+          firstStderr,
+          params.codexHomeFallbackEnabled
+        )
+      ) {
+        console.warn(
+          "[codex-runtime] Retrying once without CODEX_HOME after trusted auth-header failure."
+        );
+        const fallbackEnv = { ...params.env };
+        delete fallbackEnv.CODEX_HOME;
+        const fallbackPayload = {
+          ...params.debugPayload,
+          fallback_without_codex_home: true,
+          fallback_reason: "trusted_auth_header_error",
+        };
+        await this.writeDebugFiles(
+          params.debugPaths.stepDebugPath,
+          params.debugPaths.legacyDebugPath,
+          fallbackPayload
+        );
+        const result = await runProcess(
+          params.command,
+          [...params.runtimeArgs, ...params.execArgs],
+          {
+            cwd: params.config.workspacePath,
+            env: fallbackEnv,
+            timeoutMs: params.config.timeoutMinutes * 60 * 1000,
+            parseTokensFromStdout: true,
+            outputFiles: {
+              stdoutPath: params.outputPaths.retryStdoutPath,
+              stderrPath: params.outputPaths.retryStderrPath,
+            },
+          }
+        );
+        return {
+          result,
+          usedOutputPaths: {
+            stdoutPath: params.outputPaths.retryStdoutPath,
+            stderrPath: params.outputPaths.retryStderrPath,
+          },
+        };
+      }
+      throw error;
+    }
   }
 
   private buildRuntimeEnv(config: RuntimeStepContext): Record<string, string | undefined> {

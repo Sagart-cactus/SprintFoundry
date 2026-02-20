@@ -8,6 +8,7 @@ import type { RuntimeStepContext } from "../src/service/runtime/types.js";
 // Defined before any dynamic imports so they are initialized by the time factories are invoked.
 const mockRunFn = vi.fn();
 const mockStartThreadFn = vi.fn();
+const mockResumeThreadFn = vi.fn();
 const mockCodexConstructorCalls: Array<{ env: Record<string, string> }> = [];
 
 // vi.mock is hoisted, but factory bodies run lazily (at first import).
@@ -16,7 +17,7 @@ vi.mock("@openai/codex-sdk", () => ({
   // Regular function (not arrow) so it can be used as a constructor with `new`.
   Codex: function MockCodex(this: any, opts: { env: Record<string, string> }) {
     mockCodexConstructorCalls.push({ env: opts?.env ?? {} });
-    return { startThread: mockStartThreadFn };
+    return { startThread: mockStartThreadFn, resumeThread: mockResumeThreadFn };
   },
 }));
 
@@ -50,6 +51,8 @@ function makeContext(
     cliFlags: overrides?.cliFlags,
     containerResources: overrides?.containerResources,
     containerImage: overrides?.containerImage,
+    resumeSessionId: overrides?.resumeSessionId,
+    resumeReason: overrides?.resumeReason,
   };
 }
 
@@ -68,6 +71,7 @@ describe("CodexRuntime local_sdk mode", () => {
       finalResponse: "",
     });
     mockStartThreadFn.mockReturnValue({ id: "thread-sdk-123", run: mockRunFn });
+    mockResumeThreadFn.mockResolvedValue({ id: "thread-sdk-resume-123", run: mockRunFn });
   });
 
   afterEach(async () => {
@@ -81,6 +85,7 @@ describe("CodexRuntime local_sdk mode", () => {
 
     expect(mockCodexConstructorCalls).toHaveLength(1);
     expect(mockStartThreadFn).toHaveBeenCalledOnce();
+    expect(mockResumeThreadFn).not.toHaveBeenCalled();
     expect(runProcess).not.toHaveBeenCalled();
     expect(result.tokens_used).toBe(150); // 100 + 50
     expect(result.runtime_id).toBe("thread-sdk-123");
@@ -357,6 +362,35 @@ describe("CodexRuntime local_sdk mode", () => {
     expect(prompt).not.toContain("# .agent-task.md");
     expect(prompt).toContain("Primary task: Use fallback when task file is empty");
   });
+
+  it("uses resumeThread in SDK mode when resumeSessionId is present", async () => {
+    const runtime = new CodexRuntime();
+    const result = await runtime.runStep(
+      makeContext(tmpDir, { resumeSessionId: "sdk-session-111" })
+    );
+
+    expect(mockResumeThreadFn).toHaveBeenCalledWith("sdk-session-111", {
+      workingDirectory: tmpDir,
+      model: "gpt-5",
+      sandboxMode: "workspace-write",
+      approvalPolicy: "never",
+      skipGitRepoCheck: true,
+    });
+    expect(mockStartThreadFn).not.toHaveBeenCalled();
+    expect(result.runtime_id).toBe("thread-sdk-resume-123");
+  });
+
+  it("falls back to fresh SDK thread once when resumeThread fails", async () => {
+    mockResumeThreadFn.mockRejectedValueOnce(new Error("resume failed"));
+    const runtime = new CodexRuntime();
+    const result = await runtime.runStep(
+      makeContext(tmpDir, { resumeSessionId: "sdk-session-222" })
+    );
+
+    expect(mockResumeThreadFn).toHaveBeenCalledOnce();
+    expect(mockStartThreadFn).toHaveBeenCalledOnce();
+    expect(result.runtime_id).toBe("thread-sdk-123");
+  });
 });
 
 describe("CodexRuntime local_process mode (unchanged behavior)", () => {
@@ -456,6 +490,67 @@ describe("CodexRuntime local_process mode (unchanged behavior)", () => {
     expect(args[0]).toBe("exec");
     expect(args[1]).toContain("Primary task: Process mode task contract");
     expect(args[1]).toContain("Read .agent-task.md and AGENTS.md");
+  });
+
+  it("uses CLI resume path in local_process mode when resumeSessionId is present", async () => {
+    const runtime = new CodexRuntime();
+    await runtime.runStep(
+      makeContext(tmpDir, {
+        runtime: { provider: "codex", mode: "local_process" },
+        resumeSessionId: "process-session-123",
+      })
+    );
+
+    const args = vi.mocked(runProcess).mock.calls[0][1] as string[];
+    expect(args[0]).toBe("exec");
+    expect(args[1]).toBe("resume");
+    expect(args[2]).toBe("process-session-123");
+  });
+
+  it("falls back to one fresh local_process run when resume command fails", async () => {
+    vi.mocked(runProcess)
+      .mockRejectedValueOnce(new Error("Process codex exited with code 1. invalid session"))
+      .mockResolvedValueOnce({
+        tokensUsed: 321,
+        runtimeId: "local-codex-process-fresh-1",
+        stdout: "{}",
+        stderr: "",
+      } as any);
+
+    const runtime = new CodexRuntime();
+    const result = await runtime.runStep(
+      makeContext(tmpDir, {
+        runtime: { provider: "codex", mode: "local_process" },
+        resumeSessionId: "process-session-999",
+      })
+    );
+
+    expect(vi.mocked(runProcess)).toHaveBeenCalledTimes(2);
+    const resumeArgs = vi.mocked(runProcess).mock.calls[0][1] as string[];
+    const fallbackArgs = vi.mocked(runProcess).mock.calls[1][1] as string[];
+    expect(resumeArgs.slice(0, 3)).toEqual(["exec", "resume", "process-session-999"]);
+    expect(fallbackArgs[0]).toBe("exec");
+    expect(fallbackArgs[1]).not.toBe("resume");
+    expect(result.runtime_id).toBe("local-codex-process-fresh-1");
+    expect(result.tokens_used).toBe(321);
+  });
+
+  it("fails local_process step when resume and single fallback both fail", async () => {
+    vi.mocked(runProcess)
+      .mockRejectedValueOnce(new Error("Process codex exited with code 1. invalid session"))
+      .mockRejectedValueOnce(new Error("Process codex exited with code 1. prompt execution failed"));
+
+    const runtime = new CodexRuntime();
+    await expect(
+      runtime.runStep(
+        makeContext(tmpDir, {
+          runtime: { provider: "codex", mode: "local_process" },
+          resumeSessionId: "process-session-500",
+        })
+      )
+    ).rejects.toThrow(/prompt execution failed/);
+
+    expect(vi.mocked(runProcess)).toHaveBeenCalledTimes(2);
   });
 });
 
