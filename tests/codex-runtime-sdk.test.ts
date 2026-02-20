@@ -89,6 +89,14 @@ describe("CodexRuntime local_sdk mode", () => {
     expect(runProcess).not.toHaveBeenCalled();
     expect(result.tokens_used).toBe(150); // 100 + 50
     expect(result.runtime_id).toBe("thread-sdk-123");
+    expect(result.usage).toEqual({
+      input_tokens: 100,
+      cached_input_tokens: 0,
+      output_tokens: 50,
+    });
+    expect(result.resume_used).toBe(false);
+    expect(result.resume_failed).toBe(false);
+    expect(result.resume_fallback).toBe(false);
   });
 
   it("passes OPENAI_API_KEY and OPENAI_MODEL in env to Codex constructor", async () => {
@@ -378,10 +386,13 @@ describe("CodexRuntime local_sdk mode", () => {
     });
     expect(mockStartThreadFn).not.toHaveBeenCalled();
     expect(result.runtime_id).toBe("thread-sdk-resume-123");
+    expect(result.resume_used).toBe(true);
+    expect(result.resume_failed).toBe(false);
+    expect(result.resume_fallback).toBe(false);
   });
 
-  it("falls back to fresh SDK thread once when resumeThread fails", async () => {
-    mockResumeThreadFn.mockRejectedValueOnce(new Error("resume failed"));
+  it("falls back to fresh SDK thread once when resumeThread fails with invalid session", async () => {
+    mockResumeThreadFn.mockRejectedValueOnce(new Error("invalid session"));
     const runtime = new CodexRuntime();
     const result = await runtime.runStep(
       makeContext(tmpDir, { resumeSessionId: "sdk-session-222" })
@@ -390,6 +401,37 @@ describe("CodexRuntime local_sdk mode", () => {
     expect(mockResumeThreadFn).toHaveBeenCalledOnce();
     expect(mockStartThreadFn).toHaveBeenCalledOnce();
     expect(result.runtime_id).toBe("thread-sdk-123");
+    expect(result.resume_used).toBe(true);
+    expect(result.resume_failed).toBe(true);
+    expect(result.resume_fallback).toBe(true);
+  });
+
+  it("does not fallback in SDK mode for non-session resume errors", async () => {
+    mockResumeThreadFn.mockRejectedValueOnce(new Error("rate limit exceeded"));
+    const runtime = new CodexRuntime();
+    await expect(
+      runtime.runStep(makeContext(tmpDir, { resumeSessionId: "sdk-session-333" }))
+    ).rejects.toThrow(/rate limit exceeded/);
+
+    expect(mockResumeThreadFn).toHaveBeenCalledOnce();
+    expect(mockStartThreadFn).not.toHaveBeenCalled();
+  });
+
+  it("exposes optional token-savings hook when SDK reports cached_input_tokens", async () => {
+    mockRunFn.mockResolvedValue({
+      usage: { input_tokens: 120, cached_input_tokens: 700, output_tokens: 60 },
+      finalResponse: "",
+    });
+
+    const runtime = new CodexRuntime();
+    const result = await runtime.runStep(makeContext(tmpDir));
+
+    expect(result.token_savings).toEqual({ cached_input_tokens: 700 });
+    expect(result.usage).toEqual({
+      input_tokens: 120,
+      cached_input_tokens: 700,
+      output_tokens: 60,
+    });
   });
 });
 
@@ -507,7 +549,7 @@ describe("CodexRuntime local_process mode (unchanged behavior)", () => {
     expect(args[2]).toBe("process-session-123");
   });
 
-  it("falls back to one fresh local_process run when resume command fails", async () => {
+  it("falls back to one fresh local_process run when resume command fails with invalid session", async () => {
     vi.mocked(runProcess)
       .mockRejectedValueOnce(new Error("Process codex exited with code 1. invalid session"))
       .mockResolvedValueOnce({
@@ -533,6 +575,9 @@ describe("CodexRuntime local_process mode (unchanged behavior)", () => {
     expect(fallbackArgs[1]).not.toBe("resume");
     expect(result.runtime_id).toBe("local-codex-process-fresh-1");
     expect(result.tokens_used).toBe(321);
+    expect(result.resume_used).toBe(true);
+    expect(result.resume_failed).toBe(true);
+    expect(result.resume_fallback).toBe(true);
   });
 
   it("fails local_process step when resume and single fallback both fail", async () => {
@@ -551,6 +596,24 @@ describe("CodexRuntime local_process mode (unchanged behavior)", () => {
     ).rejects.toThrow(/prompt execution failed/);
 
     expect(vi.mocked(runProcess)).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not fallback in local_process mode for non-session resume errors", async () => {
+    vi.mocked(runProcess).mockRejectedValueOnce(
+      new Error("Process codex exited with code 1. rate limit exceeded")
+    );
+
+    const runtime = new CodexRuntime();
+    await expect(
+      runtime.runStep(
+        makeContext(tmpDir, {
+          runtime: { provider: "codex", mode: "local_process" },
+          resumeSessionId: "process-session-501",
+        })
+      )
+    ).rejects.toThrow(/rate limit exceeded/);
+
+    expect(vi.mocked(runProcess)).toHaveBeenCalledTimes(1);
   });
 });
 

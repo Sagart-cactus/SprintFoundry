@@ -47,6 +47,10 @@ export interface RuntimeStepResult {
   runtime_id: string;
   cost_usd?: number;
   usage?: Record<string, number>;
+  resume_used?: boolean;
+  resume_failed?: boolean;
+  resume_fallback?: boolean;
+  token_savings?: Record<string, number>;
 }
 
 export interface AgentRuntime {

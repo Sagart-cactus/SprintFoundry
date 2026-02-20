@@ -11,6 +11,10 @@ export interface RuntimeSessionRecord {
   runtime_mode: RuntimeConfig["mode"];
   session_id: string;
   resume_reason?: string;
+  resume_used?: boolean;
+  resume_failed?: boolean;
+  resume_fallback?: boolean;
+  token_savings_cached_input_tokens?: number;
   updated_at: string;
 }
 

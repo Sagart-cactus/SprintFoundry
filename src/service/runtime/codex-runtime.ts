@@ -154,11 +154,19 @@ export class CodexRuntime implements AgentRuntime {
       ]
       : null;
 
+    const resumeUsed = Boolean(config.resumeSessionId);
+    let resumeFailed = false;
+    let resumeFallback = false;
     let result;
     if (resumeArgs) {
       try {
         result = await runWithCurrentEnv(resumeArgs);
       } catch (error) {
+        if (!this.isInvalidOrExpiredResumeError(error)) {
+          throw error;
+        }
+        resumeFailed = true;
+        resumeFallback = true;
         console.warn(
           `[codex-runtime] Resume run failed for session ${config.resumeSessionId}; retrying with fresh run.`
         );
@@ -171,6 +179,9 @@ export class CodexRuntime implements AgentRuntime {
     return {
       tokens_used: result.tokensUsed,
       runtime_id: result.runtimeId,
+      resume_used: resumeUsed,
+      resume_failed: resumeFailed,
+      resume_fallback: resumeFallback,
     };
   }
 
@@ -224,6 +235,9 @@ export class CodexRuntime implements AgentRuntime {
     if (sdkReasoningEffort) {
       threadOptions.modelReasoningEffort = sdkReasoningEffort;
     }
+    const resumeUsed = Boolean(config.resumeSessionId);
+    let resumeFailed = false;
+    let resumeFallback = false;
     if (config.resumeSessionId) {
       try {
         const resumedThread = await this.startOrResumeSdkThread(codex, config, threadOptions);
@@ -232,11 +246,22 @@ export class CodexRuntime implements AgentRuntime {
           config.timeoutMinutes * 60 * 1000,
           config
         );
+        const usage = this.extractSdkUsage(resumedTurn);
         return {
-          tokens_used: this.extractSdkTokensUsed(resumedTurn),
+          tokens_used: this.extractSdkTokensUsed(usage),
           runtime_id: this.extractSdkRuntimeId(resumedThread),
+          usage,
+          token_savings: this.extractTokenSavings(usage),
+          resume_used: resumeUsed,
+          resume_failed: resumeFailed,
+          resume_fallback: resumeFallback,
         };
-      } catch {
+      } catch (error) {
+        if (!this.isInvalidOrExpiredResumeError(error)) {
+          throw error;
+        }
+        resumeFailed = true;
+        resumeFallback = true;
         console.warn(
           `[codex-runtime] Resume run failed for session ${config.resumeSessionId}; retrying with fresh SDK thread.`
         );
@@ -246,9 +271,15 @@ export class CodexRuntime implements AgentRuntime {
           config.timeoutMinutes * 60 * 1000,
           config
         );
+        const usage = this.extractSdkUsage(freshTurn);
         return {
-          tokens_used: this.extractSdkTokensUsed(freshTurn),
+          tokens_used: this.extractSdkTokensUsed(usage),
           runtime_id: this.extractSdkRuntimeId(freshThread),
+          usage,
+          token_savings: this.extractTokenSavings(usage),
+          resume_used: resumeUsed,
+          resume_failed: resumeFailed,
+          resume_fallback: resumeFallback,
         };
       }
     }
@@ -259,10 +290,16 @@ export class CodexRuntime implements AgentRuntime {
       config.timeoutMinutes * 60 * 1000,
       config
     );
+    const usage = this.extractSdkUsage(turn);
 
     return {
-      tokens_used: this.extractSdkTokensUsed(turn),
+      tokens_used: this.extractSdkTokensUsed(usage),
       runtime_id: this.extractSdkRuntimeId(thread),
+      usage,
+      token_savings: this.extractTokenSavings(usage),
+      resume_used: resumeUsed,
+      resume_failed: resumeFailed,
+      resume_fallback: resumeFallback,
     };
   }
 
@@ -528,12 +565,72 @@ export class CodexRuntime implements AgentRuntime {
     });
   }
 
-  private extractSdkTokensUsed(turn: unknown): number {
-    if (!turn || typeof turn !== "object") return 0;
+  private extractSdkTokensUsed(usage: Record<string, number>): number {
+    return (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0);
+  }
+
+  private extractSdkUsage(turn: unknown): Record<string, number> {
+    if (!turn || typeof turn !== "object") {
+      return {
+        input_tokens: 0,
+        cached_input_tokens: 0,
+        output_tokens: 0,
+      };
+    }
     const usage =
-      (turn as { usage?: { input_tokens?: number; output_tokens?: number } | null }).usage ??
-      null;
-    return (usage?.input_tokens ?? 0) + (usage?.output_tokens ?? 0);
+      (turn as {
+        usage?: {
+          input_tokens?: number;
+          cached_input_tokens?: number;
+          output_tokens?: number;
+        } | null;
+      }).usage ?? null;
+    return {
+      input_tokens: usage?.input_tokens ?? 0,
+      cached_input_tokens: usage?.cached_input_tokens ?? 0,
+      output_tokens: usage?.output_tokens ?? 0,
+    };
+  }
+
+  private extractTokenSavings(usage: Record<string, number>): Record<string, number> | undefined {
+    const cachedInputTokens = usage.cached_input_tokens ?? 0;
+    if (cachedInputTokens <= 0) return undefined;
+    return {
+      cached_input_tokens: cachedInputTokens,
+    };
+  }
+
+  private isInvalidOrExpiredResumeError(error: unknown): boolean {
+    const message = this.resumeErrorMessage(error).toLowerCase();
+    if (!message) return false;
+    return [
+      "expired",
+      "not found",
+      "invalid session",
+      "invalid thread",
+      "unknown session",
+    ].some((signature) => message.includes(signature));
+  }
+
+  private resumeErrorMessage(error: unknown): string {
+    if (!error) return "";
+    if (error instanceof Error) {
+      const parts = [error.message];
+      const maybeCode = (error as Error & { code?: unknown; category?: unknown; name?: unknown });
+      if (typeof maybeCode.code === "string") parts.push(maybeCode.code);
+      if (typeof maybeCode.category === "string") parts.push(maybeCode.category);
+      if (typeof maybeCode.name === "string") parts.push(maybeCode.name);
+      return parts.filter(Boolean).join(" ");
+    }
+    if (typeof error === "string") return error;
+    if (typeof error === "object") {
+      try {
+        return JSON.stringify(error);
+      } catch {
+        return String(error);
+      }
+    }
+    return String(error);
   }
 
   private extractSdkRuntimeId(thread: unknown): string {
