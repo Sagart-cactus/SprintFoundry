@@ -1,0 +1,161 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import * as fs from "fs/promises";
+import * as os from "os";
+import * as path from "path";
+import { makePlatformConfig, makeProjectConfig } from "./fixtures/configs.js";
+import type { AgentRunConfig } from "../src/service/agent-runner.js";
+
+const mockSdkRunFn = vi.fn();
+const mockStartThreadFn = vi.fn();
+const mockResumeThreadFn = vi.fn();
+const mockCodexConstructorCalls: Array<{ env: Record<string, string> }> = [];
+
+vi.mock("@openai/codex-sdk", () => ({
+  Codex: function MockCodex(this: unknown, opts: { env: Record<string, string> }) {
+    mockCodexConstructorCalls.push({ env: opts?.env ?? {} });
+    return {
+      startThread: mockStartThreadFn,
+      resumeThread: mockResumeThreadFn,
+    };
+  },
+}));
+
+const { AgentRunner } = await import("../src/service/agent-runner.js");
+
+function makeRunConfig(workspacePath: string): AgentRunConfig {
+  return {
+    stepNumber: 7,
+    stepAttempt: 1,
+    agent: "code-review",
+    task: "Validate staged Codex skills are available and used",
+    context_inputs: [{ type: "ticket" }],
+    workspacePath,
+    modelConfig: { provider: "openai", model: "gpt-5" },
+    apiKey: "sk-openai-test-key",
+    tokenBudget: 50_000,
+    timeoutMinutes: 5,
+    previousStepResults: [],
+  };
+}
+
+describe("Codex local_sdk integration for code-review staged skills", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mockCodexConstructorCalls.length = 0;
+
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-code-review-integration-"));
+
+    mockSdkRunFn.mockResolvedValue({
+      usage: { input_tokens: 120, cached_input_tokens: 30, output_tokens: 60 },
+      finalResponse: "ok",
+    });
+    mockStartThreadFn.mockReturnValue({ id: "thread-code-review-1", run: mockSdkRunFn });
+    mockResumeThreadFn.mockResolvedValue({ id: "thread-code-review-resume-1", run: mockSdkRunFn });
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("stages skills, injects CODEX_HOME/skills into local_sdk runtime, and leaves execution evidence", async () => {
+    const workspacePath = path.join(tmpDir, "workspace");
+    await fs.mkdir(workspacePath, { recursive: true });
+
+    const skillNames = ["code-quality", "error-handling", "performance-review"];
+    const catalog: Record<string, { path: string }> = {};
+    for (const skillName of skillNames) {
+      const sourceDir = path.join(tmpDir, "skill-catalog", skillName);
+      await fs.mkdir(sourceDir, { recursive: true });
+      await fs.writeFile(path.join(sourceDir, "SKILL.md"), `# ${skillName}\n`, "utf-8");
+      catalog[skillName] = { path: sourceDir };
+    }
+
+    await fs.writeFile(
+      path.join(workspacePath, ".agent-result.json"),
+      JSON.stringify(
+        {
+          status: "complete",
+          summary: "Code review completed",
+          artifacts_created: [],
+          artifacts_modified: [],
+          issues: [],
+          metadata: {},
+        },
+        null,
+        2
+      ),
+      "utf-8"
+    );
+
+    const runner = new AgentRunner(
+      makePlatformConfig({
+        defaults: {
+          ...makePlatformConfig().defaults,
+          codex_skills_enabled: true,
+          codex_skill_catalog: catalog,
+          codex_skills_per_agent: {
+            "code-review": skillNames,
+          },
+        },
+      }),
+      makeProjectConfig({
+        runtime_overrides: {
+          "code-review": { provider: "codex", mode: "local_sdk" },
+        },
+      })
+    );
+
+    const runResult = await runner.run(makeRunConfig(workspacePath));
+
+    const expectedCodexHome = path.join(workspacePath, ".codex-home");
+    const expectedSkillsDir = path.join(expectedCodexHome, "skills");
+
+    for (const skillName of skillNames) {
+      await expect(
+        fs.access(path.join(expectedSkillsDir, skillName, "SKILL.md"))
+      ).resolves.toBeUndefined();
+    }
+
+    const manifest = JSON.parse(
+      await fs.readFile(path.join(expectedSkillsDir, ".manifest.json"), "utf-8")
+    ) as { skills: string[] };
+    expect(manifest.skills).toEqual(skillNames);
+
+    const agentsProfile = await fs.readFile(path.join(workspacePath, "AGENTS.md"), "utf-8");
+    expect(agentsProfile).toContain("## Runtime Skills");
+    expect(agentsProfile).toContain("code-quality");
+    expect(agentsProfile).toContain("error-handling");
+    expect(agentsProfile).toContain("performance-review");
+
+    expect(mockCodexConstructorCalls).toHaveLength(1);
+    const constructorEnv = mockCodexConstructorCalls[0].env;
+    expect(constructorEnv.CODEX_HOME).toBe(expectedCodexHome);
+    expect(constructorEnv.OPENAI_API_KEY).toBe("sk-openai-test-key");
+    expect(constructorEnv.OPENAI_MODEL).toBe("gpt-5");
+
+    expect(mockStartThreadFn).toHaveBeenCalledOnce();
+    expect(mockSdkRunFn).toHaveBeenCalledOnce();
+
+    const executedPrompt = vi.mocked(mockSdkRunFn).mock.calls[0]?.[0] as string;
+    expect(executedPrompt).toContain("# Task for code-review Agent");
+    expect(executedPrompt).toContain(
+      "Skills available in CODEX_HOME: code-quality, error-handling, performance-review"
+    );
+
+    const debugPath = path.join(workspacePath, ".codex-runtime.step-7.attempt-1.debug.json");
+    const debugPayload = JSON.parse(await fs.readFile(debugPath, "utf-8")) as {
+      runtime_mode: string;
+      codex_home: string;
+      skill_names: string[];
+    };
+    expect(debugPayload.runtime_mode).toBe("local_sdk");
+    expect(debugPayload.codex_home).toBe(expectedCodexHome);
+    expect(debugPayload.skill_names).toEqual(skillNames);
+
+    expect(runResult.tokens_used).toBe(180);
+    expect(runResult.container_id).toBe("thread-code-review-1");
+    expect(runResult.agentResult.status).toBe("complete");
+  });
+});
