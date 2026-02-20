@@ -107,6 +107,7 @@ export interface RuntimeConfig {
   args?: string[];
   image?: string;
   env?: Record<string, string>;
+  model_reasoning_effort?: "minimal" | "low" | "medium" | "high" | "xhigh";
 }
 
 export interface CodexSkillDefinition {

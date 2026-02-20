@@ -60,6 +60,7 @@ api_keys:
 #   developer:
 #     provider: codex
 #     mode: local_process
+#     model_reasoning_effort: medium  # codex only; ignored for non-codex models
 #   qa:
 #     provider: claude-code
 #     mode: local_process
@@ -67,6 +68,7 @@ api_keys:
 # planner_runtime_override:
 #   provider: codex
 #   mode: local_process
+#   model_reasoning_effort: high      # codex only; ignored for non-codex models
 #
 # # Codex skill overrides (workspace-scoped, no global install required)
 # # codex_skills_enabled: true

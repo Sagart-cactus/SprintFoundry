@@ -7,8 +7,6 @@ import * as fs from "fs/promises";
 const FORWARDED_PARENT_ENV_KEYS = [
   "PATH",
   "HOME",
-  "OPENAI_API_KEY",
-  "CODEX_HOME",
   "USERPROFILE",
   "TMPDIR",
   "TEMP",
@@ -55,9 +53,16 @@ export class CodexRuntime implements AgentRuntime {
     const runtimeArgs = config.runtime.args ?? [];
     const hasSandboxFlag = runtimeArgs.includes("--sandbox") || runtimeArgs.includes("-s");
     const hasBypassFlag = runtimeArgs.includes("--dangerously-bypass-approvals-and-sandbox");
+    const reasoningEffort = this.resolveModelReasoningEffort(config.runtime.model_reasoning_effort, config.modelConfig.model);
+    const hasReasoningEffortArg = runtimeArgs.some(
+      (arg) => arg.includes("model_reasoning_effort")
+    );
     const args = [
       "exec",
-      ...(config.resumeSessionId ? ["resume", config.resumeSessionId, prompt] : [prompt]),
+      ...(reasoningEffort && !hasReasoningEffortArg
+        ? ["--config", `model_reasoning_effort=\"${reasoningEffort}\"`]
+        : []),
+      prompt,
       "--json",
       ...(hasSandboxFlag || hasBypassFlag ? [] : ["--sandbox", "workspace-write"]),
     ];
@@ -185,7 +190,7 @@ export class CodexRuntime implements AgentRuntime {
 
     return {
       tokens_used: result.tokensUsed,
-      runtime_id: this.extractSessionIdFromOutput(result.stdout) ?? result.runtimeId,
+      runtime_id: result.runtimeId,
     };
   }
 
@@ -229,25 +234,28 @@ export class CodexRuntime implements AgentRuntime {
     );
 
     const codex = new Codex({ env: env as Record<string, string> });
-    const codexWithResume = codex as {
-      resumeThread?: (sessionId: string) => { id?: string | null; run: (prompt: string) => Promise<{ usage?: { input_tokens?: number; output_tokens?: number } }> };
-      startThread: (args: {
-        workingDirectory: string;
-        model: string;
-        sandboxMode: "workspace-write";
-        approvalPolicy: "never";
-        skipGitRepoCheck: true;
-      }) => { id?: string | null; run: (prompt: string) => Promise<{ usage?: { input_tokens?: number; output_tokens?: number } }> };
+    const threadOptions: {
+      workingDirectory: string;
+      model: string;
+      sandboxMode: "workspace-write";
+      approvalPolicy: "never";
+      skipGitRepoCheck: true;
+      modelReasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
+    } = {
+      workingDirectory: config.workspacePath,
+      model: config.modelConfig.model,
+      sandboxMode: "workspace-write",
+      approvalPolicy: "never",
+      skipGitRepoCheck: true,
     };
-    const thread = config.resumeSessionId && typeof codexWithResume.resumeThread === "function"
-      ? codexWithResume.resumeThread(config.resumeSessionId)
-      : codexWithResume.startThread({
-          workingDirectory: config.workspacePath,
-          model: config.modelConfig.model,
-          sandboxMode: "workspace-write",
-          approvalPolicy: "never",
-          skipGitRepoCheck: true,
-        });
+    const sdkReasoningEffort = this.resolveModelReasoningEffort(
+      config.runtime.model_reasoning_effort,
+      config.modelConfig.model
+    );
+    if (sdkReasoningEffort) {
+      threadOptions.modelReasoningEffort = sdkReasoningEffort;
+    }
+    const thread = codex.startThread(threadOptions);
     const turn = await thread.run(prompt);
 
     return {
@@ -275,30 +283,16 @@ export class CodexRuntime implements AgentRuntime {
     return env;
   }
 
-  private extractSessionIdFromOutput(stdout: string): string | null {
-    const trimmed = stdout.trim();
-    if (!trimmed) return null;
-    for (const line of trimmed.split(/\r?\n/)) {
-      const candidate = this.extractSessionIdFromJson(line.trim());
-      if (candidate) return candidate;
-    }
-    return this.extractSessionIdFromJson(trimmed);
+  private resolveModelReasoningEffort(
+    effort: RuntimeStepContext["runtime"]["model_reasoning_effort"] | undefined,
+    model: string
+  ): RuntimeStepContext["runtime"]["model_reasoning_effort"] | undefined {
+    if (!effort) return undefined;
+    return this.isCodexModel(model) ? effort : undefined;
   }
 
-  private extractSessionIdFromJson(jsonText: string): string | null {
-    if (!jsonText || (!jsonText.startsWith("{") && !jsonText.startsWith("["))) return null;
-    try {
-      const parsed = JSON.parse(jsonText) as Record<string, unknown>;
-      const sessionId = parsed["session_id"];
-      if (typeof sessionId === "string" && sessionId.trim()) return sessionId;
-      const threadId = parsed["thread_id"];
-      if (typeof threadId === "string" && threadId.trim()) return threadId;
-      const id = parsed["id"];
-      if (typeof id === "string" && id.trim().startsWith("thread-")) return id;
-      return null;
-    } catch {
-      return null;
-    }
+  private isCodexModel(model: string): boolean {
+    return /codex/i.test(model);
   }
 
   private shouldRetryWithoutCodexHome(
