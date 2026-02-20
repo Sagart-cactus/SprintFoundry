@@ -68,9 +68,10 @@ export async function runProcess(
         const tokensUsed = options.parseTokensFromStdout
           ? parseTokenUsage(stdout)
           : 0;
+        const parsedRuntimeId = parseRuntimeId(command, stdout);
         resolve({
           tokensUsed,
-          runtimeId: `local-${command}-${proc.pid}`,
+          runtimeId: parsedRuntimeId ?? `local-${command}-${proc.pid}`,
           stdout,
           stderr,
         });
@@ -130,6 +131,23 @@ export function parseTokenUsage(output: string): number {
   return match ? parseInt(match[1], 10) : 0;
 }
 
+export function parseRuntimeId(command: string, output: string): string | null {
+  if (!isCodexCommand(command)) return null;
+  const trimmed = output.trim();
+  if (!trimmed) return null;
+
+  // Try JSONL first (Codex CLI emits line-delimited JSON events).
+  for (const rawLine of trimmed.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || (!line.startsWith("{") && !line.startsWith("["))) continue;
+    const threadId = parseThreadIdFromJson(line);
+    if (threadId) return threadId;
+  }
+
+  // Fallback for single JSON payloads.
+  return parseThreadIdFromJson(trimmed);
+}
+
 function parseUsageFromJson(jsonText: string): number | null {
   try {
     const parsed = JSON.parse(jsonText);
@@ -137,6 +155,26 @@ function parseUsageFromJson(jsonText: string): number | null {
   } catch {
     return null;
   }
+}
+
+function parseThreadIdFromJson(jsonText: string): string | null {
+  try {
+    const parsed = JSON.parse(jsonText) as Record<string, unknown>;
+    if (parsed["type"] !== "thread.started") return null;
+    const threadId = parsed["thread_id"];
+    if (typeof threadId === "string" && threadId.trim()) {
+      return threadId;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function isCodexCommand(command: string): boolean {
+  if (!command) return false;
+  const normalized = command.trim().toLowerCase();
+  return /(^|[\\/])codex(?:\.exe)?$/.test(normalized);
 }
 
 function extractUsage(value: unknown): number | null {
