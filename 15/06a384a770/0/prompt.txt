@@ -1,0 +1,3 @@
+Ok now I want you to run monitor in the background and then run 2 parallel runs for SprintFoundry one from Github issue: https://github.com/Sagart-cactus/SprintFoundry/issues/6 and another from linear issue https://linear.app/sprintfoundry/issue/SPR-5/default-monitor-to-v3-remove-v1-and-v2-routesassets
+
+Make changs in project config before starting if there are any changes that are required.

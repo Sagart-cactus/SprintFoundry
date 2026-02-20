@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.4.4",
+  "checkpoint_id": "c247105282ae",
+  "strategy": "auto-commit",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".claude-runtime.debug.json",
+    ".claude-runtime.step-1.attempt-1.debug.json",
+    ".claude-runtime.step-2.attempt-1.debug.json",
+    ".claude-runtime.step-2.attempt-2.debug.json",
+    ".claude-runtime.step-901.attempt-1.debug.json",
+    ".claude-runtime.step-902.attempt-1.debug.json",
+    ".claude/settings.json",
+    ".claude/settings.local.json",
+    ".planner-rework-task.md",
+    ".planner-rework.raw.txt"
+  ],
+  "sessions": [
+    {
+      "metadata": "/c2/47105282ae/0/metadata.json",
+      "transcript": "/c2/47105282ae/0/full.jsonl",
+      "context": "",
+      "content_hash": "/c2/47105282ae/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 151,
+    "cache_read_tokens": 197426,
+    "output_tokens": 27,
+    "api_call_count": 2
+  }
+}
