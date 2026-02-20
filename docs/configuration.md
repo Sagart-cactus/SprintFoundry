@@ -80,3 +80,17 @@ API keys may come from:
 - provider SDK fallback env (for Anthropic SDK path)
 
 Keep credentials out of source control.
+
+## Codex CLI 401 Fallback (Local Process)
+
+Codex local-process steps can run with a workspace-scoped `CODEX_HOME` (for staged skills and config). In some local CLI auth states this may return:
+
+- `401 Unauthorized: Missing bearer or basic authentication in header`
+
+Fallback behavior is available but disabled by default:
+
+- Set `SPRINTFOUNDRY_ENABLE_CODEX_HOME_AUTH_FALLBACK=1` to enable it.
+- When enabled, runtime retries once without `CODEX_HOME` only if:
+  - process exits non-zero, and
+  - stderr contains the exact trusted 401 signature above.
+- No retry is triggered from stdout text.

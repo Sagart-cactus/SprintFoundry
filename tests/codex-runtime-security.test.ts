@@ -117,6 +117,32 @@ describe("CodexRuntime security handling", () => {
     expect(debugContent).not.toContain(apiKey);
   });
 
+  it("does not retry without explicit fallback flag even when stderr has trusted auth signature", async () => {
+    const trustedAuthMessage = "401 Unauthorized: Missing bearer or basic authentication in header";
+
+    (runProcess as any).mockImplementationOnce(
+      async (_command: string, _args: string[], options: { outputFiles?: { stderrPath?: string } }) => {
+        if (options.outputFiles?.stderrPath) {
+          await fs.writeFile(options.outputFiles.stderrPath, trustedAuthMessage, "utf-8");
+        }
+        throw new Error("Process codex exited with code 1. auth failure");
+      }
+    );
+
+    const runtime = new CodexRuntime();
+    const context = makeContext(tmpDir, {
+      runtime: {
+        provider: "codex",
+        mode: "local_process",
+      },
+      codexHomeDir: path.join(tmpDir, ".codex-home"),
+      codexSkillNames: ["security-policy"],
+    });
+
+    await expect(runtime.runStep(context)).rejects.toThrow(/auth failure/);
+    expect((runProcess as any).mock.calls.length).toBe(1);
+  });
+
   it("retries without CODEX_HOME only when fallback is explicitly enabled and stderr has trusted auth signature", async () => {
     const trustedAuthMessage = "401 Unauthorized: Missing bearer or basic authentication in header";
 

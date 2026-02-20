@@ -288,3 +288,30 @@ Default budget of $25/task, configurable per project. Service tracks cumulative 
 
 ### Rationale
 Cost predictability is important for BYOK users. Better to fail a task than silently spend $100 on a rework loop.
+
+---
+
+## ADR-013: Keep Guarded Codex CLI 401 Retry for `CODEX_HOME`
+
+**Status:** Accepted  
+**Date:** 2026-02-20
+
+### Context
+When Codex runs in `local_process` mode with workspace-scoped `CODEX_HOME`, some local auth states emit `401 Unauthorized: Missing bearer or basic authentication in header`. We needed to decide whether to keep the existing retry path or simplify by removing it.
+
+### Decision
+Keep the retry path with strict guardrails:
+- Disabled by default; only enabled via `SPRINTFOUNDRY_ENABLE_CODEX_HOME_AUTH_FALLBACK=1`
+- Trigger only when process exits non-zero and stderr includes the trusted auth-header 401 signature
+- Retry exactly once without `CODEX_HOME`
+
+### Alternatives Considered
+- **Simplify to no retry:** cleaner code, but causes avoidable step failures for known local CLI auth edge cases.
+- **Broaden retry trigger:** easier recovery, but increases spoofing and false-positive risk.
+
+### Rationale
+The guarded retry preserves operational compatibility for staged `CODEX_HOME` workflows while limiting security and behavior risk. Restricting the signal to stderr (not stdout) prevents model-output spoofing from influencing environment mutation. One retry keeps behavior bounded and predictable.
+
+### Tradeoffs
+- Additional implementation/test complexity in runtime security path
+- Recovery behavior is opt-in, so users must know the flag for affected environments
