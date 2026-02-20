@@ -16,6 +16,7 @@ interface ProjectAnswers {
   branchPrefix: string;
   includeTicketId: boolean;
   namingStyle: string;
+  modelProfile: "default" | "codex-53-reasoning";
 }
 
 function deriveProjectName(id: string): string {
@@ -208,6 +209,24 @@ async function gatherAnswers(): Promise<ProjectAnswers> {
     ],
   });
 
+  // Phase 7: Model Profile
+  console.log("\n  Model Profile\n");
+
+  const modelProfile = (await select({
+    message: "Runtime/model profile:",
+    choices: [
+      {
+        name: "Default (no model/runtime overrides)",
+        value: "default",
+      },
+      {
+        name: "Codex 5.3 (planner: high effort, agents: medium effort)",
+        value: "codex-53-reasoning",
+      },
+    ],
+    default: "default",
+  })) as ProjectAnswers["modelProfile"];
+
   return {
     projectId,
     name,
@@ -221,10 +240,11 @@ async function gatherAnswers(): Promise<ProjectAnswers> {
     branchPrefix: finalPrefix,
     includeTicketId,
     namingStyle,
+    modelProfile,
   };
 }
 
-function buildProjectConfig(answers: ProjectAnswers): Record<string, unknown> {
+export function buildProjectConfig(answers: ProjectAnswers): Record<string, unknown> {
   const config: Record<string, unknown> = {
     project_id: answers.projectId,
     name: answers.name,
@@ -263,6 +283,31 @@ function buildProjectConfig(answers: ProjectAnswers): Record<string, unknown> {
         type: "prompt",
         config: {},
       },
+    };
+  }
+
+  if (answers.modelProfile === "codex-53-reasoning") {
+    const modelOverrides: Record<string, { provider: string; model: string }> = {
+      orchestrator: { provider: "openai", model: "gpt-5.3-codex" },
+    };
+    const runtimeOverrides: Record<string, Record<string, unknown>> = {};
+
+    for (const agent of answers.agents) {
+      modelOverrides[agent] = { provider: "openai", model: "gpt-5.3-codex" };
+      runtimeOverrides[agent] = {
+        provider: "codex",
+        mode: "local_process",
+        model_reasoning_effort: "medium",
+      };
+    }
+
+    config.model_overrides = modelOverrides;
+    config.runtime_overrides = runtimeOverrides;
+    config.planner_runtime_override = {
+      provider: "codex",
+      mode: "local_process",
+      model_reasoning_effort: "high",
+      args: ["--model", "gpt-5.3-codex"],
     };
   }
 
