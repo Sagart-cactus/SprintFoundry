@@ -44,3 +44,4 @@ coverage/
 .agent-profile.md
 artifacts/
 AGENTS.md
+!docs/agents.md
