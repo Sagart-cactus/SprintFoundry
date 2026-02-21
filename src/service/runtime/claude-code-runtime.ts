@@ -2,7 +2,12 @@ import * as path from "path";
 import { spawn } from "child_process";
 import * as fs from "fs/promises";
 import { query, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { AgentRuntime, RuntimeStepContext, RuntimeStepResult } from "./types.js";
+import type {
+  AgentRuntime,
+  RuntimeActivityEvent,
+  RuntimeStepContext,
+  RuntimeStepResult,
+} from "./types.js";
 import { runProcess, parseTokenUsage } from "./process-utils.js";
 import type { RuntimeMetadataEnvelope } from "../../shared/types.js";
 
@@ -150,6 +155,10 @@ export class ClaudeCodeRuntime implements AgentRuntime {
         options: queryOptions as any,
       })) {
         stdout += `${JSON.stringify(message)}\n`;
+        const activities = this.extractActivityEventsFromSdkMessage(message);
+        for (const activity of activities) {
+          await this.safeEmitActivity(config, activity);
+        }
         if ("session_id" in message && typeof message.session_id === "string") {
           runtimeId = message.session_id;
         }
@@ -265,6 +274,172 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     } catch {
       return null;
     }
+  }
+
+  private async safeEmitActivity(
+    config: RuntimeStepContext,
+    event: RuntimeActivityEvent
+  ): Promise<void> {
+    if (!config.onActivity) return;
+    try {
+      await config.onActivity(event);
+    } catch (error) {
+      console.warn(
+        `[claude-runtime] Failed to emit activity event ${event.type}: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+  }
+
+  private extractActivityEventsFromSdkMessage(message: unknown): RuntimeActivityEvent[] {
+    if (!message || typeof message !== "object") return [];
+    const raw = message as Record<string, unknown>;
+    const events: RuntimeActivityEvent[] = [];
+    const topType = this.pickString(raw, ["type", "subtype"]).toLowerCase();
+
+    if (topType.includes("thinking") || topType.includes("reasoning")) {
+      const thought =
+        this.pickString(raw, ["thinking", "reasoning", "text", "message"]) ||
+        this.textFromContent(raw["content"]) ||
+        "";
+      events.push({
+        type: "agent_thinking",
+        data: {
+          kind: topType || "thinking",
+          text: this.truncate(thought, 300),
+        },
+      });
+    }
+
+    if (this.isRecord(raw["content"])) {
+      this.extractEventsFromContentArray([raw["content"]], events);
+    } else if (Array.isArray(raw["content"])) {
+      this.extractEventsFromContentArray(raw["content"], events);
+    }
+
+    const toolName = this.pickString(raw, ["tool_name", "name"]);
+    if (toolName) {
+      const command = this.pickString(raw, ["command", "cmd"]);
+      const filePath = this.pickString(raw, ["path", "file_path", "target_path"]);
+      if (command) {
+        events.push({
+          type: "agent_command_run",
+          data: {
+            tool_name: toolName,
+            command: this.truncate(command, 240),
+          },
+        });
+      } else if (filePath) {
+        events.push({
+          type: "agent_file_edit",
+          data: {
+            tool_name: toolName,
+            path: filePath,
+          },
+        });
+      } else {
+        events.push({
+          type: "agent_tool_call",
+          data: {
+            tool_name: toolName,
+          },
+        });
+      }
+    }
+
+    return events;
+  }
+
+  private extractEventsFromContentArray(
+    contentItems: unknown[],
+    out: RuntimeActivityEvent[]
+  ): void {
+    for (const item of contentItems) {
+      if (!this.isRecord(item)) continue;
+      const contentType = this.pickString(item, ["type"]).toLowerCase();
+      if (!contentType) continue;
+
+      if (contentType.includes("thinking") || contentType.includes("reasoning")) {
+        const text =
+          this.pickString(item, ["thinking", "text", "reasoning"]) ||
+          this.textFromContent(item["content"]) ||
+          "";
+        out.push({
+          type: "agent_thinking",
+          data: {
+            kind: contentType,
+            text: this.truncate(text, 300),
+          },
+        });
+        continue;
+      }
+
+      const toolName = this.pickString(item, ["name", "tool_name"]);
+      if (contentType === "tool_use" || contentType === "server_tool_use" || toolName) {
+        const command =
+          this.pickString(item, ["command", "cmd"]) ||
+          (this.isRecord(item["input"]) ? this.pickString(item["input"] as Record<string, unknown>, ["command", "cmd"]) : "");
+        const filePath =
+          this.pickString(item, ["path", "file_path"]) ||
+          (this.isRecord(item["input"]) ? this.pickString(item["input"] as Record<string, unknown>, ["path", "file_path", "target_path"]) : "");
+
+        if (command) {
+          out.push({
+            type: "agent_command_run",
+            data: {
+              tool_name: toolName || contentType,
+              command: this.truncate(command, 240),
+            },
+          });
+        } else if (filePath) {
+          out.push({
+            type: "agent_file_edit",
+            data: {
+              tool_name: toolName || contentType,
+              path: filePath,
+            },
+          });
+        } else {
+          out.push({
+            type: "agent_tool_call",
+            data: {
+              tool_name: toolName || contentType,
+            },
+          });
+        }
+      }
+    }
+  }
+
+  private pickString(value: Record<string, unknown>, keys: string[]): string {
+    for (const key of keys) {
+      const candidate = value[key];
+      if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+    }
+    return "";
+  }
+
+  private textFromContent(value: unknown): string {
+    if (typeof value === "string") return value;
+    if (Array.isArray(value)) {
+      return value
+        .map((item) => (this.isRecord(item) ? this.pickString(item, ["text", "message"]) : ""))
+        .filter(Boolean)
+        .join("\n");
+    }
+    if (this.isRecord(value)) return this.pickString(value, ["text", "message"]);
+    return "";
+  }
+
+  private truncate(value: string, maxLen: number): string {
+    if (!value) return "";
+    if (value.length <= maxLen) return value;
+    return `${value.slice(0, maxLen)}...`;
+  }
+
+  private isRecord(value: unknown): value is Record<string, unknown> {
+    return Boolean(value) && typeof value === "object" && !Array.isArray(value);
   }
 
   private async runContainer(config: RuntimeStepContext): Promise<RuntimeStepResult> {

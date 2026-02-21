@@ -53,6 +53,7 @@ function makeContext(
     containerImage: overrides?.containerImage,
     resumeSessionId: overrides?.resumeSessionId,
     resumeReason: overrides?.resumeReason,
+    onActivity: overrides?.onActivity,
   };
 }
 
@@ -232,6 +233,57 @@ describe("CodexRuntime local_sdk mode", () => {
     expect(stepContent.step_number).toBe(3);
     expect(stepContent.step_attempt).toBe(2);
     expect(legacyContent.runtime_mode).toBe("local_sdk");
+  });
+
+  it("writes SDK stdout/stderr logs so monitor can render agent output", async () => {
+    const runtime = new CodexRuntime();
+    await runtime.runStep(makeContext(tmpDir, { stepNumber: 4, stepAttempt: 3 }));
+
+    const stepStdoutPath = path.join(tmpDir, ".codex-runtime.step-4.attempt-3.stdout.log");
+    const stepStderrPath = path.join(tmpDir, ".codex-runtime.step-4.attempt-3.stderr.log");
+    const legacyStdoutPath = path.join(tmpDir, ".codex-runtime.stdout.log");
+    const legacyStderrPath = path.join(tmpDir, ".codex-runtime.stderr.log");
+
+    const [stepStdout, stepStderr, legacyStdout, legacyStderr] = await Promise.all([
+      fs.readFile(stepStdoutPath, "utf-8"),
+      fs.readFile(stepStderrPath, "utf-8"),
+      fs.readFile(legacyStdoutPath, "utf-8"),
+      fs.readFile(legacyStderrPath, "utf-8"),
+    ]);
+
+    expect(stepStdout).toContain('"type":"thread.started"');
+    expect(stepStdout).toContain('"type":"turn.completed"');
+    expect(stepStderr).toBe("");
+    expect(legacyStdout).toContain('"type":"thread.started"');
+    expect(legacyStderr).toBe("");
+  });
+
+  it("emits runtime activity events from SDK turn items", async () => {
+    mockRunFn.mockResolvedValueOnce({
+      usage: { input_tokens: 10, cached_input_tokens: 0, output_tokens: 3 },
+      items: [
+        { type: "command_execution", command: "npm test" },
+        { type: "tool_call", tool_name: "read_file" },
+      ],
+      finalResponse: "done",
+    });
+    const onActivity = vi.fn();
+
+    const runtime = new CodexRuntime();
+    await runtime.runStep(makeContext(tmpDir, { onActivity }));
+
+    expect(onActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "agent_command_run",
+        data: expect.objectContaining({ command: "npm test" }),
+      })
+    );
+    expect(onActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "agent_tool_call",
+        data: expect.objectContaining({ tool_name: "read_file" }),
+      })
+    );
   });
 
   it("returns zero tokens when usage is missing", async () => {

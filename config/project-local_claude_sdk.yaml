@@ -1,0 +1,114 @@
+# SprintFoundry — Project Configuration
+# Local SDK runtime profile for Claude with strict budget limits
+
+project_id: local_claude_sdk
+name: Local Claude SDK
+
+stack: js
+
+agents:
+  - product
+  - architect
+  - developer
+  - go-developer
+  - code-review
+  - qa
+  - go-qa
+  - security
+  - ui-ux
+  - devops
+
+repo:
+  url: git@github.com:Sagart-cactus/SprintFoundry.git
+  default_branch: main
+
+api_keys:
+  anthropic: ${SPRINTFOUNDRY_ANTHROPIC_KEY}
+
+model_overrides:
+  product:
+    provider: anthropic
+    model: claude-sonnet-4-5-20250929
+  architect:
+    provider: anthropic
+    model: claude-sonnet-4-5-20250929
+  developer:
+    provider: anthropic
+    model: claude-sonnet-4-5-20250929
+  go-developer:
+    provider: anthropic
+    model: claude-sonnet-4-5-20250929
+  code-review:
+    provider: anthropic
+    model: claude-sonnet-4-5-20250929
+  qa:
+    provider: anthropic
+    model: claude-sonnet-4-5-20250929
+  go-qa:
+    provider: anthropic
+    model: claude-sonnet-4-5-20250929
+  security:
+    provider: anthropic
+    model: claude-sonnet-4-5-20250929
+  ui-ux:
+    provider: anthropic
+    model: claude-sonnet-4-5-20250929
+  devops:
+    provider: anthropic
+    model: claude-sonnet-4-5-20250929
+
+runtime_overrides:
+  product:
+    provider: claude-code
+    mode: local_sdk
+  architect:
+    provider: claude-code
+    mode: local_sdk
+  developer:
+    provider: claude-code
+    mode: local_sdk
+  go-developer:
+    provider: claude-code
+    mode: local_sdk
+  code-review:
+    provider: claude-code
+    mode: local_sdk
+  qa:
+    provider: claude-code
+    mode: local_sdk
+  go-qa:
+    provider: claude-code
+    mode: local_sdk
+  security:
+    provider: claude-code
+    mode: local_sdk
+  ui-ux:
+    provider: claude-code
+    mode: local_sdk
+  devops:
+    provider: claude-code
+    mode: local_sdk
+
+planner_runtime_override:
+  provider: claude-code
+  mode: local_sdk
+
+budget_overrides:
+  per_agent_tokens: 100000
+  per_task_total_tokens: 300000
+  per_task_max_cost_usd: 3.00
+
+branch_strategy:
+  prefix: feat/
+  include_ticket_id: true
+  naming: kebab-case
+
+integrations:
+  ticket_source:
+    type: github
+    config:
+      token: ${GITHUB_TOKEN}
+      owner: Sagart-cactus
+      repo: SprintFoundry
+
+rules: []

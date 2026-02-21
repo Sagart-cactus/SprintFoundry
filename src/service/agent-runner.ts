@@ -22,6 +22,7 @@ import type {
 import { RuntimeFactory } from "./runtime/runtime-factory.js";
 import { CodexSkillManager } from "./runtime/codex-skill-manager.js";
 import { parseTokenUsage as parseRuntimeTokenUsage } from "./runtime/process-utils.js";
+import type { RuntimeActivityEvent } from "./runtime/types.js";
 
 export interface AgentRunConfig {
   stepNumber: number;
@@ -44,6 +45,7 @@ export interface AgentRunConfig {
   containerResources?: ContainerResources;
   resumeSessionId?: string;
   resumeReason?: string;
+  onRuntimeActivity?: (event: RuntimeActivityEvent) => Promise<void> | void;
 }
 
 interface WorkspacePrepResult {
@@ -124,6 +126,7 @@ export class AgentRunner {
       codexSkillNames: prep.codexSkillNames,
       resumeSessionId: config.resumeSessionId,
       resumeReason: config.resumeReason,
+      onActivity: config.onRuntimeActivity,
     });
 
     console.log(`[agent-runner] Runtime completed for ${config.agent}. Reading result...`);

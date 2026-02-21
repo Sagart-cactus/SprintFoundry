@@ -201,6 +201,10 @@ function eventLabel(rawType) {
   if (t === "human_gate.approved") return "Human gate approved";
   if (t === "human_gate.rejected") return "Human gate rejected";
   if (t === "agent.token_limit_exceeded") return "Token limit exceeded";
+  if (t === "agent_tool_call") return "Tool call";
+  if (t === "agent_file_edit") return "File edit";
+  if (t === "agent_command_run") return "Command run";
+  if (t === "agent_thinking") return "Thinking";
   if (t === "step.rework_triggered") return "Rework triggered";
   return String(rawType || "event").replaceAll(/[._]/g, " ");
 }
@@ -298,6 +302,44 @@ function classifyAgentItem(item) {
   if (lower.includes("thread.started")) return { title: "Session started", preview: "", code: false };
   if (lower.includes("turn.started")) return { title: "Turn started", preview: "", code: false };
   if (lower.includes("item.completed")) return { title: "Item completed", preview: shortText(message || command || thought, 130), code: false };
+
+  // Claude SDK JSONL shape:
+  // { type: "assistant", content: [...] } OR { type: "assistant", message: { content: [...] } }
+  if (lower === "assistant") {
+    const content =
+      (Array.isArray(item?.message?.content) && item.message.content) ||
+      (Array.isArray(item?.content) && item.content) ||
+      [];
+    const thinking = content.find((c) => c?.type === "thinking");
+    if (thinking?.thinking) {
+      return { title: "Thought", preview: shortText(thinking.thinking, 130), code: false };
+    }
+
+    const toolUse = content.find((c) => c?.type === "tool_use");
+    if (toolUse) {
+      const toolName = String(toolUse?.name || "");
+      const input = toolUse?.input && typeof toolUse.input === "object" ? toolUse.input : {};
+      const toolCmd = pickString(input, ["command", "cmd"]);
+      const toolPath = pickString(input, ["file_path", "path"]);
+      const toolPreview = toolCmd || toolPath || toolName || "tool call";
+      const isCommandTool = /^(bash|task|taskoutput)$/i.test(toolName) || Boolean(toolCmd);
+      return {
+        title: isCommandTool ? "Command executed" : "Tool call",
+        preview: shortText(toolPreview, 130),
+        code: isCommandTool,
+      };
+    }
+
+    const textBlock = content.find((c) => c?.type === "text" && typeof c?.text === "string");
+    if (textBlock?.text) {
+      return { title: "Agent message", preview: shortText(textBlock.text, 130), code: false };
+    }
+  }
+
+  if (lower === "result") {
+    const resultText = pickString(item, ["result"]);
+    return { title: "Result", preview: shortText(resultText || "Run completed", 130), code: false };
+  }
   return { title: "Event", preview: shortText(message || command || thought, 130), code: false };
 }
 
@@ -315,10 +357,15 @@ function renderAgentOut(raw, stepNumber) {
 
   if (!target.length) return '<div class="empty">No matching output</div>';
 
-  return target
+  const rows = target
+    .map((item, index) => ({ item, index, cls: classifyAgentItem(item) }))
+    .filter((row) => row.cls.title !== "Event");
+
+  if (!rows.length) return '<div class="empty">No output</div>';
+
+  return rows
     .slice(-140)
-    .map((item, index) => {
-      const cls = classifyAgentItem(item);
+    .map(({ item, index, cls }, visibleIndex) => {
       const step = getStepNumber(item);
       const id =
         pickString(item?.item, ["id"]) ||
@@ -336,7 +383,7 @@ function renderAgentOut(raw, stepNumber) {
         <article class="log-item">
           <button class="log-row" type="button" data-json-id="${escapeHtml(blockId)}">
             <span class="title">${escapeHtml(cls.title)}</span>
-            <span class="meta">#${index + 1}${step ? ` · step ${step}` : ""}</span>
+            <span class="meta">#${visibleIndex + 1}${step ? ` · step ${step}` : ""}</span>
           </button>
           ${cls.preview ? `<p class="preview ${cls.code ? "code" : ""}">${escapeHtml(cls.preview)}</p>` : ""}
           <pre id="${escapeHtml(blockId)}" class="json-block" ${expanded ? "" : "hidden"}>${escapeHtml(JSON.stringify(item, null, 2))}</pre>
@@ -734,6 +781,29 @@ function stepEventsForStep(events, stepNumber) {
   });
 }
 
+function stepActivitySummary(evt) {
+  const type = String(evt?.event_type || "");
+  const data = evt?.data || {};
+  if (type === "agent_command_run") {
+    return shortText(data.command || data.cmd || data.tool_name || "command", 80);
+  }
+  if (type === "agent_file_edit") {
+    return shortText(data.path || data.file_path || data.tool_name || "file", 80);
+  }
+  if (type === "agent_tool_call") {
+    return shortText(data.tool_name || data.name || "tool", 80);
+  }
+  if (type === "agent_thinking") {
+    return shortText(data.text || data.kind || "thinking", 80);
+  }
+  return "";
+}
+
+function activityEventsForStep(events, stepNumber) {
+  const set = new Set(["agent_tool_call", "agent_file_edit", "agent_command_run", "agent_thinking"]);
+  return stepEventsForStep(events, stepNumber).filter((evt) => set.has(String(evt?.event_type || "")));
+}
+
 function stepByNumber(stepNumber) {
   return (state.runData?.steps ?? []).find((step) => step.step_number === stepNumber) || null;
 }
@@ -903,12 +973,9 @@ function renderFeed(runData, events, stepMeta) {
       // Falls back to the shared latest log filtered by step number for backward compat.
       const stepLog = state.stepLogs.get(step.step_number);
       const stepStdout = stepLog?.stdout ?? state.agentStdout;
-      const stepStderr = stepLog?.stderr ?? state.agentStderr;
       const stepNumFilter = stepLog ? null : step.step_number; // null = no filter needed (content is already step-specific)
 
-      const errCount = errorCountForStep(stepStderr, stepNumFilter);
       const outCount = agentOutCountForStep(stepStdout, stepNumFilter);
-      const stepEvents = stepEventsForStep(events, step.step_number);
       const isPending = !started && step.status !== "completed" && step.status !== "failed" && step.status !== "running";
 
       const summary = stepResultSummary(step);
@@ -963,15 +1030,6 @@ function renderFeed(runData, events, stepMeta) {
                   Step Result
                 </button>
               </div>
-              <div class="feed-events">
-                <span class="feed-event">Agent Output rows: ${escapeHtml(String(outCount))}</span>
-                <span class="feed-event">Errors: ${escapeHtml(String(errCount))}</span>
-              </div>
-              ${stepEvents.length ? `
-                <div class="feed-events">
-                  ${stepEvents.slice(-4).map((evt) => `<span class="feed-event">${escapeHtml(eventLabel(evt.event_type))} · ${escapeHtml(fmtTime(evt.timestamp))}</span>`).join("")}
-                </div>
-              ` : ""}
             `
           }
         </article>

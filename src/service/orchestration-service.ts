@@ -36,6 +36,7 @@ import { NotificationService } from "./notification-service.js";
 import { RuntimeSessionStore } from "./runtime-session-store.js";
 import type { PlannerRuntime } from "./runtime/types.js";
 import { PlannerFactory } from "./runtime/planner-factory.js";
+import type { RuntimeActivityEvent } from "./runtime/types.js";
 
 export class OrchestrationService {
   private validator: PlanValidator;
@@ -473,6 +474,13 @@ export class OrchestrationService {
         containerResources,
         resumeSessionId,
         resumeReason,
+        onRuntimeActivity: async (activity: RuntimeActivityEvent) => {
+          await this.emitEvent(run.run_id, activity.type, {
+            step: step.step_number,
+            agent: step.agent,
+            ...activity.data,
+          });
+        },
       });
 
       console.log(`[step ${step.step_number}] Agent ${step.agent} finished: status=${result.agentResult.status}, tokens=${result.tokens_used}, cost=$${result.cost_usd.toFixed(2)}, duration=${result.duration_seconds.toFixed(1)}s`);
