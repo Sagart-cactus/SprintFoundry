@@ -205,6 +205,7 @@ function eventLabel(rawType) {
   if (t === "agent_file_edit") return "File edit";
   if (t === "agent_command_run") return "Command run";
   if (t === "agent_thinking") return "Thinking";
+  if (t === "agent_guardrail_block") return "Guardrail blocked";
   if (t === "step.rework_triggered") return "Rework triggered";
   return String(rawType || "event").replaceAll(/[._]/g, " ");
 }
@@ -796,11 +797,20 @@ function stepActivitySummary(evt) {
   if (type === "agent_thinking") {
     return shortText(data.text || data.kind || "thinking", 80);
   }
+  if (type === "agent_guardrail_block") {
+    return shortText(data.reason || data.rule || data.command || data.path || "guardrail", 80);
+  }
   return "";
 }
 
 function activityEventsForStep(events, stepNumber) {
-  const set = new Set(["agent_tool_call", "agent_file_edit", "agent_command_run", "agent_thinking"]);
+  const set = new Set([
+    "agent_tool_call",
+    "agent_file_edit",
+    "agent_command_run",
+    "agent_thinking",
+    "agent_guardrail_block",
+  ]);
   return stepEventsForStep(events, stepNumber).filter((evt) => set.has(String(evt?.event_type || "")));
 }
 

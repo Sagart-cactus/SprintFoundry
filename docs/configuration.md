@@ -37,6 +37,7 @@ Important sections:
 - `defaults.runtime_per_agent`
 - `defaults.planner_runtime`
 - `defaults.codex_skills_*`
+- `defaults.guardrails`
 - `rules` (enforceable platform rules)
 - `agent_definitions`
 - `events_dir`
@@ -52,6 +53,7 @@ Important sections:
 - `budget_overrides`
 - `runtime_overrides`
 - `planner_runtime_override`
+- `guardrails`
 - `branch_strategy`
 - `integrations.ticket_source`
 - `integrations.notifications`
@@ -94,3 +96,32 @@ Fallback behavior is available but disabled by default:
   - process exits non-zero, and
   - stderr contains the exact trusted 401 signature above.
 - No retry is triggered from stdout text.
+
+## Guardrails (SDK Modes)
+
+Guardrails apply to SDK runtimes (`codex` and `claude-code` in `local_sdk` mode). They block
+command executions and file changes before they are applied.
+
+Configuration lives at:
+
+- `platform.defaults.guardrails`
+- `project.guardrails` (overrides platform defaults)
+
+Supported keys:
+
+- `deny_commands`: list of regex patterns (case-insensitive) matched against command strings.
+- `allow_paths`: list of glob-like patterns (workspace-relative) that must match file paths.
+- `deny_paths`: list of glob-like patterns (workspace-relative) that block file paths.
+
+Examples:
+
+```yaml
+defaults:
+  guardrails:
+    deny_commands:
+      - "rm\\s+-rf"
+    allow_paths:
+      - "src/**"
+    deny_paths:
+      - "src/secrets/**"
+```

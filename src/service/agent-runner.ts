@@ -12,6 +12,7 @@ import type {
   AgentResult,
   AgentCliFlags,
   ContainerResources,
+  GuardrailConfig,
   ModelConfig,
   ContextInput,
   PlatformConfig,
@@ -126,6 +127,7 @@ export class AgentRunner {
       codexSkillNames: prep.codexSkillNames,
       resumeSessionId: config.resumeSessionId,
       resumeReason: config.resumeReason,
+      guardrails: this.resolveGuardrails(),
       onActivity: config.onRuntimeActivity,
     });
 
@@ -262,6 +264,17 @@ export class AgentRunner {
       "",
     ].join("\n");
     await fs.writeFile(agentsPath, `${existing}${section}`, "utf-8");
+  }
+
+  private resolveGuardrails(): GuardrailConfig | undefined {
+    const defaults = this.platformConfig.defaults.guardrails;
+    const overrides = this.projectConfig.guardrails;
+    if (!defaults && !overrides) return undefined;
+    return {
+      deny_commands: overrides?.deny_commands ?? defaults?.deny_commands ?? [],
+      deny_paths: overrides?.deny_paths ?? defaults?.deny_paths ?? [],
+      allow_paths: overrides?.allow_paths ?? defaults?.allow_paths ?? [],
+    };
   }
 
   // ---- Task Prompt Building ----
