@@ -53,12 +53,12 @@ describe("Codex local_sdk integration for code-review staged skills", () => {
 
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-code-review-integration-"));
 
-    mockSdkRunFn.mockResolvedValue({
-      usage: { input_tokens: 120, cached_input_tokens: 30, output_tokens: 60 },
-      finalResponse: "ok",
-    });
-    mockStartThreadFn.mockReturnValue({ id: "thread-code-review-1", run: mockSdkRunFn });
-    mockResumeThreadFn.mockResolvedValue({ id: "thread-code-review-resume-1", run: mockSdkRunFn });
+    async function* mockTurnEvents() {
+      yield { type: "turn.completed", usage: { input_tokens: 120, cached_input_tokens: 30, output_tokens: 60 } };
+    }
+    mockSdkRunFn.mockResolvedValue({ events: mockTurnEvents() });
+    mockStartThreadFn.mockReturnValue({ id: "thread-code-review-1", runStreamed: mockSdkRunFn });
+    mockResumeThreadFn.mockResolvedValue({ id: "thread-code-review-resume-1", runStreamed: mockSdkRunFn });
     vi.mocked(runProcess).mockResolvedValue({
       tokensUsed: 210,
       runtimeId: "local-codex-process-1",

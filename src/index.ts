@@ -17,7 +17,7 @@ const program = new Command();
 program
   .name("sprintfoundry")
   .description("AI-powered multi-agent software development lifecycle")
-  .version("0.1.0");
+  .version("0.2.0");
 
 program
   .command("run")
