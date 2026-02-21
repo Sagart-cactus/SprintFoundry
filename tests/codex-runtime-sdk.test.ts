@@ -345,6 +345,30 @@ describe("CodexRuntime local_sdk mode", () => {
     );
   });
 
+  it("blocks command executions using nested input.cmd payload", async () => {
+    mockRunStreamedFn.mockResolvedValueOnce(
+      buildStreamedTurn({
+        usage: { input_tokens: 5, cached_input_tokens: 0, output_tokens: 1 },
+        items: [
+          {
+            id: "cmd-guard-input",
+            type: "command_execution",
+            input: { cmd: "rm -rf ./danger" },
+          },
+        ],
+      })
+    );
+
+    const runtime = new CodexRuntime();
+    await expect(
+      runtime.runStep(
+        makeContext(tmpDir, {
+          guardrails: { deny_commands: ["rm\\s+-rf"] },
+        })
+      )
+    ).rejects.toThrow(/Guardrail blocked/);
+  });
+
   it("blocks file changes outside allow_paths guardrails", async () => {
     mockRunStreamedFn.mockResolvedValueOnce(
       buildStreamedTurn({

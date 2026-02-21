@@ -253,7 +253,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       const toolName = typeof block.name === "string" ? block.name : "";
       const input = this.isRecord(block.input) ? block.input : {};
       const command = this.pickString(input, ["command", "cmd"]);
-      const filePath = this.pickString(input, ["file_path", "path"]);
+      const filePath = this.pickString(input, ["file_path", "path", "target_path"]);
 
       if (command) {
         toolCalls.push({
@@ -271,6 +271,23 @@ export class ClaudeCodeRuntime implements AgentRuntime {
           tool_name: toolName,
         });
       }
+    }
+
+    const topToolName = this.pickString(raw, ["tool_name", "name"]);
+    const topCommand = this.pickString(raw, ["command", "cmd"]);
+    const topFilePath = this.pickString(raw, ["path", "file_path", "target_path"]);
+    if (topCommand) {
+      toolCalls.push({
+        kind: "command",
+        command: topCommand,
+        tool_name: topToolName,
+      });
+    } else if (topFilePath) {
+      toolCalls.push({
+        kind: "file",
+        path: topFilePath,
+        tool_name: topToolName,
+      });
     }
 
     return toolCalls;

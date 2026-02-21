@@ -903,7 +903,9 @@ export class CodexRuntime implements AgentRuntime {
     const type = this.pickString(item, ["type"]);
     if (!type) return [];
     if (type === "command_execution") {
-      const command = this.pickString(item, ["command"]);
+      const command =
+        this.pickString(item, ["command", "cmd"]) ||
+        (this.isRecord(item.input) ? this.pickString(item.input, ["command", "cmd"]) : "");
       if (!command) return [];
       return [
         {
