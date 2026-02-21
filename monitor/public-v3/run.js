@@ -304,9 +304,12 @@ function classifyAgentItem(item) {
   if (lower.includes("item.completed")) return { title: "Item completed", preview: shortText(message || command || thought, 130), code: false };
 
   // Claude SDK JSONL shape:
-  // { type: "assistant", message: { content: [{ type: "thinking" | "text" | "tool_use", ... }] } }
-  if (lower === "assistant" && item?.message?.content && Array.isArray(item.message.content)) {
-    const content = item.message.content;
+  // { type: "assistant", content: [...] } OR { type: "assistant", message: { content: [...] } }
+  if (lower === "assistant") {
+    const content =
+      (Array.isArray(item?.message?.content) && item.message.content) ||
+      (Array.isArray(item?.content) && item.content) ||
+      [];
     const thinking = content.find((c) => c?.type === "thinking");
     if (thinking?.thinking) {
       return { title: "Thought", preview: shortText(thinking.thinking, 130), code: false };
