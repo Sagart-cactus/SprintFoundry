@@ -45,6 +45,15 @@ defaults:
 
   max_rework_cycles: 2             # QA can send back to dev max 2 times
 
+  # Runtime guardrails (optional, enforced in SDK modes)
+  # deny_commands: regex patterns (case-insensitive)
+  # allow_paths: glob-like patterns relative to workspace root
+  # deny_paths: glob-like patterns relative to workspace root
+  guardrails:
+    deny_commands: []
+    allow_paths: []
+    deny_paths: []
+
   # Claude Code CLI flags passed to all agents
   agent_cli_flags:
     max_budget_usd: 5.00           # per-agent budget cap

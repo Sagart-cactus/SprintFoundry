@@ -6,7 +6,7 @@ import type { RuntimeStepContext } from "../src/service/runtime/types.js";
 
 // Module-level mock state — shared between factory closures and test assertions.
 // Defined before any dynamic imports so they are initialized by the time factories are invoked.
-const mockRunFn = vi.fn();
+const mockRunStreamedFn = vi.fn();
 const mockStartThreadFn = vi.fn();
 const mockResumeThreadFn = vi.fn();
 const mockCodexConstructorCalls: Array<{ env: Record<string, string> }> = [];
@@ -27,6 +27,35 @@ vi.mock("../src/service/runtime/process-utils.js", () => ({
 
 const { runProcess } = await import("../src/service/runtime/process-utils.js");
 const { CodexRuntime } = await import("../src/service/runtime/codex-runtime.js");
+
+type StreamedTurnInput = {
+  usage?: { input_tokens: number; cached_input_tokens: number; output_tokens: number } | null;
+  items?: Array<Record<string, unknown>>;
+  finalResponse?: string;
+};
+
+function buildStreamedTurn({
+  usage = { input_tokens: 100, cached_input_tokens: 0, output_tokens: 50 },
+  items = [],
+  finalResponse = "",
+}: StreamedTurnInput) {
+  const events = async function* () {
+    yield { type: "turn.started" };
+    for (const item of items) {
+      yield { type: "item.started", item };
+      yield { type: "item.completed", item };
+    }
+    if (finalResponse) {
+      const messageItem = { id: "msg-1", type: "agent_message", text: finalResponse };
+      yield { type: "item.started", item: messageItem };
+      yield { type: "item.completed", item: messageItem };
+    }
+    if (usage) {
+      yield { type: "turn.completed", usage };
+    }
+  };
+  return { events: events() };
+}
 
 function makeContext(
   workspacePath: string,
@@ -54,6 +83,7 @@ function makeContext(
     resumeSessionId: overrides?.resumeSessionId,
     resumeReason: overrides?.resumeReason,
     onActivity: overrides?.onActivity,
+    guardrails: overrides?.guardrails,
   };
 }
 
@@ -67,12 +97,12 @@ describe("CodexRuntime local_sdk mode", () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-runtime-sdk-test-"));
     process.env = { ...originalEnv };
 
-    mockRunFn.mockResolvedValue({
-      usage: { input_tokens: 100, cached_input_tokens: 0, output_tokens: 50 },
-      finalResponse: "",
+    mockRunStreamedFn.mockResolvedValue(buildStreamedTurn({}));
+    mockStartThreadFn.mockReturnValue({ id: "thread-sdk-123", runStreamed: mockRunStreamedFn });
+    mockResumeThreadFn.mockResolvedValue({
+      id: "thread-sdk-resume-123",
+      runStreamed: mockRunStreamedFn,
     });
-    mockStartThreadFn.mockReturnValue({ id: "thread-sdk-123", run: mockRunFn });
-    mockResumeThreadFn.mockResolvedValue({ id: "thread-sdk-resume-123", run: mockRunFn });
   });
 
   afterEach(async () => {
@@ -259,14 +289,16 @@ describe("CodexRuntime local_sdk mode", () => {
   });
 
   it("emits runtime activity events from SDK turn items", async () => {
-    mockRunFn.mockResolvedValueOnce({
-      usage: { input_tokens: 10, cached_input_tokens: 0, output_tokens: 3 },
-      items: [
-        { type: "command_execution", command: "npm test" },
-        { type: "tool_call", tool_name: "read_file" },
-      ],
-      finalResponse: "done",
-    });
+    mockRunStreamedFn.mockResolvedValueOnce(
+      buildStreamedTurn({
+        usage: { input_tokens: 10, cached_input_tokens: 0, output_tokens: 3 },
+        items: [
+          { id: "cmd-1", type: "command_execution", command: "npm test" },
+          { id: "tool-1", type: "tool_call", tool_name: "read_file" },
+        ],
+        finalResponse: "done",
+      })
+    );
     const onActivity = vi.fn();
 
     const runtime = new CodexRuntime();
@@ -286,8 +318,83 @@ describe("CodexRuntime local_sdk mode", () => {
     );
   });
 
+  it("blocks command executions that violate guardrails", async () => {
+    mockRunStreamedFn.mockResolvedValueOnce(
+      buildStreamedTurn({
+        usage: { input_tokens: 5, cached_input_tokens: 0, output_tokens: 1 },
+        items: [{ id: "cmd-guard", type: "command_execution", command: "rm -rf /" }],
+      })
+    );
+
+    const onActivity = vi.fn();
+    const runtime = new CodexRuntime();
+    await expect(
+      runtime.runStep(
+        makeContext(tmpDir, {
+          guardrails: { deny_commands: ["rm\\s+-rf"] },
+          onActivity,
+        })
+      )
+    ).rejects.toThrow(/Guardrail blocked/);
+
+    expect(onActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "agent_guardrail_block",
+        data: expect.objectContaining({ command: "rm -rf /" }),
+      })
+    );
+  });
+
+  it("blocks command executions using nested input.cmd payload", async () => {
+    mockRunStreamedFn.mockResolvedValueOnce(
+      buildStreamedTurn({
+        usage: { input_tokens: 5, cached_input_tokens: 0, output_tokens: 1 },
+        items: [
+          {
+            id: "cmd-guard-input",
+            type: "command_execution",
+            input: { cmd: "rm -rf ./danger" },
+          },
+        ],
+      })
+    );
+
+    const runtime = new CodexRuntime();
+    await expect(
+      runtime.runStep(
+        makeContext(tmpDir, {
+          guardrails: { deny_commands: ["rm\\s+-rf"] },
+        })
+      )
+    ).rejects.toThrow(/Guardrail blocked/);
+  });
+
+  it("blocks file changes outside allow_paths guardrails", async () => {
+    mockRunStreamedFn.mockResolvedValueOnce(
+      buildStreamedTurn({
+        usage: { input_tokens: 5, cached_input_tokens: 0, output_tokens: 1 },
+        items: [
+          {
+            id: "file-guard",
+            type: "file_change",
+            changes: [{ path: "secrets.txt", kind: "update" }],
+          },
+        ],
+      })
+    );
+
+    const runtime = new CodexRuntime();
+    await expect(
+      runtime.runStep(
+        makeContext(tmpDir, {
+          guardrails: { allow_paths: ["src/**"] },
+        })
+      )
+    ).rejects.toThrow(/Guardrail blocked/);
+  });
+
   it("returns zero tokens when usage is missing", async () => {
-    mockRunFn.mockResolvedValue({ usage: null, finalResponse: "" });
+    mockRunStreamedFn.mockResolvedValue(buildStreamedTurn({ usage: null, finalResponse: "" }));
     const runtime = new CodexRuntime();
     const result = await runtime.runStep(makeContext(tmpDir));
 
@@ -295,7 +402,7 @@ describe("CodexRuntime local_sdk mode", () => {
   });
 
   it("returns empty runtime_id when thread.id is null/undefined", async () => {
-    mockStartThreadFn.mockReturnValue({ id: undefined, run: mockRunFn });
+    mockStartThreadFn.mockReturnValue({ id: undefined, runStreamed: mockRunStreamedFn });
     const runtime = new CodexRuntime();
     const result = await runtime.runStep(makeContext(tmpDir));
 
@@ -327,7 +434,7 @@ describe("CodexRuntime local_sdk mode", () => {
     const runtime = new CodexRuntime();
     await runtime.runStep(makeContext(tmpDir, { task: "Fallback task should not be primary" }));
 
-    const prompt = vi.mocked(mockRunFn).mock.calls[0]?.[0] as string;
+    const prompt = vi.mocked(mockRunStreamedFn).mock.calls[0]?.[0] as string;
     expect(prompt).toContain("# .agent-task.md");
     expect(prompt).toContain("Follow this instruction from workspace task file.");
     expect(prompt).toContain("Primary task: Fallback task should not be primary");
@@ -337,13 +444,13 @@ describe("CodexRuntime local_sdk mode", () => {
     const runtime = new CodexRuntime();
     await runtime.runStep(makeContext(tmpDir, { task: "Use synthesized task prompt" }));
 
-    const prompt = vi.mocked(mockRunFn).mock.calls[0]?.[0] as string;
+    const prompt = vi.mocked(mockRunStreamedFn).mock.calls[0]?.[0] as string;
     expect(prompt).toContain("Read .agent-task.md and AGENTS.md");
     expect(prompt).toContain("Primary task: Use synthesized task prompt");
   });
 
   it("enforces SDK timeout and still writes debug artifacts", async () => {
-    mockRunFn.mockImplementation(() => new Promise(() => {}));
+    mockRunStreamedFn.mockImplementation(() => new Promise(() => {}));
     const runtime = new CodexRuntime();
     const startedAt = Date.now();
     await expect(
@@ -368,7 +475,7 @@ describe("CodexRuntime local_sdk mode", () => {
   });
 
   it("treats non-positive SDK timeout as immediate timeout to match local_process semantics", async () => {
-    mockRunFn.mockImplementation(() => new Promise(() => {}));
+    mockRunStreamedFn.mockImplementation(() => new Promise(() => {}));
     const runtime = new CodexRuntime();
     const startedAt = Date.now();
     await expect(
@@ -384,10 +491,12 @@ describe("CodexRuntime local_sdk mode", () => {
   });
 
   it("times out immediately even when SDK run would resolve immediately", async () => {
-    mockRunFn.mockResolvedValue({
-      usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 },
-      finalResponse: "ok",
-    });
+    mockRunStreamedFn.mockResolvedValue(
+      buildStreamedTurn({
+        usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 },
+        finalResponse: "ok",
+      })
+    );
     const runtime = new CodexRuntime();
 
     await expect(
@@ -398,12 +507,12 @@ describe("CodexRuntime local_sdk mode", () => {
       )
     ).rejects.toThrow(/Codex SDK run timed out after 0ms/);
 
-    expect(mockRunFn).not.toHaveBeenCalled();
+    expect(mockRunStreamedFn).not.toHaveBeenCalled();
   });
 
   it("passes AbortSignal to SDK turn and aborts it on timeout", async () => {
     let observedSignal: AbortSignal | undefined;
-    mockRunFn.mockImplementation(
+    mockRunStreamedFn.mockImplementation(
       (_prompt: string, options?: { signal?: AbortSignal }) =>
         new Promise((_resolve, reject) => {
           observedSignal = options?.signal;
@@ -431,7 +540,7 @@ describe("CodexRuntime local_sdk mode", () => {
     const runtime = new CodexRuntime();
     await runtime.runStep(makeContext(tmpDir, { task: "Use fallback when task file is empty" }));
 
-    const prompt = vi.mocked(mockRunFn).mock.calls[0]?.[0] as string;
+    const prompt = vi.mocked(mockRunStreamedFn).mock.calls[0]?.[0] as string;
     expect(prompt).toContain("Read .agent-task.md and AGENTS.md");
     expect(prompt).not.toContain("# .agent-task.md");
     expect(prompt).toContain("Primary task: Use fallback when task file is empty");
@@ -509,10 +618,12 @@ describe("CodexRuntime local_sdk mode", () => {
   });
 
   it("exposes optional token-savings hook when SDK reports cached_input_tokens", async () => {
-    mockRunFn.mockResolvedValue({
-      usage: { input_tokens: 120, cached_input_tokens: 700, output_tokens: 60 },
-      finalResponse: "",
-    });
+    mockRunStreamedFn.mockResolvedValue(
+      buildStreamedTurn({
+        usage: { input_tokens: 120, cached_input_tokens: 700, output_tokens: 60 },
+        finalResponse: "",
+      })
+    );
 
     const runtime = new CodexRuntime();
     const result = await runtime.runStep(makeContext(tmpDir));

@@ -142,6 +142,133 @@ describe("ClaudeCodeRuntime", () => {
     expect(stepDebug.runtime_provider).toBe("claude-code");
   });
 
+  it("blocks SDK tool calls when guardrails deny commands", async () => {
+    await fs.writeFile(path.join(tmpDir, "CLAUDE.md"), "System prompt", "utf-8");
+    await fs.writeFile(path.join(tmpDir, ".agent-task.md"), "Task prompt", "utf-8");
+
+    (mockQuery as any).mockImplementationOnce(() => (async function* () {
+      yield {
+        type: "message",
+        message: {
+          content: [
+            {
+              type: "tool_use",
+              name: "bash",
+              input: { command: "rm -rf /" },
+            },
+          ],
+        },
+      };
+      yield {
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        duration_ms: 1,
+        duration_api_ms: 1,
+        num_turns: 1,
+        stop_reason: null,
+        total_cost_usd: 0,
+        usage: { input_tokens: 1, output_tokens: 1 },
+        modelUsage: {},
+        permission_denials: [],
+        result: "ok",
+        uuid: "00000000-0000-0000-0000-000000000011",
+        session_id: "sdk-session-guardrail",
+      };
+    })());
+
+    const onActivity = vi.fn();
+    const runtime = new ClaudeCodeRuntime();
+    const ctx = makeContext(tmpDir);
+    ctx.guardrails = { deny_commands: ["rm\\s+-rf"] };
+    ctx.onActivity = onActivity;
+
+    await expect(runtime.runStep(ctx)).rejects.toThrow(/Guardrail blocked/);
+    expect(onActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "agent_guardrail_block",
+        data: expect.objectContaining({ command: "rm -rf /" }),
+      })
+    );
+  });
+
+  it("blocks top-level SDK tool payloads when guardrails deny commands", async () => {
+    await fs.writeFile(path.join(tmpDir, "CLAUDE.md"), "System prompt", "utf-8");
+    await fs.writeFile(path.join(tmpDir, ".agent-task.md"), "Task prompt", "utf-8");
+
+    (mockQuery as any).mockImplementationOnce(() => (async function* () {
+      yield {
+        type: "tool_use",
+        tool_name: "Bash",
+        cmd: "rm -rf /tmp/guard",
+      };
+      yield {
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        duration_ms: 1,
+        duration_api_ms: 1,
+        num_turns: 1,
+        stop_reason: null,
+        total_cost_usd: 0,
+        usage: { input_tokens: 1, output_tokens: 1 },
+        modelUsage: {},
+        permission_denials: [],
+        result: "ok",
+        uuid: "00000000-0000-0000-0000-000000000012",
+        session_id: "sdk-session-guardrail-top",
+      };
+    })());
+
+    const runtime = new ClaudeCodeRuntime();
+    const ctx = makeContext(tmpDir);
+    ctx.guardrails = { deny_commands: ["rm\\s+-rf"] };
+
+    await expect(runtime.runStep(ctx)).rejects.toThrow(/Guardrail blocked: command_denied/);
+  });
+
+  it("blocks tool_use target_path payloads when guardrails restrict paths", async () => {
+    await fs.writeFile(path.join(tmpDir, "CLAUDE.md"), "System prompt", "utf-8");
+    await fs.writeFile(path.join(tmpDir, ".agent-task.md"), "Task prompt", "utf-8");
+
+    (mockQuery as any).mockImplementationOnce(() => (async function* () {
+      yield {
+        type: "message",
+        message: {
+          content: [
+            {
+              type: "tool_use",
+              name: "Write",
+              input: { target_path: "README.md" },
+            },
+          ],
+        },
+      };
+      yield {
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        duration_ms: 1,
+        duration_api_ms: 1,
+        num_turns: 1,
+        stop_reason: null,
+        total_cost_usd: 0,
+        usage: { input_tokens: 1, output_tokens: 1 },
+        modelUsage: {},
+        permission_denials: [],
+        result: "ok",
+        uuid: "00000000-0000-0000-0000-000000000013",
+        session_id: "sdk-session-guardrail-path",
+      };
+    })());
+
+    const runtime = new ClaudeCodeRuntime();
+    const ctx = makeContext(tmpDir);
+    ctx.guardrails = { allow_paths: ["src/**"] };
+
+    await expect(runtime.runStep(ctx)).rejects.toThrow(/Guardrail blocked: path_not_allowed/);
+  });
+
   it("passes resume to SDK query when resumeSessionId is provided", async () => {
     await fs.writeFile(path.join(tmpDir, "CLAUDE.md"), "System prompt", "utf-8");
     await fs.writeFile(path.join(tmpDir, ".agent-task.md"), "Task prompt", "utf-8");

@@ -137,6 +137,15 @@ export interface RuntimeMetadataEnvelope {
   provider_metadata?: Record<string, unknown>;
 }
 
+export interface GuardrailConfig {
+  // Regex patterns applied to command strings (SDK tool calls).
+  deny_commands?: string[];
+  // Glob-like patterns applied to file paths (relative to workspace).
+  deny_paths?: string[];
+  // If set, only allow file paths that match one of these patterns.
+  allow_paths?: string[];
+}
+
 export interface CodexSkillDefinition {
   path: string; // repo-relative or absolute path to skill directory containing SKILL.md
 }
@@ -154,6 +163,7 @@ export interface PlatformConfig {
     codex_skills_enabled?: boolean;
     codex_skill_catalog?: Record<string, CodexSkillDefinition>;
     codex_skills_per_agent?: Record<string, string[]>;
+    guardrails?: GuardrailConfig;
   };
   rules: PlatformRule[];
   agent_definitions: AgentDefinition[];
@@ -177,6 +187,7 @@ export interface ProjectConfig {
   codex_skills_enabled?: boolean;
   codex_skill_catalog_overrides?: Record<string, CodexSkillDefinition>;
   codex_skills_overrides?: Record<string, string[]>;
+  guardrails?: GuardrailConfig;
 }
 
 export interface ModelConfig {
@@ -370,6 +381,7 @@ export type EventType =
   | "agent_file_edit"
   | "agent_command_run"
   | "agent_thinking"
+  | "agent_guardrail_block"
   | "agent.token_limit_warning"
   | "agent.token_limit_exceeded"
   | "human_gate.requested"

@@ -70,6 +70,17 @@ api_keys:
 #   mode: local_process
 #   model_reasoning_effort: high      # codex only; ignored for non-codex models
 #
+# # Guardrail overrides (optional)
+# # deny_commands: regex patterns (case-insensitive)
+# # allow_paths / deny_paths: glob-like patterns relative to workspace root
+# # guardrails:
+# #   deny_commands:
+# #     - "rm\\s+-rf"
+# #   allow_paths:
+# #     - "src/**"
+# #   deny_paths:
+# #     - "src/secrets/**"
+#
 # # Codex skill overrides (workspace-scoped, no global install required)
 # # codex_skills_enabled: true
 # # codex_skill_catalog_overrides:

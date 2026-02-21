@@ -3,6 +3,7 @@ import type {
   AgentResult,
   AgentType,
   ExecutionPlan,
+  GuardrailConfig,
   ModelConfig,
   PlanStep,
   PlatformRule,
@@ -21,7 +22,8 @@ export type RuntimeActivityType =
   | Extract<EventType, "agent_tool_call">
   | Extract<EventType, "agent_file_edit">
   | Extract<EventType, "agent_command_run">
-  | Extract<EventType, "agent_thinking">;
+  | Extract<EventType, "agent_thinking">
+  | Extract<EventType, "agent_guardrail_block">;
 
 export interface RuntimeActivityEvent {
   type: RuntimeActivityType;
@@ -53,6 +55,7 @@ export interface RuntimeStepContext {
   codexSkillNames?: string[];
   resumeSessionId?: string;
   resumeReason?: string;
+  guardrails?: GuardrailConfig;
   onActivity?: (event: RuntimeActivityEvent) => Promise<void> | void;
 }
 

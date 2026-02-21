@@ -5,6 +5,7 @@ import type {
   RuntimeStepResult,
 } from "./types.js";
 import { runProcess } from "./process-utils.js";
+import { evaluateGuardrail, type GuardrailToolCall } from "./agent-hooks.js";
 import { Codex } from "@openai/codex-sdk";
 import * as path from "path";
 import * as fs from "fs/promises";
@@ -39,7 +40,10 @@ const CODEX_AUTH_HEADER_ERROR_SIGNATURE =
 type ProcessRunResult = Awaited<ReturnType<typeof runProcess>>;
 type CodexThreadHandle = {
   id?: unknown;
-  run: (prompt: string, options?: { signal?: AbortSignal }) => Promise<unknown>;
+  runStreamed: (
+    prompt: string,
+    options?: { signal?: AbortSignal }
+  ) => Promise<{ events?: AsyncGenerator<unknown> }>;
 };
 type ResumeTelemetry = {
   resume_used: boolean;
@@ -304,7 +308,13 @@ export class CodexRuntime implements AgentRuntime {
         let freshTurn;
         try {
           freshTurn = await this.runSdkTurnWithTimeout(
-            (signal) => freshThread.run(prompt, { signal }),
+            (signal, controller) =>
+              this.runSdkStreamedTurn(
+                config,
+                (streamSignal) => freshThread.runStreamed(prompt, { signal: streamSignal }),
+                signal,
+                controller
+              ),
             config.timeoutMinutes * 60 * 1000,
             config
           );
@@ -360,7 +370,13 @@ export class CodexRuntime implements AgentRuntime {
       }
       try {
         const resumedTurn = await this.runSdkTurnWithTimeout(
-          (signal) => resumedThread.run(prompt, { signal }),
+          (signal, controller) =>
+            this.runSdkStreamedTurn(
+              config,
+              (streamSignal) => resumedThread.runStreamed(prompt, { signal: streamSignal }),
+              signal,
+              controller
+            ),
           config.timeoutMinutes * 60 * 1000,
           config
         );
@@ -416,11 +432,30 @@ export class CodexRuntime implements AgentRuntime {
     }
 
     const thread = codex.startThread(threadOptions);
-    const turn = await this.runSdkTurnWithTimeout(
-      (signal) => thread.run(prompt, { signal }),
-      config.timeoutMinutes * 60 * 1000,
-      config
-    );
+    let turn;
+    try {
+      turn = await this.runSdkTurnWithTimeout(
+        (signal, controller) =>
+          this.runSdkStreamedTurn(
+            config,
+            (streamSignal) => thread.runStreamed(prompt, { signal: streamSignal }),
+            signal,
+            controller
+          ),
+        config.timeoutMinutes * 60 * 1000,
+        config
+      );
+    } catch (error) {
+      await this.writeSdkLogs({
+        stepStdoutPath,
+        stepStderrPath,
+        legacyStdoutPath,
+        legacyStderrPath,
+        stdoutLines: [],
+        stderrLines: [this.sdkErrorLine(error)],
+      });
+      throw error;
+    }
     const { usage, tokenSavings } = await this.captureSdkTurnTelemetry(
       config,
       turn,
@@ -716,7 +751,7 @@ export class CodexRuntime implements AgentRuntime {
   }
 
   private async runSdkTurnWithTimeout<T>(
-    run: (signal: AbortSignal) => Promise<T>,
+    run: (signal: AbortSignal, controller: AbortController) => Promise<T>,
     timeoutMs: number,
     config: RuntimeStepContext
   ): Promise<T> {
@@ -732,7 +767,7 @@ export class CodexRuntime implements AgentRuntime {
     }
 
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-    const runResultPromise = run(controller.signal);
+    const runResultPromise = run(controller.signal, controller);
     return await new Promise<T>((resolve, reject) => {
       let settled = false;
       const settle = (handler: () => void) => {
@@ -755,8 +790,172 @@ export class CodexRuntime implements AgentRuntime {
     });
   }
 
+  private async runSdkStreamedTurn(
+    config: RuntimeStepContext,
+    runStreamed: (signal: AbortSignal) => Promise<{ events?: AsyncGenerator<unknown> }>,
+    signal: AbortSignal,
+    controller: AbortController
+  ): Promise<{ usage: Record<string, number>; items: unknown[]; finalResponse: string }> {
+    const streamed = await runStreamed(signal);
+    const events = streamed?.events;
+    if (!events || typeof (events as AsyncGenerator<unknown>)[Symbol.asyncIterator] !== "function") {
+      return {
+        usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 },
+        items: [],
+        finalResponse: "",
+      };
+    }
+    return await this.consumeSdkStreamedTurn(config, events, controller);
+  }
+
+  private async consumeSdkStreamedTurn(
+    config: RuntimeStepContext,
+    events: AsyncGenerator<unknown>,
+    controller: AbortController
+  ): Promise<{ usage: Record<string, number>; items: unknown[]; finalResponse: string }> {
+    const itemsById = new Map<string, unknown>();
+    let finalResponse = "";
+    let usage: Record<string, number> = {
+      input_tokens: 0,
+      cached_input_tokens: 0,
+      output_tokens: 0,
+    };
+
+    for await (const rawEvent of events) {
+      if (!this.isRecord(rawEvent)) continue;
+      const eventType = this.pickString(rawEvent, ["type"]);
+      if (!eventType) continue;
+
+      if (eventType === "turn.completed") {
+        const rawUsage = this.isRecord(rawEvent.usage) ? rawEvent.usage : {};
+        usage = {
+          input_tokens: this.toNumber(rawUsage.input_tokens) ?? 0,
+          cached_input_tokens: this.toNumber(rawUsage.cached_input_tokens) ?? 0,
+          output_tokens: this.toNumber(rawUsage.output_tokens) ?? 0,
+        };
+        continue;
+      }
+
+      if (eventType === "turn.failed") {
+        const errorMessage = this.isRecord(rawEvent.error)
+          ? this.pickString(rawEvent.error, ["message"]) || "SDK turn failed"
+          : "SDK turn failed";
+        throw new Error(errorMessage);
+      }
+
+      if (eventType === "error") {
+        throw new Error(this.pickString(rawEvent, ["message"]) || "SDK stream error");
+      }
+
+      if (eventType.startsWith("item.")) {
+        const item = this.isRecord(rawEvent.item) ? rawEvent.item : null;
+        if (!item) continue;
+        const itemId = this.pickString(item, ["id"]);
+        if (itemId) {
+          itemsById.set(itemId, item);
+        }
+
+        if (eventType === "item.started") {
+          const guardrailViolation = this.findSdkGuardrailViolation(item, config);
+          if (guardrailViolation) {
+            await this.emitGuardrailBlock(config, guardrailViolation);
+            controller.abort(
+              new Error(`Guardrail blocked: ${guardrailViolation.reason ?? "blocked"}`)
+            );
+            throw new Error(`Guardrail blocked: ${guardrailViolation.reason ?? "blocked"}`);
+          }
+        }
+
+        if (item.type === "agent_message") {
+          const text = this.pickString(item, ["text"]);
+          if (text) finalResponse = text;
+        }
+      }
+    }
+
+    return {
+      usage,
+      items: Array.from(itemsById.values()),
+      finalResponse,
+    };
+  }
+
   private extractSdkTokensUsed(usage: Record<string, number>): number {
     return (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0);
+  }
+
+  private findSdkGuardrailViolation(
+    item: Record<string, unknown>,
+    config: RuntimeStepContext
+  ): (GuardrailToolCall & { reason?: string; rule?: string }) | null {
+    if (!config.guardrails) return null;
+    const toolCalls = this.extractSdkGuardrailToolCalls(item);
+    for (const toolCall of toolCalls) {
+      const decision = evaluateGuardrail(config.guardrails, toolCall, config.workspacePath);
+      if (!decision.allowed) {
+        return { ...toolCall, reason: decision.reason, rule: decision.rule };
+      }
+    }
+    return null;
+  }
+
+  private extractSdkGuardrailToolCalls(item: Record<string, unknown>): GuardrailToolCall[] {
+    const type = this.pickString(item, ["type"]);
+    if (!type) return [];
+    if (type === "command_execution") {
+      const command =
+        this.pickString(item, ["command", "cmd"]) ||
+        (this.isRecord(item.input) ? this.pickString(item.input, ["command", "cmd"]) : "");
+      if (!command) return [];
+      return [
+        {
+          kind: "command",
+          command,
+          tool_name: "command_execution",
+        },
+      ];
+    }
+    if (type === "file_change") {
+      const rawChanges = Array.isArray(item.changes) ? item.changes : [];
+      const toolCalls: GuardrailToolCall[] = [];
+      for (const change of rawChanges) {
+        if (!this.isRecord(change)) continue;
+        const changePath = this.pickString(change, ["path"]);
+        if (!changePath) continue;
+        toolCalls.push({
+          kind: "file",
+          path: changePath,
+          tool_name: "file_change",
+        });
+      }
+      return toolCalls;
+    }
+    return [];
+  }
+
+  private async emitGuardrailBlock(
+    config: RuntimeStepContext,
+    toolCall: GuardrailToolCall & { reason?: string; rule?: string }
+  ): Promise<void> {
+    if (!config.onActivity) return;
+    try {
+      await config.onActivity({
+        type: "agent_guardrail_block",
+        data: {
+          tool_name: toolCall.tool_name ?? "",
+          command: toolCall.command ?? "",
+          path: toolCall.path ?? "",
+          reason: toolCall.reason ?? "blocked",
+          rule: toolCall.rule ?? "",
+        },
+      });
+    } catch (error) {
+      console.warn(
+        `[codex-runtime] Failed to emit guardrail event: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
   }
 
   private extractSdkUsage(turn: unknown): Record<string, number> {
@@ -789,6 +988,20 @@ export class CodexRuntime implements AgentRuntime {
     for (const item of items) {
       if (!this.isRecord(item)) continue;
       const lowerType = this.pickString(item, ["type"]).toLowerCase();
+      if (lowerType === "file_change" && Array.isArray(item.changes)) {
+        for (const change of item.changes) {
+          if (!this.isRecord(change)) continue;
+          const changePath = this.pickString(change, ["path"]);
+          if (!changePath) continue;
+          events.push({
+            type: "agent_file_edit",
+            data: {
+              path: changePath,
+            },
+          });
+        }
+        continue;
+      }
       const command =
         this.pickString(item, ["command", "cmd"]) ||
         (this.isRecord(item.input) ? this.pickString(item.input, ["command", "cmd"]) : "");
@@ -981,6 +1194,15 @@ export class CodexRuntime implements AgentRuntime {
       if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
     }
     return "";
+  }
+
+  private toNumber(value: unknown): number | null {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string") {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+    return null;
   }
 
   private textFromValue(value: unknown): string {

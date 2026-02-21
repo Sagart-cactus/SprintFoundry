@@ -8,6 +8,7 @@ import type {
   RuntimeStepContext,
   RuntimeStepResult,
 } from "./types.js";
+import { evaluateGuardrail, type GuardrailToolCall } from "./agent-hooks.js";
 import { runProcess, parseTokenUsage } from "./process-utils.js";
 import type { RuntimeMetadataEnvelope } from "../../shared/types.js";
 
@@ -154,6 +155,11 @@ export class ClaudeCodeRuntime implements AgentRuntime {
         prompt: prompts.taskPrompt,
         options: queryOptions as any,
       })) {
+        const guardrailViolation = this.findGuardrailViolation(message, config);
+        if (guardrailViolation) {
+          await this.emitGuardrailBlock(config, guardrailViolation);
+          throw new Error(`Guardrail blocked: ${guardrailViolation.reason ?? "blocked"}`);
+        }
         stdout += `${JSON.stringify(message)}\n`;
         const activities = this.extractActivityEventsFromSdkMessage(message);
         for (const activity of activities) {
@@ -214,6 +220,94 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       resume_fallback: runtimeMetadata.resume?.fallback_to_fresh,
       runtime_metadata: runtimeMetadata,
     };
+  }
+
+  private findGuardrailViolation(
+    message: unknown,
+    config: RuntimeStepContext
+  ): (GuardrailToolCall & { reason?: string; rule?: string }) | null {
+    if (!config.guardrails) return null;
+    const toolCalls = this.extractClaudeToolCalls(message);
+    for (const toolCall of toolCalls) {
+      const decision = evaluateGuardrail(config.guardrails, toolCall, config.workspacePath);
+      if (!decision.allowed) {
+        return { ...toolCall, reason: decision.reason, rule: decision.rule };
+      }
+    }
+    return null;
+  }
+
+  private extractClaudeToolCalls(message: unknown): GuardrailToolCall[] {
+    if (!message || typeof message !== "object") return [];
+    const raw = message as Record<string, unknown>;
+    const content =
+      (this.isRecord(raw["message"]) && Array.isArray((raw["message"] as any).content)
+        ? (raw["message"] as any).content
+        : Array.isArray(raw["content"])
+          ? raw["content"]
+          : []) as Array<Record<string, unknown>>;
+
+    const toolCalls: GuardrailToolCall[] = [];
+    for (const block of content) {
+      if (!block || block.type !== "tool_use") continue;
+      const toolName = typeof block.name === "string" ? block.name : "";
+      const input = this.isRecord(block.input) ? block.input : {};
+      const command = this.pickString(input, ["command", "cmd"]);
+      const filePath = this.pickString(input, ["file_path", "path", "target_path"]);
+
+      if (command) {
+        toolCalls.push({
+          kind: "command",
+          command,
+          tool_name: toolName,
+        });
+        continue;
+      }
+
+      if (filePath) {
+        toolCalls.push({
+          kind: "file",
+          path: filePath,
+          tool_name: toolName,
+        });
+      }
+    }
+
+    const topToolName = this.pickString(raw, ["tool_name", "name"]);
+    const topCommand = this.pickString(raw, ["command", "cmd"]);
+    const topFilePath = this.pickString(raw, ["path", "file_path", "target_path"]);
+    if (topCommand) {
+      toolCalls.push({
+        kind: "command",
+        command: topCommand,
+        tool_name: topToolName,
+      });
+    } else if (topFilePath) {
+      toolCalls.push({
+        kind: "file",
+        path: topFilePath,
+        tool_name: topToolName,
+      });
+    }
+
+    return toolCalls;
+  }
+
+  private async emitGuardrailBlock(
+    config: RuntimeStepContext,
+    toolCall: GuardrailToolCall & { reason?: string; rule?: string }
+  ): Promise<void> {
+    if (!config.onActivity) return;
+    await this.safeEmitActivity(config, {
+      type: "agent_guardrail_block",
+      data: {
+        tool_name: toolCall.tool_name ?? "",
+        command: toolCall.command ?? "",
+        path: toolCall.path ?? "",
+        reason: toolCall.reason ?? "blocked",
+        rule: toolCall.rule ?? "",
+      },
+    });
   }
 
   private async readPrompts(workspacePath: string): Promise<{ systemPrompt: string; taskPrompt: string }> {
