@@ -176,6 +176,51 @@ describe("OrchestrationService", () => {
     expect(mockAgentRunner.run).toHaveBeenCalled();
   });
 
+  it("persists runtime activity events emitted by SDK runtimes", async () => {
+    const plan = makePlan({
+      steps: [makeStep({ step_number: 1, agent: "developer", task: "Implement feature" })],
+    });
+    mockOrchestratorAgent.generatePlan.mockResolvedValue(plan);
+    mockAgentRunner.run.mockImplementation(async (config: any) => {
+      await config.onRuntimeActivity?.({
+        type: "agent_command_run",
+        data: { command: "npm test -- unit" },
+      });
+      await config.onRuntimeActivity?.({
+        type: "agent_file_edit",
+        data: { path: "src/index.ts" },
+      });
+      await config.onRuntimeActivity?.({
+        type: "agent_tool_call",
+        data: { tool_name: "web_search" },
+      });
+      await config.onRuntimeActivity?.({
+        type: "agent_thinking",
+        data: { text: "Considering edge cases" },
+      });
+      return {
+        agentResult: makeResult(),
+        tokens_used: 100,
+        cost_usd: 0.01,
+        duration_seconds: 5,
+        container_id: "local-1",
+      };
+    });
+
+    const run = await service.handleTask("p-activity", "prompt", "Build a thing");
+
+    expect(run.status).toBe("completed");
+    const storedEvents = ((service as any).events.store as any).mock.calls.map((c: any[]) => c[0]);
+    const activityTypes = storedEvents.map((e: any) => e.event_type);
+    expect(activityTypes).toContain("agent_command_run");
+    expect(activityTypes).toContain("agent_file_edit");
+    expect(activityTypes).toContain("agent_tool_call");
+    expect(activityTypes).toContain("agent_thinking");
+    const commandEvent = storedEvents.find((e: any) => e.event_type === "agent_command_run");
+    expect(commandEvent.data.step).toBe(1);
+    expect(commandEvent.data.agent).toBe("developer");
+  });
+
   it("step failure sets run.status = 'failed'", async () => {
     const plan = makeDevQaPlan();
     mockOrchestratorAgent.generatePlan.mockResolvedValue(plan);

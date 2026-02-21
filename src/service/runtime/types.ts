@@ -14,7 +14,19 @@ import type {
   ContainerResources,
   StepExecution,
   RuntimeMetadataEnvelope,
+  EventType,
 } from "../../shared/types.js";
+
+export type RuntimeActivityType =
+  | Extract<EventType, "agent_tool_call">
+  | Extract<EventType, "agent_file_edit">
+  | Extract<EventType, "agent_command_run">
+  | Extract<EventType, "agent_thinking">;
+
+export interface RuntimeActivityEvent {
+  type: RuntimeActivityType;
+  data: Record<string, unknown>;
+}
 
 export interface RuntimeStepContext {
   stepNumber: number;
@@ -41,6 +53,7 @@ export interface RuntimeStepContext {
   codexSkillNames?: string[];
   resumeSessionId?: string;
   resumeReason?: string;
+  onActivity?: (event: RuntimeActivityEvent) => Promise<void> | void;
 }
 
 export interface RuntimeStepResult {

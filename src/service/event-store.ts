@@ -14,6 +14,7 @@ export class EventStore {
   private runLogPath: string | null = null;
   private initialized = false;
   private pendingBuffer: TaskEvent[] = [];
+  private writeQueue: Promise<void> = Promise.resolve();
 
   constructor(private eventsDir?: string) {}
 
@@ -43,7 +44,7 @@ export class EventStore {
       const buffered = this.pendingBuffer;
       this.pendingBuffer = [];
       for (const event of buffered) {
-        await this.persistEvent(event);
+        await this.enqueuePersist(event);
       }
     }
   }
@@ -63,7 +64,13 @@ export class EventStore {
       return;
     }
 
-    await this.persistEvent(event);
+    await this.enqueuePersist(event);
+  }
+
+  private async enqueuePersist(event: TaskEvent): Promise<void> {
+    const next = this.writeQueue.then(() => this.persistEvent(event));
+    this.writeQueue = next.catch(() => undefined);
+    await next;
   }
 
   private async persistEvent(event: TaskEvent): Promise<void> {
@@ -109,7 +116,6 @@ export class EventStore {
    * Flush any pending writes. Call at end of run.
    */
   async close(): Promise<void> {
-    // No buffered writes to flush with appendFile, but this is the
-    // hook for future implementations (e.g., write streams, Postgres).
+    await this.writeQueue.catch(() => undefined);
   }
 }

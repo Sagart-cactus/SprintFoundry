@@ -1,0 +1,128 @@
+# SprintFoundry — Project Configuration
+# Local SDK runtime profile for Codex with strict budget limits
+
+project_id: local_codex_sdk
+name: Local Codex SDK
+
+stack: js
+
+agents:
+  - product
+  - architect
+  - developer
+  - go-developer
+  - code-review
+  - qa
+  - go-qa
+  - security
+  - ui-ux
+  - devops
+
+repo:
+  url: git@github.com:Sagart-cactus/SprintFoundry.git
+  default_branch: main
+
+api_keys:
+  openai: ${SPRINTFOUNDRY_OPENAI_KEY}
+
+model_overrides:
+  orchestrator:
+    provider: openai
+    model: gpt-5.2-codex
+  product:
+    provider: openai
+    model: gpt-5.2-codex
+  architect:
+    provider: openai
+    model: gpt-5.2-codex
+  developer:
+    provider: openai
+    model: gpt-5.2-codex
+  go-developer:
+    provider: openai
+    model: gpt-5.2-codex
+  code-review:
+    provider: openai
+    model: gpt-5.2-codex
+  qa:
+    provider: openai
+    model: gpt-5.2-codex
+  go-qa:
+    provider: openai
+    model: gpt-5.2-codex
+  security:
+    provider: openai
+    model: gpt-5.2-codex
+  ui-ux:
+    provider: openai
+    model: gpt-5.2-codex
+  devops:
+    provider: openai
+    model: gpt-5.2-codex
+
+runtime_overrides:
+  product:
+    provider: codex
+    mode: local_sdk
+    model_reasoning_effort: medium
+  architect:
+    provider: codex
+    mode: local_sdk
+    model_reasoning_effort: medium
+  developer:
+    provider: codex
+    mode: local_sdk
+    model_reasoning_effort: medium
+  go-developer:
+    provider: codex
+    mode: local_sdk
+    model_reasoning_effort: medium
+  code-review:
+    provider: codex
+    mode: local_sdk
+    model_reasoning_effort: medium
+  qa:
+    provider: codex
+    mode: local_sdk
+    model_reasoning_effort: medium
+  go-qa:
+    provider: codex
+    mode: local_sdk
+    model_reasoning_effort: medium
+  security:
+    provider: codex
+    mode: local_sdk
+    model_reasoning_effort: medium
+  ui-ux:
+    provider: codex
+    mode: local_sdk
+    model_reasoning_effort: medium
+  devops:
+    provider: codex
+    mode: local_sdk
+    model_reasoning_effort: medium
+
+planner_runtime_override:
+  provider: codex
+  mode: local_sdk
+  model_reasoning_effort: high
+
+budget_overrides:
+  per_agent_tokens: 100000
+  per_task_total_tokens: 300000
+  per_task_max_cost_usd: 3.00
+
+branch_strategy:
+  prefix: feat/
+  include_ticket_id: true
+  naming: kebab-case
+
+integrations:
+  ticket_source:
+    type: github
+    config:
+      token: ${GITHUB_TOKEN}
+      owner: Sagart-cactus
+      repo: SprintFoundry
+
+rules: []

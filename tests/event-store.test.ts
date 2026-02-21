@@ -148,4 +148,30 @@ describe("EventStore", () => {
     const all = await store.getAll();
     expect(all).toHaveLength(1);
   });
+
+  it("serializes concurrent writes without losing events", async () => {
+    const workspaceDir = path.join(tmpDir, "workspace-concurrent");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const store = new EventStore();
+    await store.initialize(workspaceDir);
+
+    const count = 50;
+    await Promise.all(
+      Array.from({ length: count }).map((_, idx) =>
+        store.store(
+          makeEvent({
+            event_id: `evt-concurrent-${idx}`,
+            data: { index: idx },
+          })
+        )
+      )
+    );
+    await store.close();
+
+    const content = await fs.readFile(path.join(workspaceDir, ".events.jsonl"), "utf-8");
+    const lines = content.split("\n").filter(Boolean);
+    expect(lines).toHaveLength(count);
+    const ids = new Set(lines.map((line) => JSON.parse(line).event_id));
+    expect(ids.size).toBe(count);
+  });
 });

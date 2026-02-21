@@ -1,4 +1,9 @@
-import type { AgentRuntime, RuntimeStepContext, RuntimeStepResult } from "./types.js";
+import type {
+  AgentRuntime,
+  RuntimeActivityEvent,
+  RuntimeStepContext,
+  RuntimeStepResult,
+} from "./types.js";
 import { runProcess } from "./process-utils.js";
 import { Codex } from "@openai/codex-sdk";
 import * as path from "path";
@@ -231,6 +236,10 @@ export class CodexRuntime implements AgentRuntime {
     const stepPrefix = `.codex-runtime.step-${config.stepNumber}.attempt-${config.stepAttempt}`;
     const legacyDebugPath = path.join(config.workspacePath, ".codex-runtime.debug.json");
     const stepDebugPath = path.join(config.workspacePath, `${stepPrefix}.debug.json`);
+    const stepStdoutPath = path.join(config.workspacePath, `${stepPrefix}.stdout.log`);
+    const stepStderrPath = path.join(config.workspacePath, `${stepPrefix}.stderr.log`);
+    const legacyStdoutPath = path.join(config.workspacePath, ".codex-runtime.stdout.log");
+    const legacyStderrPath = path.join(config.workspacePath, ".codex-runtime.stderr.log");
 
     const debugPayload: Record<string, unknown> = {
       timestamp: new Date().toISOString(),
@@ -300,14 +309,31 @@ export class CodexRuntime implements AgentRuntime {
             config
           );
         } catch (fallbackError) {
+          await this.writeSdkLogs({
+            stepStdoutPath,
+            stepStderrPath,
+            legacyStdoutPath,
+            legacyStderrPath,
+            stdoutLines: [],
+            stderrLines: [this.sdkErrorLine(fallbackError)],
+          });
           throw this.withResumeTelemetry(fallbackError, {
             resume_used: resumeUsed,
             resume_failed: resumeFailed,
             resume_fallback: resumeFallback,
           });
         }
-        const usage = this.extractSdkUsage(freshTurn);
-        const tokenSavings = this.extractTokenSavings(usage);
+        const { usage, tokenSavings } = await this.captureSdkTurnTelemetry(
+          config,
+          freshTurn,
+          this.extractSdkRuntimeId(freshThread),
+          {
+            stepStdoutPath,
+            stepStderrPath,
+            legacyStdoutPath,
+            legacyStderrPath,
+          }
+        );
         const runtimeMetadata = this.buildRuntimeMetadata(config, this.extractSdkRuntimeId(freshThread), {
           usage,
           resume: this.buildResumeMetadata(config, {
@@ -338,8 +364,17 @@ export class CodexRuntime implements AgentRuntime {
           config.timeoutMinutes * 60 * 1000,
           config
         );
-        const usage = this.extractSdkUsage(resumedTurn);
-        const tokenSavings = this.extractTokenSavings(usage);
+        const { usage, tokenSavings } = await this.captureSdkTurnTelemetry(
+          config,
+          resumedTurn,
+          this.extractSdkRuntimeId(resumedThread),
+          {
+            stepStdoutPath,
+            stepStderrPath,
+            legacyStdoutPath,
+            legacyStderrPath,
+          }
+        );
         const runtimeMetadata = this.buildRuntimeMetadata(config, this.extractSdkRuntimeId(resumedThread), {
           usage,
           resume: this.buildResumeMetadata(config, {
@@ -364,6 +399,14 @@ export class CodexRuntime implements AgentRuntime {
           runtime_metadata: runtimeMetadata,
         };
       } catch (error) {
+        await this.writeSdkLogs({
+          stepStdoutPath,
+          stepStderrPath,
+          legacyStdoutPath,
+          legacyStderrPath,
+          stdoutLines: [],
+          stderrLines: [this.sdkErrorLine(error)],
+        });
         throw this.withResumeTelemetry(error, {
           resume_used: resumeUsed,
           resume_failed: resumeFailed,
@@ -378,8 +421,17 @@ export class CodexRuntime implements AgentRuntime {
       config.timeoutMinutes * 60 * 1000,
       config
     );
-    const usage = this.extractSdkUsage(turn);
-    const tokenSavings = this.extractTokenSavings(usage);
+    const { usage, tokenSavings } = await this.captureSdkTurnTelemetry(
+      config,
+      turn,
+      this.extractSdkRuntimeId(thread),
+      {
+        stepStdoutPath,
+        stepStderrPath,
+        legacyStdoutPath,
+        legacyStderrPath,
+      }
+    );
     const runtimeMetadata = this.buildRuntimeMetadata(config, this.extractSdkRuntimeId(thread), {
       usage,
       resume: this.buildResumeMetadata(config, {
@@ -404,6 +456,38 @@ export class CodexRuntime implements AgentRuntime {
       resume_fallback: resumeFallback,
       runtime_metadata: runtimeMetadata,
     };
+  }
+
+  private async captureSdkTurnTelemetry(
+    config: RuntimeStepContext,
+    turn: unknown,
+    runtimeId: string,
+    logPaths: {
+      stepStdoutPath: string;
+      stepStderrPath: string;
+      legacyStdoutPath: string;
+      legacyStderrPath: string;
+    }
+  ): Promise<{
+    usage: Record<string, number>;
+    tokenSavings?: Record<string, number>;
+  }> {
+    const usage = this.extractSdkUsage(turn);
+    const tokenSavings = this.extractTokenSavings(usage);
+    const activityEvents = this.extractSdkActivityEvents(turn);
+    await this.emitSdkActivityEvents(config, activityEvents);
+    const stdoutLines = this.buildSdkStdoutLines({
+      runtimeId,
+      usage,
+      activityEvents,
+      finalResponse: this.extractSdkFinalResponse(turn),
+    });
+    await this.writeSdkLogs({
+      ...logPaths,
+      stdoutLines,
+      stderrLines: [],
+    });
+    return { usage, tokenSavings };
   }
 
   private async startOrResumeSdkThread(
@@ -696,6 +780,230 @@ export class CodexRuntime implements AgentRuntime {
       cached_input_tokens: usage?.cached_input_tokens ?? 0,
       output_tokens: usage?.output_tokens ?? 0,
     };
+  }
+
+  private extractSdkActivityEvents(turn: unknown): RuntimeActivityEvent[] {
+    if (!this.isRecord(turn)) return [];
+    const items = Array.isArray(turn.items) ? turn.items : [];
+    const events: RuntimeActivityEvent[] = [];
+    for (const item of items) {
+      if (!this.isRecord(item)) continue;
+      const lowerType = this.pickString(item, ["type"]).toLowerCase();
+      const command =
+        this.pickString(item, ["command", "cmd"]) ||
+        (this.isRecord(item.input) ? this.pickString(item.input, ["command", "cmd"]) : "");
+      const filePath =
+        this.pickString(item, ["path", "file_path", "target_path"]) ||
+        (this.isRecord(item.input) ? this.pickString(item.input, ["path", "file_path", "target_path"]) : "");
+      const toolName =
+        this.pickString(item, ["tool_name", "name"]) ||
+        (this.isRecord(item.input) ? this.pickString(item.input, ["tool_name", "name"]) : "");
+      const text =
+        this.pickString(item, ["text", "message", "output_text"]) ||
+        this.textFromValue(item.output) ||
+        this.textFromValue(item.content) ||
+        (this.isRecord(item.input) ? this.pickString(item.input, ["text", "message"]) : "");
+
+      if (command) {
+        events.push({
+          type: "agent_command_run",
+          data: {
+            command: this.truncate(command, 240),
+            ...(toolName ? { tool_name: toolName } : {}),
+          },
+        });
+        continue;
+      }
+
+      if (filePath) {
+        events.push({
+          type: "agent_file_edit",
+          data: {
+            path: filePath,
+            ...(toolName ? { tool_name: toolName } : {}),
+          },
+        });
+        continue;
+      }
+
+      if (toolName) {
+        events.push({
+          type: "agent_tool_call",
+          data: {
+            tool_name: toolName,
+          },
+        });
+        continue;
+      }
+
+      if (lowerType.includes("thought") || lowerType.includes("reason")) {
+        events.push({
+          type: "agent_thinking",
+          data: {
+            kind: lowerType || "thought",
+            text: this.truncate(text || "thinking", 300),
+          },
+        });
+      }
+    }
+    return events;
+  }
+
+  private buildSdkStdoutLines(params: {
+    runtimeId: string;
+    usage: Record<string, number>;
+    activityEvents: RuntimeActivityEvent[];
+    finalResponse: string;
+  }): string[] {
+    const lines: string[] = [];
+    if (params.runtimeId) {
+      lines.push(
+        JSON.stringify({
+          type: "thread.started",
+          thread_id: params.runtimeId,
+        })
+      );
+    }
+    for (const activity of params.activityEvents) {
+      lines.push(JSON.stringify(this.sdkActivityToLogItem(activity)));
+    }
+    if (params.finalResponse) {
+      lines.push(
+        JSON.stringify({
+          type: "agent_message",
+          item: {
+            type: "agent_message",
+            message: this.truncate(params.finalResponse, 1200),
+          },
+        })
+      );
+    }
+    lines.push(
+      JSON.stringify({
+        type: "turn.completed",
+        usage: params.usage,
+      })
+    );
+    return lines;
+  }
+
+  private sdkActivityToLogItem(activity: RuntimeActivityEvent): Record<string, unknown> {
+    if (activity.type === "agent_command_run") {
+      return {
+        type: "command_execution",
+        item: {
+          type: "command_execution",
+          command: activity.data.command ?? "",
+          tool_name: activity.data.tool_name ?? "",
+        },
+      };
+    }
+    if (activity.type === "agent_file_edit") {
+      return {
+        type: "file_edit",
+        item: {
+          type: "file_edit",
+          path: activity.data.path ?? "",
+          tool_name: activity.data.tool_name ?? "",
+        },
+      };
+    }
+    if (activity.type === "agent_tool_call") {
+      return {
+        type: "tool_call",
+        item: {
+          type: "tool_call",
+          tool_name: activity.data.tool_name ?? "",
+        },
+      };
+    }
+    return {
+      type: "thought",
+      item: {
+        type: "thought",
+        text: activity.data.text ?? activity.data.kind ?? "",
+      },
+    };
+  }
+
+  private async emitSdkActivityEvents(
+    config: RuntimeStepContext,
+    events: RuntimeActivityEvent[]
+  ): Promise<void> {
+    if (!config.onActivity || events.length === 0) return;
+    for (const event of events) {
+      try {
+        await config.onActivity(event);
+      } catch (error) {
+        console.warn(
+          `[codex-runtime] Failed to emit activity event ${event.type}: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      }
+    }
+  }
+
+  private async writeSdkLogs(params: {
+    stepStdoutPath: string;
+    stepStderrPath: string;
+    legacyStdoutPath: string;
+    legacyStderrPath: string;
+    stdoutLines: string[];
+    stderrLines: string[];
+  }): Promise<void> {
+    const stdout = params.stdoutLines.join("\n");
+    const stderr = params.stderrLines.join("\n");
+    await Promise.all([
+      fs.writeFile(params.stepStdoutPath, stdout, "utf-8"),
+      fs.writeFile(params.stepStderrPath, stderr, "utf-8"),
+      fs.writeFile(params.legacyStdoutPath, stdout, "utf-8"),
+      fs.writeFile(params.legacyStderrPath, stderr, "utf-8"),
+    ]);
+  }
+
+  private extractSdkFinalResponse(turn: unknown): string {
+    if (!this.isRecord(turn)) return "";
+    const fromTop =
+      this.pickString(turn, ["finalResponse", "output_text", "text", "message"]) ||
+      this.textFromValue(turn.output);
+    if (fromTop) return fromTop;
+    return "";
+  }
+
+  private isRecord(value: unknown): value is Record<string, unknown> {
+    return Boolean(value) && typeof value === "object";
+  }
+
+  private pickString(value: Record<string, unknown>, keys: string[]): string {
+    for (const key of keys) {
+      const candidate = value[key];
+      if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+    }
+    return "";
+  }
+
+  private textFromValue(value: unknown): string {
+    if (typeof value === "string") return value;
+    if (Array.isArray(value)) {
+      return value
+        .map((entry) => (this.isRecord(entry) ? this.pickString(entry, ["text", "message", "output_text"]) : ""))
+        .filter(Boolean)
+        .join("\n");
+    }
+    if (this.isRecord(value)) return this.pickString(value, ["text", "message", "output_text"]);
+    return "";
+  }
+
+  private truncate(value: string, maxLength: number): string {
+    const normalized = String(value ?? "");
+    if (normalized.length <= maxLength) return normalized;
+    return `${normalized.slice(0, maxLength)}...`;
+  }
+
+  private sdkErrorLine(error: unknown): string {
+    if (error instanceof Error) return error.message;
+    return String(error);
   }
 
   private extractProcessUsage(stdout: string): Record<string, number> | undefined {

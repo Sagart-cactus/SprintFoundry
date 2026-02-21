@@ -305,4 +305,52 @@ describe("ClaudeCodeRuntime", () => {
     const args = (mockRunProcess as any).mock.calls[0][1] as string[];
     expect(args.slice(0, 4)).toEqual(["--resume", "claude-session-123", "-p", expect.any(String)]);
   });
+
+  it("emits streaming activity events in local_sdk mode", async () => {
+    await fs.writeFile(path.join(tmpDir, "CLAUDE.md"), "System prompt from file", "utf-8");
+    await fs.writeFile(path.join(tmpDir, ".agent-task.md"), "Task prompt from file", "utf-8");
+    const activities: Array<{ type: string; data: Record<string, unknown> }> = [];
+
+    (mockQuery as any).mockImplementationOnce(() => (async function* () {
+      yield {
+        type: "assistant",
+        content: [
+          { type: "thinking", text: "Planning command and edits" },
+          { type: "tool_use", name: "bash", input: { command: "npm test -- foo" } },
+          { type: "tool_use", name: "write_file", input: { path: "src/index.ts" } },
+          { type: "tool_use", name: "web_search", input: { query: "x" } },
+        ],
+      };
+      yield {
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        duration_ms: 1,
+        duration_api_ms: 1,
+        num_turns: 1,
+        stop_reason: null,
+        total_cost_usd: 0,
+        usage: { input_tokens: 1, output_tokens: 1 },
+        modelUsage: {},
+        permission_denials: [],
+        result: "ok",
+        uuid: "00000000-0000-0000-0000-000000000002",
+        session_id: "sdk-session-activity-1",
+      };
+    })());
+
+    const runtime = new ClaudeCodeRuntime();
+    await runtime.runStep({
+      ...makeContext(tmpDir, "local_sdk"),
+      onActivity: async (event) => {
+        activities.push(event);
+      },
+    });
+
+    const types = activities.map((a) => a.type);
+    expect(types).toContain("agent_thinking");
+    expect(types).toContain("agent_command_run");
+    expect(types).toContain("agent_file_edit");
+    expect(types).toContain("agent_tool_call");
+  });
 });
