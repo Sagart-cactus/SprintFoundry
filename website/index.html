@@ -1,0 +1,1570 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SprintFoundry — AI Agents That Ship Your Code</title>
+  <meta name="description" content="SprintFoundry orchestrates specialized AI agents to take tickets from Linear, GitHub, or Jira and deliver tested, reviewed pull requests — automatically." />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpolygon points='32,2 58,16 58,48 32,62 6,48 6,16' fill='%23FF4D00'/%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=JetBrains+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+  <style>
+    /* ─── TOKENS ─────────────────────────────────────────────────────────── */
+    :root {
+      --bg:          #0B0C0F;
+      --bg1:         #111318;
+      --bg2:         #171A20;
+      --forge:       #FF4D00;
+      --amber:       #FFB700;
+      --glow:        rgba(255,77,0,0.18);
+      --text:        #F0EDE8;
+      --muted:       #9490A0;
+      --border:      rgba(240,237,232,0.08);
+      --border-hot:  rgba(255,77,0,0.35);
+      --font-display: 'Bebas Neue', sans-serif;
+      --font-body:   'Plus Jakarta Sans', sans-serif;
+      --font-mono:   'JetBrains Mono', monospace;
+    }
+
+    /* ─── RESET ──────────────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font-body);
+      font-size: 16px;
+      line-height: 1.65;
+      overflow-x: hidden;
+    }
+    a { color: inherit; text-decoration: none; }
+    img, svg { display: block; }
+    section[id] { scroll-margin-top: 84px; }
+    a:focus-visible, button:focus-visible {
+      outline: 2px solid var(--forge);
+      outline-offset: 2px;
+      border-radius: 3px;
+    }
+
+    /* ─── SCROLLBAR ──────────────────────────────────────────────────────── */
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--forge); border-radius: 2px; }
+
+    /* ─── NOISE OVERLAY ──────────────────────────────────────────────────── */
+    body::before {
+      content: '';
+      position: fixed; inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 512 512' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");
+      opacity: 0.025;
+      pointer-events: none;
+      z-index: 999;
+    }
+
+    /* ─── GRID TEXTURE ───────────────────────────────────────────────────── */
+    .grid-bg {
+      background-image:
+        linear-gradient(var(--border) 1px, transparent 1px),
+        linear-gradient(90deg, var(--border) 1px, transparent 1px);
+      background-size: 60px 60px;
+    }
+
+    /* ─── UTIL ───────────────────────────────────────────────────────────── */
+    .container { max-width: 1180px; margin: 0 auto; padding: 0 28px; }
+    .tag {
+      display: inline-flex; align-items: center; gap: 8px;
+      font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.12em;
+      text-transform: uppercase; color: var(--forge);
+      background: rgba(255,77,0,0.08);
+      border: 1px solid var(--border-hot);
+      padding: 5px 12px; border-radius: 2px;
+    }
+    .tag::before { content: '//'; opacity: 0.5; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      font-family: var(--font-mono); font-size: 13px; font-weight: 500;
+      padding: 14px 28px; border-radius: 2px;
+      border: 1px solid transparent; cursor: pointer;
+      transition: all 0.2s ease; letter-spacing: 0.03em;
+    }
+    .btn-primary {
+      background: var(--forge); color: #fff; border-color: var(--forge);
+    }
+    .btn-primary:hover { background: #ff6729; box-shadow: 0 0 40px var(--glow); transform: translateY(-1px); }
+    .btn-ghost {
+      background: transparent; color: var(--text); border-color: var(--border);
+    }
+    .btn-ghost:hover { border-color: var(--forge); color: var(--forge); }
+
+    /* reveal on scroll */
+    .reveal { opacity: 0; transform: translateY(24px); transition: opacity 0.65s ease, transform 0.65s ease; }
+    .reveal.visible { opacity: 1; transform: translateY(0); }
+    .reveal-delay-1 { transition-delay: 0.1s; }
+    .reveal-delay-2 { transition-delay: 0.2s; }
+    .reveal-delay-3 { transition-delay: 0.3s; }
+    .reveal-delay-4 { transition-delay: 0.4s; }
+    .reveal-delay-5 { transition-delay: 0.5s; }
+
+    /* ─── NAV ────────────────────────────────────────────────────────────── */
+    nav {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      border-bottom: 1px solid var(--border);
+      backdrop-filter: blur(20px);
+      background: rgba(11,12,15,0.85);
+      transition: background 0.3s;
+    }
+    .nav-inner {
+      display: flex; align-items: center; justify-content: space-between;
+      height: 64px;
+    }
+    .nav-logo {
+      display: flex; align-items: center; gap: 10px;
+      font-family: var(--font-display); font-size: 22px; letter-spacing: 0.06em;
+      min-height: 44px;
+    }
+    .nav-logo .logo-mark {
+      width: 30px; height: 30px;
+      background: var(--forge);
+      clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .nav-links {
+      display: flex; align-items: center; gap: 32px; list-style: none;
+    }
+    .nav-links a {
+      font-size: 13px; color: var(--muted); font-weight: 500;
+      transition: color 0.2s;
+    }
+    .nav-links a:hover { color: var(--text); }
+    .nav-cta { display: flex; align-items: center; gap: 12px; }
+    .nav-menu-btn {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      width: 44px;
+      height: 44px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text);
+      border-radius: 2px;
+      cursor: pointer;
+      font-family: var(--font-mono);
+      font-size: 16px;
+    }
+    .nav-mobile {
+      display: none;
+      position: fixed;
+      top: 64px;
+      left: 0;
+      right: 0;
+      z-index: 99;
+      background: rgba(11,12,15,0.98);
+      border-bottom: 1px solid var(--border);
+    }
+    .nav-mobile.open { display: block; }
+    .nav-mobile-links {
+      list-style: none;
+      padding: 14px 28px 20px;
+      display: grid;
+      gap: 8px;
+    }
+    .nav-mobile-links a {
+      display: flex;
+      align-items: center;
+      min-height: 44px;
+      font-size: 14px;
+      color: var(--text);
+      border-bottom: 1px solid var(--border);
+    }
+
+    /* ─── HERO ───────────────────────────────────────────────────────────── */
+    #hero {
+      position: relative; min-height: 100vh;
+      display: flex; flex-direction: column; justify-content: center;
+      padding-top: 64px; overflow: hidden;
+    }
+    .hero-bg {
+      position: absolute; inset: 0;
+      background:
+        radial-gradient(ellipse 60% 50% at 60% 50%, rgba(255,77,0,0.06) 0%, transparent 70%),
+        radial-gradient(ellipse 40% 30% at 20% 80%, rgba(255,183,0,0.04) 0%, transparent 60%);
+    }
+    .hero-grid {
+      position: absolute; inset: 0;
+      background-image:
+        linear-gradient(rgba(240,237,232,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(240,237,232,0.03) 1px, transparent 1px);
+      background-size: 60px 60px;
+      mask-image: radial-gradient(ellipse 80% 80% at center, black 40%, transparent 100%);
+    }
+    .hero-inner {
+      position: relative; z-index: 2;
+      display: grid; grid-template-columns: 1fr 1fr;
+      align-items: center; gap: 60px;
+      padding: 80px 0 60px;
+    }
+    .hero-eyebrow {
+      display: flex; align-items: center; gap: 12px; margin-bottom: 24px;
+    }
+    .eyebrow-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--forge);
+      box-shadow: 0 0 12px var(--forge);
+      animation: pulse-dot 2s infinite;
+    }
+    @keyframes pulse-dot {
+      0%, 100% { box-shadow: 0 0 8px var(--forge); }
+      50% { box-shadow: 0 0 20px var(--forge); }
+    }
+    .eyebrow-text {
+      font-family: var(--font-mono); font-size: 11px;
+      text-transform: uppercase; letter-spacing: 0.15em; color: var(--forge);
+    }
+    .hero-headline {
+      font-family: var(--font-display);
+      font-size: clamp(52px, 7vw, 96px);
+      line-height: 0.95; letter-spacing: 0.02em;
+      margin-bottom: 28px;
+    }
+    .hero-headline span.accent { color: var(--forge); }
+    .hero-sub {
+      font-size: 17px; color: var(--muted); line-height: 1.7;
+      max-width: 440px; margin-bottom: 36px;
+    }
+    .hero-sub strong { color: var(--text); font-weight: 500; }
+    .hero-actions { display: flex; align-items: center; gap: 16px; }
+    .hero-stats {
+      display: flex; gap: 36px; margin-top: 56px;
+      padding-top: 36px; border-top: 1px solid var(--border);
+    }
+    .stat-val {
+      font-family: var(--font-display); font-size: 36px;
+      color: var(--forge); line-height: 1;
+    }
+    .stat-label { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+    /* ─── MONITOR UI WIDGET ──────────────────────────────────────────────── */
+    .monitor-shell {
+      position: relative;
+      display: flex;
+      padding: 16px;
+      min-height: clamp(680px, 82vh, 820px);
+      border-radius: 28px;
+      background: linear-gradient(180deg, #eceff3, #dfe4ea);
+      border: 1px solid #c8ced8;
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+    }
+    .monitor-shell::before {
+      content: '';
+      position: absolute;
+      top: -24px;
+      right: -18px;
+      width: 120px;
+      height: 120px;
+      border-radius: 50%;
+      background: radial-gradient(circle at center, rgba(120, 132, 150, 0.24), rgba(120, 132, 150, 0));
+      pointer-events: none;
+    }
+    .monitor-bezel {
+      display: flex;
+      flex: 1;
+      background: transparent;
+      border-radius: 20px;
+      height: 100%;
+      padding: 0;
+      border: none;
+    }
+    .monitor-widget {
+      display: flex;
+      flex: 1;
+      flex-direction: column;
+      height: 100%;
+      min-height: clamp(560px, 70vh, 720px);
+      border-radius: 20px;
+      overflow: hidden;
+      background: #f7f9fc;
+      border: 1px solid #d4dae3;
+      box-shadow: 0 12px 28px rgba(28, 34, 46, 0.14);
+      font-family: 'IBM Plex Sans', sans-serif;
+    }
+    .mon-topbar {
+      background: #fbfcfe;
+      border-bottom: 1px solid #dce2ea;
+      padding: 12px 14px;
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    }
+    .mon-window-controls { display: inline-flex; align-items: center; gap: 5px; margin-bottom: 4px; }
+    .mon-window-controls span {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: #d7dde7;
+      border: 1px solid #c7ceda;
+    }
+    .mon-title { font-size: 13px; font-weight: 700; color: #1c2330; }
+    .mon-subtitle { font-size: 11px; color: #687486; margin-top: 1px; }
+    .mon-badge {
+      font-size: 10px; padding: 2px 8px; border-radius: 999px;
+      font-family: 'IBM Plex Sans', sans-serif;
+      border: 1px solid;
+    }
+    .mon-badge.executing { color: #8a2f10; border-color: rgba(255,77,0,0.3); background: rgba(255,77,0,0.12); }
+    .mon-badge.completed { color: #8a2f10; border-color: rgba(255,77,0,0.3); background: rgba(255,77,0,0.12); }
+    .mon-badge.failed { color: #7f1f1f; border-color: rgba(197,48,48,0.35); background: rgba(197,48,48,0.13); }
+    .mon-board {
+      flex: 1;
+      background: #edf1f6;
+      padding: 12px;
+    }
+    .mon-lane-label {
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.06em; color: #6c788a; margin-bottom: 7px;
+    }
+    .mon-run-card {
+      background: #ffffff;
+      border: 1px solid #d6dde8;
+      border-left: 4px solid #6f7d90;
+      border-radius: 12px; padding: 9px 10px; margin-bottom: 8px;
+    }
+    .mon-run-card.completed { border-left-color: #6f7d90; }
+    .mon-run-card.failed { border-left-color: #c53030; }
+    .mon-card-head {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    }
+    .mon-card-title { font-size: 12px; font-weight: 600; color: #1f2735; }
+    .mon-card-meta { font-size: 10px; color: #6b7788; margin-top: 3px; }
+    .mon-progress {
+      height: 4px; background: #d6deea; border-radius: 999px;
+      overflow: hidden; margin: 7px 0 4px;
+    }
+    .mon-progress span {
+      display: block; height: 100%; border-radius: 999px;
+      background: linear-gradient(90deg, var(--forge), #ff8a57);
+      transition: width 0.8s ease;
+    }
+    .mon-chips {
+      display: flex; gap: 5px; flex-wrap: wrap; margin-top: 5px;
+    }
+    .mon-chip {
+      font-size: 10px; padding: 1px 7px; border-radius: 5px;
+      border: 1px solid #d1d9e5;
+      background: #f2f5fa;
+      color: #3b4758;
+      font-family: 'IBM Plex Mono', monospace;
+    }
+    .mon-chip.running { border-color: rgba(255,77,0,0.3); background: rgba(255,77,0,0.12); color: #8a2f10; }
+    .mon-chip.done { border-color: rgba(255,77,0,0.3); background: rgba(255,77,0,0.12); color: #8a2f10; }
+    .mon-statusbar {
+      background: #fafbfd;
+      border-top: 1px solid #dce2ea;
+      padding: 6px 14px;
+      display: flex; justify-content: space-between;
+      font-size: 10px; color: #687486;
+      font-family: 'IBM Plex Mono', monospace;
+    }
+    @keyframes shimmer {
+      0%, 100% { opacity: 1; } 50% { opacity: 0.4; }
+    }
+
+    /* ─── LOGOS ──────────────────────────────────────────────────────────── */
+    .logos-strip {
+      padding: 32px 0;
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+    .logos-label {
+      font-family: var(--font-mono); font-size: 10px;
+      text-transform: uppercase; letter-spacing: 0.15em; color: var(--muted);
+      text-align: center; margin-bottom: 24px;
+    }
+    .logos-row {
+      display: flex; align-items: center; justify-content: center;
+      gap: 48px; flex-wrap: wrap;
+    }
+    .logo-item {
+      font-family: var(--font-mono); font-size: 13px; font-weight: 500;
+      color: var(--muted); letter-spacing: 0.06em;
+      display: flex; align-items: center; gap: 8px;
+      transition: color 0.2s;
+    }
+    .logo-item:hover { color: var(--text); }
+    .logo-item svg { opacity: 0.5; }
+    .logo-item:hover svg { opacity: 1; }
+
+    /* ─── HOW IT WORKS ───────────────────────────────────────────────────── */
+    #how { padding: 120px 0; }
+    .section-header { margin-bottom: 72px; }
+    .section-label {
+      font-family: var(--font-mono); font-size: 11px;
+      text-transform: uppercase; letter-spacing: 0.15em;
+      color: var(--forge); margin-bottom: 16px; display: block;
+    }
+    .section-title {
+      font-family: var(--font-display);
+      font-size: clamp(36px, 5vw, 58px);
+      line-height: 1.0; letter-spacing: 0.02em;
+      max-width: 600px;
+    }
+    .section-sub {
+      font-size: 16px; color: #9490a0; margin-top: 16px;
+      max-width: 520px; line-height: 1.7;
+    }
+    .steps-grid {
+      display: grid; grid-template-columns: repeat(4, 1fr);
+      gap: 1px; background: var(--border);
+      border: 1px solid var(--border); border-radius: 4px; overflow: hidden;
+    }
+    .step {
+      background: var(--bg);
+      padding: 40px 32px; position: relative;
+      transition: background 0.3s;
+    }
+    .step:hover { background: var(--bg1); }
+    .step-num {
+      font-family: var(--font-display); font-size: 72px;
+      color: rgba(255,77,0,0.12); line-height: 1;
+      position: absolute; top: 24px; right: 28px;
+      transition: color 0.3s;
+    }
+    .step:hover .step-num { color: rgba(255,77,0,0.25); }
+    .step-icon {
+      width: 44px; height: 44px; background: var(--bg2);
+      border: 1px solid var(--border); border-radius: 4px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 20px; margin-bottom: 20px;
+    }
+    .step-title {
+      font-size: 16px; font-weight: 600; margin-bottom: 10px;
+    }
+    .step-desc { font-size: 14px; color: var(--muted); line-height: 1.65; }
+    .step-connector {
+      position: absolute; top: 50%; right: -1px;
+      width: 20px; height: 2px;
+      background: var(--forge); z-index: 2;
+    }
+
+    /* ─── AGENTS ─────────────────────────────────────────────────────────── */
+    #agents { padding: 120px 0; background: var(--bg1); position: relative; }
+    #agents::before {
+      content: '';
+      position: absolute; inset: 0;
+      background-image:
+        linear-gradient(rgba(240,237,232,0.02) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(240,237,232,0.02) 1px, transparent 1px);
+      background-size: 40px 40px;
+    }
+    .agents-grid {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 12px;
+    }
+    .agent-card {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 4px; padding: 24px 18px;
+      position: relative; overflow: hidden;
+      cursor: default; transition: border-color 0.3s, transform 0.3s;
+    }
+    .agent-card:hover {
+      border-color: var(--border-hot);
+      transform: translateY(-4px);
+    }
+    .agent-card::before {
+      content: '';
+      position: absolute; top: 0; left: 0; right: 0;
+      height: 2px;
+    }
+    .agent-card:hover::before { background: var(--forge); }
+    .agent-emoji { font-size: 28px; margin-bottom: 14px; }
+    .agent-title {
+      font-size: 13px; font-weight: 600; margin-bottom: 8px; line-height: 1.3;
+    }
+    .agent-outputs {
+      list-style: none; margin-top: 12px;
+    }
+    .agent-outputs li {
+      font-family: var(--font-mono); font-size: 10px; color: var(--muted);
+      padding: 3px 0;
+      border-top: 1px solid var(--border);
+    }
+    .agent-outputs li:first-child { border-top: none; }
+    .agent-badge {
+      display: inline-block;
+      font-family: var(--font-mono); font-size: 9px;
+      text-transform: uppercase; letter-spacing: 0.1em;
+      color: var(--forge); background: rgba(255,77,0,0.08);
+      padding: 2px 6px; border-radius: 2px; margin-bottom: 8px;
+    }
+
+    /* ─── ARCHITECTURE ───────────────────────────────────────────────────── */
+    #arch { padding: 120px 0; }
+    .arch-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 60px; align-items: center; }
+    .arch-diagram {
+      background: var(--bg1); border: 1px solid var(--border);
+      border-radius: 8px; padding: 32px; font-family: var(--font-mono);
+      font-size: 12px; line-height: 1.8; position: relative; overflow: hidden;
+    }
+    .arch-diagram::after {
+      content: '';
+      position: absolute; inset: -1px; border-radius: 8px;
+      background: linear-gradient(225deg, var(--forge), transparent 50%);
+      opacity: 0.1; pointer-events: none;
+    }
+    .arch-layer {
+      border: 1px solid var(--border);
+      border-radius: 4px; padding: 16px 20px;
+      margin-bottom: 10px; position: relative;
+    }
+    .arch-layer.hard {
+      border-color: var(--border-hot);
+      background: rgba(255,77,0,0.05);
+    }
+    .arch-layer.soft {
+      border-color: rgba(255,183,0,0.3);
+      background: rgba(255,183,0,0.04);
+    }
+    .arch-layer.agent-layer {
+      border-style: dashed;
+    }
+    .layer-label {
+      font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em;
+      color: var(--muted); margin-bottom: 6px;
+    }
+    .layer-name { font-size: 13px; font-weight: 500; }
+    .layer-name.orange { color: var(--forge); }
+    .layer-name.amber { color: var(--amber); }
+    .layer-arrow {
+      text-align: center; color: var(--muted); font-size: 16px; margin: 4px 0;
+    }
+    .arch-points { list-style: none; }
+    .arch-points li {
+      font-size: 15px; color: var(--muted); padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: flex-start; gap: 12px; line-height: 1.5;
+    }
+    .arch-points li:last-child { border-bottom: none; }
+    .arch-points li::before {
+      content: '→'; color: var(--forge); flex-shrink: 0; margin-top: 1px;
+    }
+    .arch-points li strong { color: var(--text); font-weight: 500; }
+
+    /* ─── FEATURES ───────────────────────────────────────────────────────── */
+    #features { padding: 120px 0; background: var(--bg1); }
+    .features-grid {
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px;
+      background: var(--border); border: 1px solid var(--border);
+      border-radius: 4px; overflow: hidden;
+    }
+    .feature-card {
+      background: var(--bg1); padding: 36px 32px;
+      transition: background 0.3s;
+    }
+    .feature-card:hover { background: var(--bg2); }
+    .feature-icon {
+      width: 40px; height: 40px;
+      border: 1px solid var(--border); border-radius: 4px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px; margin-bottom: 20px;
+      transition: border-color 0.3s;
+    }
+    .feature-card:hover .feature-icon { border-color: var(--border-hot); }
+    .feature-title { font-size: 15px; font-weight: 600; margin-bottom: 10px; }
+    .feature-desc { font-size: 14px; color: var(--muted); line-height: 1.65; }
+    .feature-tag {
+      display: inline-block; margin-top: 16px;
+      font-family: var(--font-mono); font-size: 10px;
+      color: var(--forge); background: rgba(255,77,0,0.08);
+      padding: 3px 8px; border-radius: 2px;
+    }
+
+    /* ─── RUNTIME SECTION ───────────────────────────────────────────────── */
+    #runtime { padding: 120px 0; }
+    .runtime-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 60px; align-items: center; }
+    .runtime-matrix {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 1px; background: var(--border);
+      border: 1px solid var(--border); border-radius: 4px; overflow: hidden;
+    }
+    .runtime-cell {
+      background: var(--bg1); padding: 28px 24px;
+      transition: background 0.3s;
+    }
+    .runtime-cell:hover { background: var(--bg2); }
+    .runtime-cell.highlight {
+      background: rgba(255,77,0,0.05);
+      border: 1px solid var(--border-hot);
+      margin: -1px;
+    }
+    .rc-label {
+      font-family: var(--font-mono); font-size: 10px;
+      text-transform: uppercase; letter-spacing: 0.12em;
+      color: var(--forge); margin-bottom: 10px;
+    }
+    .rc-title { font-size: 15px; font-weight: 600; margin-bottom: 8px; }
+    .rc-desc { font-size: 13px; color: var(--muted); line-height: 1.6; }
+    .rc-models {
+      display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px;
+    }
+    .rc-model {
+      font-family: var(--font-mono); font-size: 10px;
+      padding: 3px 8px; border-radius: 2px;
+      border: 1px solid var(--border); color: var(--muted);
+    }
+    .rc-model.claude { border-color: rgba(255,77,0,0.4); color: var(--forge); background: rgba(255,77,0,0.06); }
+    .rc-model.codex { border-color: rgba(74,158,255,0.4); color: #4A9EFF; background: rgba(74,158,255,0.06); }
+    .runtime-points { list-style: none; margin-top: 32px; }
+    .runtime-points li {
+      font-size: 15px; color: var(--muted); padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: flex-start; gap: 12px; line-height: 1.5;
+    }
+    .runtime-points li:last-child { border-bottom: none; }
+    .runtime-points li::before { content: '→'; color: var(--forge); flex-shrink: 0; margin-top: 1px; }
+    .runtime-points li strong { color: var(--text); font-weight: 500; }
+
+    /* ─── CODE BLOCK ─────────────────────────────────────────────────────── */
+    #quickstart { padding: 120px 0; }
+    .qs-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 60px; align-items: start; }
+    .code-block {
+      background: var(--bg1); border: 1px solid var(--border);
+      border-radius: 6px; overflow: hidden;
+    }
+    .code-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 20px; border-bottom: 1px solid var(--border);
+      background: var(--bg2);
+    }
+    .code-dots { display: flex; gap: 6px; }
+    .code-dot { width: 10px; height: 10px; border-radius: 50%; }
+    .code-filename {
+      font-family: var(--font-mono); font-size: 11px; color: var(--muted);
+    }
+    .code-copy {
+      font-family: var(--font-mono); font-size: 10px; color: var(--muted);
+      background: none; border: none; cursor: pointer; padding: 2px 8px;
+      border-radius: 2px; transition: all 0.2s;
+      min-width: 44px;
+      min-height: 44px;
+    }
+    .code-copy:hover { color: var(--text); background: var(--border); }
+    .code-body {
+      padding: 24px 20px;
+      font-family: var(--font-mono); font-size: 12px; line-height: 1.8;
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+    }
+    .code-comment { color: #556070; }
+    .code-cmd { color: var(--forge); }
+    .code-flag { color: var(--amber); }
+    .code-str { color: #A8D8A8; }
+    .qs-steps { list-style: none; }
+    .qs-step {
+      display: flex; gap: 20px; padding: 20px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .qs-step > div:last-child { min-width: 0; }
+    .qs-step:last-child { border-bottom: none; }
+    .qs-num {
+      font-family: var(--font-display); font-size: 32px;
+      color: var(--forge); line-height: 1; flex-shrink: 0; width: 36px;
+    }
+    .qs-step-title { font-size: 15px; font-weight: 600; margin-bottom: 6px; }
+    .qs-step-desc { font-size: 14px; color: var(--muted); line-height: 1.6; }
+
+    /* ─── CTA ────────────────────────────────────────────────────────────── */
+    #cta { padding: 120px 0; position: relative; overflow: hidden; }
+    .cta-inner {
+      text-align: center; position: relative; z-index: 2;
+      max-width: 720px; margin: 0 auto;
+    }
+    .cta-bg {
+      position: absolute; inset: 0;
+      background: radial-gradient(ellipse 60% 80% at center, rgba(255,77,0,0.08) 0%, transparent 70%);
+    }
+    .cta-headline {
+      font-family: var(--font-display);
+      font-size: clamp(48px, 6vw, 80px);
+      line-height: 1.0; letter-spacing: 0.02em;
+      margin-bottom: 24px;
+    }
+    .cta-headline span { color: var(--forge); }
+    .cta-sub {
+      font-size: 17px; color: var(--muted); margin-bottom: 40px; line-height: 1.7;
+    }
+    .cta-actions { display: flex; align-items: center; justify-content: center; gap: 16px; }
+    .cta-note {
+      font-family: var(--font-mono); font-size: 11px; color: var(--muted);
+      margin-top: 20px;
+    }
+
+    /* ─── FOOTER ─────────────────────────────────────────────────────────── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 48px 0;
+    }
+    .footer-inner {
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .footer-logo { font-family: var(--font-display); font-size: 18px; letter-spacing: 0.06em; }
+    .footer-links {
+      display: flex; gap: 28px; list-style: none;
+    }
+    .footer-links a {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 44px;
+      min-width: 44px;
+      font-size: 13px;
+      color: var(--muted);
+      transition: color 0.2s;
+    }
+    .footer-links a:hover { color: var(--text); }
+    .footer-legal {
+      font-family: var(--font-mono); font-size: 11px; color: var(--muted);
+    }
+
+    /* ─── RESPONSIVE ─────────────────────────────────────────────────────── */
+    @media (max-width: 1060px) {
+      .agents-grid { grid-template-columns: repeat(4, 1fr); }
+    }
+    @media (max-width: 900px) {
+      .hero-inner { grid-template-columns: 1fr; }
+      .monitor-shell { display: none; }
+      .steps-grid { grid-template-columns: repeat(2, 1fr); }
+      .agents-grid { grid-template-columns: repeat(3, 1fr); }
+      .arch-grid { grid-template-columns: 1fr; }
+      .runtime-grid { grid-template-columns: 1fr; }
+      .runtime-matrix { grid-template-columns: 1fr; }
+      .features-grid { grid-template-columns: 1fr; }
+      .qs-grid { grid-template-columns: minmax(0, 1fr); }
+      .footer-inner { flex-direction: column; gap: 24px; text-align: center; }
+      .nav-links, .nav-cta { display: none; }
+      .nav-menu-btn { display: inline-flex; }
+      .nav-logo { font-size: 20px; }
+    }
+    @media (max-width: 600px) {
+      .steps-grid { grid-template-columns: 1fr; }
+      .agents-grid { grid-template-columns: repeat(2, 1fr); }
+      .hero-stats { flex-direction: column; gap: 20px; }
+      .container { padding: 0 20px; }
+      .hero-actions,
+      .cta-actions { flex-direction: column; align-items: stretch; }
+      .hero-actions .btn,
+      .cta-actions .btn { justify-content: center; width: 100%; }
+      .nav-mobile-links { padding: 10px 20px 16px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
+      .reveal { opacity: 1; transform: none; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ─── NAV ───────────────────────────────────────────────────────────── -->
+  <nav>
+    <div class="container nav-inner">
+      <a href="#" class="nav-logo">
+        <div class="logo-mark"></div>
+        SPRINTFOUNDRY
+      </a>
+      <ul class="nav-links">
+        <li><a href="#how">How it works</a></li>
+        <li><a href="#agents">Agents</a></li>
+        <li><a href="#runtime">Runtimes</a></li>
+        <li><a href="#features">Features</a></li>
+        <li><a href="#quickstart">Quickstart</a></li>
+      </ul>
+      <div class="nav-cta">
+        <a href="https://github.com/trivedi/agentsdlc" class="btn btn-ghost" style="padding: 10px 20px; font-size: 12px;">GitHub</a>
+        <a href="#quickstart" class="btn btn-primary" style="padding: 10px 20px; font-size: 12px;">Get started →</a>
+      </div>
+      <button class="nav-menu-btn" type="button" aria-label="Toggle menu" aria-expanded="false" aria-controls="navMobile">☰</button>
+    </div>
+  </nav>
+  <div class="nav-mobile" id="navMobile" hidden>
+    <ul class="nav-mobile-links">
+      <li><a href="#how">How it works</a></li>
+      <li><a href="#agents">Agents</a></li>
+      <li><a href="#runtime">Runtimes</a></li>
+      <li><a href="#features">Features</a></li>
+      <li><a href="#quickstart">Quickstart</a></li>
+      <li><a href="https://github.com/trivedi/agentsdlc">GitHub</a></li>
+    </ul>
+  </div>
+
+  <!-- ─── HERO ──────────────────────────────────────────────────────────── -->
+  <section id="hero">
+    <div class="hero-bg"></div>
+    <div class="hero-grid"></div>
+    <div class="container">
+      <div class="hero-inner">
+        <div class="hero-content">
+          <div class="hero-eyebrow">
+            <div class="eyebrow-dot"></div>
+            <span class="eyebrow-text">Now in early access</span>
+          </div>
+          <h1 class="hero-headline">
+            TICKET<br>IN.<br>
+            <span class="accent">PR</span><br>
+            OUT.
+          </h1>
+          <p class="hero-sub">
+            SprintFoundry orchestrates <strong>10 built-in agents</strong> (plus custom ones) to turn backlog tickets into tested, reviewed pull requests with full logs and artifacts.
+          </p>
+          <div class="hero-actions">
+            <a href="#quickstart" class="btn btn-primary">Start building →</a>
+            <a href="#how" class="btn btn-ghost">See how it works</a>
+          </div>
+          <div class="hero-stats">
+            <div class="stat">
+              <div class="stat-val">10</div>
+              <div class="stat-label">Built-in agents</div>
+            </div>
+            <div class="stat">
+              <div class="stat-val">4</div>
+              <div class="stat-label">Ticket sources</div>
+            </div>
+            <div class="stat">
+              <div class="stat-val">2</div>
+              <div class="stat-label">Runtime providers</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Actual monitor UI widget -->
+        <div class="monitor-shell">
+          <div class="monitor-bezel">
+            <div class="monitor-widget">
+              <!-- Topbar -->
+              <div class="mon-topbar">
+                <div>
+                  <div class="mon-title">Run Monitor</div>
+                  <div class="mon-subtitle">AI run execution dashboard</div>
+                </div>
+                <span class="mon-badge executing">3 active</span>
+              </div>
+              <!-- Board -->
+              <div class="mon-board">
+                <!-- Active lane -->
+                <div class="mon-lane-label">Active Runs</div>
+
+                <div class="mon-run-card" id="monCard1">
+                  <div class="mon-card-head">
+                    <div>
+                      <div class="mon-card-title">LIN-423: OAuth token refresh</div>
+                      <div class="mon-card-meta">my-app · updated just now</div>
+                    </div>
+                    <span class="mon-badge executing" id="monBadge1">executing</span>
+                  </div>
+                  <div class="mon-progress">
+                    <span id="monBar1" style="width: 57%"></span>
+                  </div>
+                  <div class="mon-chips" id="monChips1">
+                    <span class="mon-chip done">product</span>
+                    <span class="mon-chip done">architect</span>
+                    <span class="mon-chip running">developer</span>
+                    <span class="mon-chip">qa</span>
+                    <span class="mon-chip">security</span>
+                  </div>
+                  <div class="mon-card-meta" style="margin-top:5px" id="monAgent1">Active: developer · claude-sonnet-4-5 · 00:04:12</div>
+                </div>
+
+                <div class="mon-run-card">
+                  <div class="mon-card-head">
+                    <div>
+                      <div class="mon-card-title">GH-88: Add CSV export</div>
+                      <div class="mon-card-meta">reports-svc · updated 1m ago</div>
+                    </div>
+                    <span class="mon-badge executing">planning</span>
+                  </div>
+                  <div class="mon-progress">
+                    <span style="width: 12%"></span>
+                  </div>
+                  <div class="mon-chips">
+                    <span class="mon-chip running">orchestrator</span>
+                    <span class="mon-chip">product</span>
+                    <span class="mon-chip">developer</span>
+                    <span class="mon-chip">qa</span>
+                  </div>
+                  <div class="mon-card-meta" style="margin-top:5px">Active: orchestrator · gpt-5.3-codex · 00:00:41</div>
+                </div>
+                <div class="mon-run-card">
+                  <div class="mon-card-head">
+                    <div>
+                      <div class="mon-card-title">JIRA-211: Payment retry flow</div>
+                      <div class="mon-card-meta">checkout-core · updated 2m ago</div>
+                    </div>
+                    <span class="mon-badge executing">executing</span>
+                  </div>
+                  <div class="mon-progress">
+                    <span style="width: 38%"></span>
+                  </div>
+                  <div class="mon-chips">
+                    <span class="mon-chip done">product</span>
+                    <span class="mon-chip running">architect</span>
+                    <span class="mon-chip">developer</span>
+                    <span class="mon-chip">qa</span>
+                  </div>
+                  <div class="mon-card-meta" style="margin-top:5px">Active: architect · claude-sonnet-4-5 · 00:02:14</div>
+                </div>
+
+                <!-- Completed lane -->
+                <div class="mon-lane-label" style="margin-top:10px">Completed Runs</div>
+                <div class="mon-run-card completed">
+                  <div class="mon-card-head">
+                    <div>
+                      <div class="mon-card-title">LIN-418: Rate limit middleware</div>
+                      <div class="mon-card-meta">api-gateway · 12m ago · PR #241 opened</div>
+                    </div>
+                    <span class="mon-badge completed">completed</span>
+                  </div>
+                  <div class="mon-chips" style="margin-top:6px">
+                    <span class="mon-chip done">product</span>
+                    <span class="mon-chip done">architect</span>
+                    <span class="mon-chip done">developer</span>
+                    <span class="mon-chip done">qa</span>
+                    <span class="mon-chip done">security</span>
+                  </div>
+                </div>
+                <div class="mon-run-card completed">
+                  <div class="mon-card-head">
+                    <div>
+                      <div class="mon-card-title">GH-79: Session timeout warning</div>
+                      <div class="mon-card-meta">web-portal · 18m ago · PR #188 opened</div>
+                    </div>
+                    <span class="mon-badge completed">completed</span>
+                  </div>
+                  <div class="mon-chips" style="margin-top:6px">
+                    <span class="mon-chip done">product</span>
+                    <span class="mon-chip done">architect</span>
+                    <span class="mon-chip done">developer</span>
+                    <span class="mon-chip done">qa</span>
+                    <span class="mon-chip done">security</span>
+                  </div>
+                </div>
+              </div>
+              <!-- Statusbar -->
+              <div class="mon-statusbar">
+                <span id="monStatus">5 runs · 3 active · 2 completed</span>
+                <span id="monRefresh">refreshed just now</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── LOGOS ─────────────────────────────────────────────────────────── -->
+  <div class="logos-strip">
+    <div class="container">
+      <p class="logos-label">Works with your existing stack</p>
+      <div class="logos-row">
+        <span class="logo-item">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2zm-1 14.5v-9l7 4.5-7 4.5z"/></svg>
+          Linear
+        </span>
+        <span class="logo-item">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.374 0 0 5.373 0 12c0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23A11.509 11.509 0 0 1 12 5.803c1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576C20.566 21.797 24 17.3 24 12c0-6.627-5.373-12-12-12z"/></svg>
+          GitHub Issues
+        </span>
+        <span class="logo-item">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M11.571 11.513H0a5.218 5.218 0 0 0 5.232 5.215h2.13v2.057A5.215 5.215 0 0 0 12.575 24V12.518a1.005 1.005 0 0 0-1.004-1.005zm5.723-5.756H5.736a5.215 5.215 0 0 0 5.215 5.214h2.129v2.058a5.218 5.218 0 0 0 5.215 5.214V6.758a1.001 1.001 0 0 0-1.001-1.001zM17.29 0H6.001a5.217 5.217 0 0 0 5.215 5.215h2.129v2.058A5.215 5.215 0 0 0 18.56 12.49V1.005A1.001 1.001 0 0 0 17.29 0z"/></svg>
+          Jira
+        </span>
+        <span class="logo-item">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M23.546 10.93L13.067.452c-.604-.603-1.582-.603-2.188 0L8.708 2.627l2.76 2.76c.645-.215 1.379-.07 1.889.441.516.515.658 1.258.438 1.9l2.658 2.66c.645-.223 1.387-.078 1.9.435.721.72.721 1.884 0 2.604-.719.719-1.881.719-2.6 0-.539-.541-.674-1.337-.404-1.996L12.86 8.955v6.525c.176.086.342.203.488.348.713.721.713 1.883 0 2.6-.719.721-1.889.721-2.609 0-.719-.719-.719-1.879 0-2.598.182-.18.387-.316.605-.406V8.835c-.217-.091-.424-.222-.6-.401-.545-.545-.676-1.342-.396-2.009L7.636 3.67 .45 10.881c-.6.605-.6 1.584 0 2.189l10.48 10.477c.604.604 1.582.604 2.186 0l10.43-10.43c.605-.603.605-1.582 0-2.187"/></svg>
+          GitLab
+        </span>
+        <span class="logo-item">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M19.902 4.098a3.75 3.75 0 0 0-5.304 0l-4.5 4.5a3.75 3.75 0 0 0 1.035 6.037.75.75 0 0 1-.646 1.353 5.25 5.25 0 0 1-1.449-8.45l4.5-4.5a5.25 5.25 0 1 1 7.424 7.424l-1.757 1.757a.75.75 0 1 1-1.06-1.06l1.757-1.757a3.75 3.75 0 0 0 0-5.304zm-7.783 7.783l-4.5 4.5a5.25 5.25 0 0 0 7.424 7.424l4.5-4.5a5.25 5.25 0 0 0-1.449-8.45.75.75 0 1 0-.646 1.353 3.75 3.75 0 0 1 1.035 6.037l-4.5 4.5a3.75 3.75 0 1 1-5.304-5.304l1.757-1.757a.75.75 0 1 0-1.06-1.06l-1.757 1.757z"/></svg>
+          Any git forge
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── HOW IT WORKS ──────────────────────────────────────────────────── -->
+  <section id="how">
+    <div class="container">
+      <div class="section-header reveal">
+        <span class="section-label">Process</span>
+        <h2 class="section-title">FROM BACKLOG TO BRANCH IN FOUR STEPS</h2>
+        <p class="section-sub">A clean separation between your planning tools and your codebase. No new workflows to learn — SprintFoundry fits into what you already use.</p>
+      </div>
+      <div class="steps-grid">
+        <div class="step reveal">
+          <div class="step-num">1</div>
+          <div class="step-icon">📌</div>
+          <div class="step-title">Point at a ticket</div>
+          <p class="step-desc">Give SprintFoundry a Linear ticket, GitHub issue, or Jira task. Or just describe what you want built as a prompt.</p>
+        </div>
+        <div class="step reveal reveal-delay-1">
+          <div class="step-num">2</div>
+          <div class="step-icon">🧠</div>
+          <div class="step-title">Orchestrator plans</div>
+          <p class="step-desc">The orchestrator classifies the work, applies mandatory platform/project rules, and generates a structured execution plan (with model/runtime selection per step).</p>
+        </div>
+        <div class="step reveal reveal-delay-2">
+          <div class="step-num">3</div>
+          <div class="step-icon">⚙️</div>
+          <div class="step-title">Agents execute</div>
+          <p class="step-desc">Specialized agents run sequentially or in parallel. Each reads prior artifacts, does its job, and writes outputs for the next agent. The filesystem is the message bus.</p>
+        </div>
+        <div class="step reveal reveal-delay-3">
+          <div class="step-num">4</div>
+          <div class="step-icon">🚀</div>
+          <div class="step-title">PR lands in your repo</div>
+          <p class="step-desc">A tested, reviewed pull request is created with code, tests, docs, and a full audit trail. You review and merge — or configure auto-merge for qualifying changes.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── AGENTS ────────────────────────────────────────────────────────── -->
+  <section id="agents">
+    <div class="container" style="position: relative; z-index: 1;">
+      <div class="section-header reveal">
+        <span class="section-label">The roster</span>
+        <h2 class="section-title">TEN BUILT-IN AGENTS. PLUS CUSTOM.</h2>
+        <p class="section-sub">Each agent has runtime-specific instructions, explicit handoff artifacts, and service-enforced role ordering.</p>
+      </div>
+      <div class="agents-grid">
+        <div class="agent-card reveal">
+          <div class="agent-badge">product</div>
+          <div class="agent-emoji">🎯</div>
+          <div class="agent-title">Product Agent</div>
+          <ul class="agent-outputs">
+            <li>Requirements doc</li>
+            <li>User stories</li>
+            <li>Acceptance criteria</li>
+            <li>Scope clarification</li>
+          </ul>
+        </div>
+        <div class="agent-card reveal reveal-delay-1">
+          <div class="agent-badge">architect</div>
+          <div class="agent-emoji">🏗️</div>
+          <div class="agent-title">Architect Agent</div>
+          <ul class="agent-outputs">
+            <li>System design</li>
+            <li>API contracts</li>
+            <li>Data models</li>
+            <li>ADRs</li>
+          </ul>
+        </div>
+        <div class="agent-card reveal reveal-delay-2">
+          <div class="agent-badge">ui/ux</div>
+          <div class="agent-emoji">🎨</div>
+          <div class="agent-title">UI/UX Agent</div>
+          <ul class="agent-outputs">
+            <li>Wireframes</li>
+            <li>Component specs</li>
+            <li>Design tokens</li>
+            <li>Interaction notes</li>
+          </ul>
+        </div>
+        <div class="agent-card reveal reveal-delay-3">
+          <div class="agent-badge">developer</div>
+          <div class="agent-emoji">💻</div>
+          <div class="agent-title">Developer Agent</div>
+          <ul class="agent-outputs">
+            <li>Implementation</li>
+            <li>Self-test + self-review</li>
+            <li>Handoff to QA</li>
+            <li>Production code changes</li>
+          </ul>
+        </div>
+        <div class="agent-card reveal reveal-delay-4">
+          <div class="agent-badge">go-developer</div>
+          <div class="agent-emoji">🧩</div>
+          <div class="agent-title">Go Developer Agent</div>
+          <ul class="agent-outputs">
+            <li>Idiomatic Go implementation</li>
+            <li>Go API/service changes</li>
+            <li>Go handoff docs</li>
+            <li>Production Go code</li>
+          </ul>
+        </div>
+        <div class="agent-card reveal reveal-delay-4">
+          <div class="agent-badge">qa</div>
+          <div class="agent-emoji">🧪</div>
+          <div class="agent-title">QA Agent</div>
+          <ul class="agent-outputs">
+            <li>Unit tests</li>
+            <li>Integration tests</li>
+            <li>E2E tests</li>
+            <li>Test reports</li>
+          </ul>
+        </div>
+        <div class="agent-card reveal reveal-delay-5">
+          <div class="agent-badge">go-qa</div>
+          <div class="agent-emoji">🧬</div>
+          <div class="agent-title">Go QA Agent</div>
+          <ul class="agent-outputs">
+            <li>Go test suites</li>
+            <li>Race checks</li>
+            <li>Coverage artifacts</li>
+            <li>Go bug reports</li>
+          </ul>
+        </div>
+        <div class="agent-card reveal reveal-delay-5">
+          <div class="agent-badge">code-review</div>
+          <div class="agent-emoji">🕵️</div>
+          <div class="agent-title">Code Review Agent</div>
+          <ul class="agent-outputs">
+            <li>Severity-ranked findings</li>
+            <li>Architecture alignment</li>
+            <li>Performance/error checks</li>
+            <li>Review handoff to dev</li>
+          </ul>
+        </div>
+        <div class="agent-card reveal reveal-delay-5">
+          <div class="agent-badge">security</div>
+          <div class="agent-emoji">🔒</div>
+          <div class="agent-title">Security Agent</div>
+          <ul class="agent-outputs">
+            <li>Vuln scanning</li>
+            <li>Auth review</li>
+            <li>Dep audit</li>
+            <li>SAST report</li>
+          </ul>
+        </div>
+        <div class="agent-card reveal reveal-delay-5">
+          <div class="agent-badge">devops</div>
+          <div class="agent-emoji">🚢</div>
+          <div class="agent-title">DevOps Agent</div>
+          <ul class="agent-outputs">
+            <li>Dockerfiles</li>
+            <li>CI/CD pipelines</li>
+            <li>IaC templates</li>
+            <li>Deploy config</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── RUNTIME FLEXIBILITY ─────────────────────────────────────────── -->
+  <section id="runtime">
+    <div class="container">
+      <div class="runtime-grid">
+        <div class="reveal">
+          <span class="section-label">Runtime flexibility</span>
+          <h2 class="section-title" style="font-size: clamp(30px, 4vw, 50px);">YOUR AI.<br>YOUR WAY.</h2>
+          <p class="section-sub" style="margin-bottom: 32px;">Use Anthropic/OpenAI per agent, set models in YAML, and override planner/runtime per project.</p>
+          <ul class="runtime-points">
+            <li><div><strong>Per-agent runtime overrides.</strong> Mix `claude-code` and `codex` in one run graph, including planner override.</div></li>
+            <li><div><strong>Model pinning per role.</strong> Set exact model IDs with `model_overrides` for each agent.</div></li>
+            <li><div><strong>BYOK + session auth.</strong> Use `SPRINTFOUNDRY_*` keys or logged-in local sessions where supported.</div></li>
+          </ul>
+        </div>
+        <div class="runtime-matrix reveal reveal-delay-2">
+          <div class="runtime-cell">
+            <div class="rc-label">Runtime A</div>
+            <div class="rc-title">Claude Code Runtime</div>
+            <p class="rc-desc">Supports `local_process` (CLI subprocess), `local_sdk` (in-process SDK), and optional `container` mode for isolation.</p>
+            <div class="rc-models">
+              <span class="rc-model claude">claude-sonnet-4-5-20250929</span>
+              <span class="rc-model claude">claude-opus-4-5-20250929</span>
+            </div>
+          </div>
+          <div class="runtime-cell">
+            <div class="rc-label">Runtime B</div>
+            <div class="rc-title">Codex Runtime</div>
+            <p class="rc-desc">Supports `local_process` (`codex exec`) and `local_sdk`, with reasoning-effort controls for Codex models.</p>
+            <div class="rc-models">
+              <span class="rc-model codex">gpt-5.3-codex</span>
+              <span class="rc-model codex">reasoning configurable</span>
+            </div>
+          </div>
+          <div class="runtime-cell" style="grid-column: 1 / -1; border-top: 1px solid var(--border);">
+            <div class="rc-label">Execution modes</div>
+            <div style="display:grid; grid-template-columns: repeat(3,1fr); gap: 16px; margin-top: 4px;">
+              <div>
+                <div class="rc-title" style="font-size:13px">local_process</div>
+                <p class="rc-desc" style="font-size:12px">CLI subprocess mode (`claude` / `codex exec`) with full run artifacts and logging.</p>
+              </div>
+              <div>
+                <div class="rc-title" style="font-size:13px">local_sdk</div>
+                <p class="rc-desc" style="font-size:12px">In-process SDK runtime with guardrails, lower overhead, and streamed responses.</p>
+              </div>
+              <div>
+                <div class="rc-title" style="font-size:13px">container</div>
+                <p class="rc-desc" style="font-size:12px">Optional isolated mode for Claude runtime (available, but not required for local runs).</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── ARCHITECTURE ──────────────────────────────────────────────────── -->
+  <section id="arch">
+    <div class="container">
+      <div class="arch-grid">
+        <div class="reveal">
+          <span class="section-label">Architecture</span>
+          <h2 class="section-title" style="font-size: clamp(30px, 4vw, 50px);">HARD SHELL.<br>SOFT CORE.</h2>
+          <p class="section-sub" style="margin-bottom: 36px;">Service enforces constraints; the orchestrator decides execution.</p>
+          <ul class="arch-points">
+            <li><div><strong>Credentials and limits stay in service.</strong> Keys, budgets, and timeouts never live in agent prompts.</div></li>
+            <li><div><strong>Planner + validator split.</strong> Orchestrator plans steps; rules enforce required safety checks.</div></li>
+            <li><div><strong>Artifacts + events are auditable.</strong> Workspace outputs and run events/logs feed monitor and review.</div></li>
+            <li><div><strong>Human gates + rework are native.</strong> Runs can pause for review and re-route failed work.</div></li>
+          </ul>
+        </div>
+        <div class="arch-diagram reveal reveal-delay-2">
+          <div class="arch-layer hard">
+            <div class="layer-label">hard shell</div>
+            <div class="layer-name orange">Orchestration Service (Node.js)</div>
+            <div style="font-size: 11px; color: var(--muted); margin-top: 6px;">credentials · budgets · timeouts · rule validation · events/logs · review gates</div>
+          </div>
+          <div class="layer-arrow">↕</div>
+          <div class="arch-layer soft">
+            <div class="layer-label">soft core</div>
+            <div class="layer-name amber">Orchestrator Agent (runtime configurable)</div>
+            <div style="font-size: 11px; color: var(--muted); margin-top: 6px;">ticket classification · agent selection · step planning · rework strategy</div>
+          </div>
+          <div class="layer-arrow">↓</div>
+          <div class="arch-layer agent-layer">
+            <div class="layer-label">execution</div>
+            <div class="layer-name" style="color: var(--text);">Agent Runtimes (Claude Code + Codex)</div>
+            <div style="font-size: 11px; color: var(--muted); margin-top: 6px; display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px;">
+              <span style="background: var(--bg2); padding: 2px 8px; border-radius: 2px; font-size: 10px;">product</span>
+              <span style="background: var(--bg2); padding: 2px 8px; border-radius: 2px; font-size: 10px;">architect</span>
+              <span style="background: var(--bg2); padding: 2px 8px; border-radius: 2px; font-size: 10px;">ui-ux</span>
+              <span style="background: var(--bg2); padding: 2px 8px; border-radius: 2px; font-size: 10px;">developer</span>
+              <span style="background: var(--bg2); padding: 2px 8px; border-radius: 2px; font-size: 10px;">code-review</span>
+              <span style="background: var(--bg2); padding: 2px 8px; border-radius: 2px; font-size: 10px;">qa</span>
+              <span style="background: var(--bg2); padding: 2px 8px; border-radius: 2px; font-size: 10px;">security</span>
+              <span style="background: var(--bg2); padding: 2px 8px; border-radius: 2px; font-size: 10px;">devops</span>
+            </div>
+          </div>
+          <div class="layer-arrow">↓</div>
+          <div class="arch-layer" style="border-color: rgba(40,202,65,0.3); background: rgba(40,202,65,0.04);">
+            <div class="layer-label">output</div>
+            <div class="layer-name" style="color: #28CA41;">Pull Request</div>
+            <div style="font-size: 11px; color: var(--muted); margin-top: 6px;">tested · reviewed · documented · audit trail</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── FEATURES ──────────────────────────────────────────────────────── -->
+  <section id="features">
+    <div class="container">
+      <div class="section-header reveal">
+        <span class="section-label">Platform</span>
+        <h2 class="section-title">FULL-SURFACE SDLC AUTOMATION</h2>
+      </div>
+      <div class="features-grid">
+        <div class="feature-card reveal">
+          <div class="feature-icon">🔑</div>
+          <div class="feature-title">Bring Your Own Keys</div>
+          <p class="feature-desc">Use your own Anthropic/OpenAI credentials. Keys stay service-side, not in agent artifacts.</p>
+          <span class="feature-tag">BYOK</span>
+        </div>
+        <div class="feature-card reveal reveal-delay-1">
+          <div class="feature-icon">🧠</div>
+          <div class="feature-title">Planner + Validator</div>
+          <p class="feature-desc">Orchestrator plans execution; validator enforces role ordering and mandatory rules.</p>
+          <span class="feature-tag">Deterministic gates</span>
+        </div>
+        <div class="feature-card reveal reveal-delay-2">
+          <div class="feature-icon">⚙️</div>
+          <div class="feature-title">Per-Agent Runtime Overrides</div>
+          <p class="feature-desc">Run each step on `claude-code` or `codex` with `local_process` / `local_sdk` (+ optional container mode).</p>
+          <span class="feature-tag">Mix providers</span>
+        </div>
+        <div class="feature-card reveal reveal-delay-3">
+          <div class="feature-icon">💸</div>
+          <div class="feature-title">Budget + Timeout Control</div>
+          <p class="feature-desc">Per-agent/per-task token-cost caps and timeout windows are enforced during orchestration.</p>
+          <span class="feature-tag">Cost governance</span>
+        </div>
+        <div class="feature-card reveal reveal-delay-4">
+          <div class="feature-icon">📋</div>
+          <div class="feature-title">Rules Engine</div>
+          <p class="feature-desc">Inject required agents, human gates, and model/budget overrides from metadata, labels, priority, or changed files.</p>
+          <span class="feature-tag">Policy as YAML</span>
+        </div>
+        <div class="feature-card reveal reveal-delay-5">
+          <div class="feature-icon">👤</div>
+          <div class="feature-title">Human Review Gates</div>
+          <p class="feature-desc">Pause runs for reviewer decisions with `sprintfoundry review`, then continue with feedback trail.</p>
+          <span class="feature-tag">Controlled autonomy</span>
+        </div>
+        <div class="feature-card reveal">
+          <div class="feature-icon">🔄</div>
+          <div class="feature-title">Rework Loops</div>
+          <p class="feature-desc">QA/security/code-review failures re-route to targeted agents with bounded rework cycles.</p>
+          <span class="feature-tag">Iteration built-in</span>
+        </div>
+        <div class="feature-card reveal reveal-delay-1">
+          <div class="feature-icon">📡</div>
+          <div class="feature-title">Monitor + APIs</div>
+          <p class="feature-desc">Live board UI plus APIs for runs, events, logs, and workspace files (`/api/runs`, `/api/events`, `/api/log`, `/api/files`).</p>
+          <span class="feature-tag">Observability</span>
+        </div>
+        <div class="feature-card reveal reveal-delay-2">
+          <div class="feature-icon">📁</div>
+          <div class="feature-title">Artifact + Audit Trail</div>
+          <p class="feature-desc">Every step writes durable artifacts plus runtime debug metadata for traceable audits.</p>
+          <span class="feature-tag">Traceable output</span>
+        </div>
+        <div class="feature-card reveal reveal-delay-3">
+          <div class="feature-icon">🧩</div>
+          <div class="feature-title">Plugin + Skill System</div>
+          <p class="feature-desc">Attach Claude plugins and Codex skills per-agent for quality, testing, architecture, and UI workflows.</p>
+          <span class="feature-tag">Extensible</span>
+        </div>
+        <div class="feature-card reveal reveal-delay-4">
+          <div class="feature-icon">🛠️</div>
+          <div class="feature-title">Project Creator CLI</div>
+          <p class="feature-desc">`sprintfoundry project create` scaffolds config, integrations, agents, branch strategy, and runtime profile.</p>
+          <span class="feature-tag">Fast onboarding</span>
+        </div>
+        <div class="feature-card reveal reveal-delay-5">
+          <div class="feature-icon">⚡</div>
+          <div class="feature-title">Custom Agent Catalog</div>
+          <p class="feature-desc">Agent IDs are free-form. Add stack-specific agents and tune catalog per project.</p>
+          <span class="feature-tag">Beyond defaults</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── QUICKSTART ────────────────────────────────────────────────────── -->
+  <section id="quickstart">
+    <div class="container">
+      <div class="qs-grid">
+        <div class="reveal">
+          <span class="section-label">Quickstart</span>
+          <h2 class="section-title" style="font-size: clamp(30px, 4vw, 50px); margin-bottom: 40px;">UP IN MINUTES</h2>
+          <ol class="qs-steps">
+            <li class="qs-step">
+              <div class="qs-num">1</div>
+              <div>
+                <div class="qs-step-title">Install SprintFoundry</div>
+                <p class="qs-step-desc">Install via Homebrew/npm, then scaffold config with <code style="font-family:var(--font-mono);font-size:12px;color:var(--forge)">project create</code>.</p>
+              </div>
+            </li>
+            <li class="qs-step">
+              <div class="qs-num">2</div>
+              <div>
+                <div class="qs-step-title">Configure your project</div>
+                <p class="qs-step-desc">Set repo, ticket source, agents, runtime/model overrides, and BYOK credentials.</p>
+              </div>
+            </li>
+            <li class="qs-step">
+              <div class="qs-num">3</div>
+              <div>
+                <div class="qs-step-title">Point it at a ticket</div>
+                <p class="qs-step-desc">Run on GitHub/Linear/Jira/prompt. Use dry-run for planning-only mode.</p>
+              </div>
+            </li>
+            <li class="qs-step">
+              <div class="qs-num">4</div>
+              <div>
+                <div class="qs-step-title">Monitor + approve gates</div>
+                <p class="qs-step-desc">Track runs in monitor and resolve review gates with <code style="font-family:var(--font-mono);font-size:12px;color:var(--forge)">sprintfoundry review</code>.</p>
+              </div>
+            </li>
+          </ol>
+        </div>
+        <div class="reveal reveal-delay-2">
+          <div class="code-block">
+            <div class="code-header">
+              <div class="code-dots">
+                <div class="code-dot" style="background:#FF5F57"></div>
+                <div class="code-dot" style="background:#FFBD2E"></div>
+                <div class="code-dot" style="background:#28CA41"></div>
+              </div>
+              <span class="code-filename">terminal</span>
+              <button class="code-copy" onclick="copyCode(this)">copy</button>
+            </div>
+            <pre class="code-body"><span class="code-comment"># Install</span>
+<span class="code-cmd">npm</span> install <span class="code-flag">-g</span> sprintfoundry
+
+<span class="code-comment"># Create project config interactively</span>
+<span class="code-cmd">sprintfoundry</span> project create
+
+<span class="code-comment"># Validate config</span>
+<span class="code-cmd">sprintfoundry</span> validate <span class="code-flag">--project</span> <span class="code-str">my-saas-app</span>
+
+<span class="code-comment"># Run on a Linear ticket</span>
+<span class="code-cmd">sprintfoundry</span> run <span class="code-flag">--project</span> <span class="code-str">my-saas-app</span> \
+  <span class="code-flag">--source</span> linear <span class="code-flag">--ticket</span> <span class="code-str">LIN-423</span>
+
+<span class="code-comment"># Run on a GitHub issue</span>
+<span class="code-cmd">sprintfoundry</span> run <span class="code-flag">--project</span> <span class="code-str">my-saas-app</span> \
+  <span class="code-flag">--source</span> github <span class="code-flag">--ticket</span> <span class="code-str">42</span>
+
+<span class="code-comment"># Or just describe it</span>
+<span class="code-cmd">sprintfoundry</span> run <span class="code-flag">--project</span> <span class="code-str">my-saas-app</span> \
+  <span class="code-flag">--source</span> prompt <span class="code-flag">--prompt</span> <span class="code-str">"Add CSV export to the reports page"</span>
+
+<span class="code-comment"># Optional: plan-only dry run</span>
+<span class="code-cmd">sprintfoundry</span> run <span class="code-flag">--project</span> <span class="code-str">my-saas-app</span> \
+  <span class="code-flag">--source</span> linear <span class="code-flag">--ticket</span> <span class="code-str">LIN-423</span> <span class="code-flag">--dry-run</span>
+
+<span class="code-comment"># Monitor runs and logs</span>
+<span class="code-cmd">sprintfoundry</span> monitor <span class="code-flag">--port</span> <span class="code-str">4310</span>
+
+<span class="code-comment"># Resolve a human review gate</span>
+<span class="code-cmd">sprintfoundry</span> review <span class="code-flag">--workspace</span> <span class="code-str">/tmp/sprintfoundry/my-saas-app/run-123</span> \
+  <span class="code-flag">--review-id</span> <span class="code-str">review-123</span> <span class="code-flag">--decision</span> <span class="code-str">approved</span></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── CTA ───────────────────────────────────────────────────────────── -->
+  <section id="cta">
+    <div class="cta-bg"></div>
+    <div class="container">
+      <div class="cta-inner reveal">
+        <h2 class="cta-headline">
+          YOUR BACKLOG.<br>
+          <span>HANDLED.</span>
+        </h2>
+        <p class="cta-sub">
+          Stop context-switching. Stop writing boilerplate. Stop waiting for bandwidth.<br>
+          Let your AI agents handle the sprint while you focus on what matters.
+        </p>
+        <div class="cta-actions">
+          <a href="https://github.com/trivedi/agentsdlc" class="btn btn-primary" style="font-size: 14px; padding: 16px 36px;">
+            Get started free →
+          </a>
+          <a href="https://github.com/trivedi/agentsdlc" class="btn btn-ghost" style="font-size: 14px; padding: 16px 36px;">
+            View on GitHub
+          </a>
+        </div>
+        <p class="cta-note">Open source · Self-hosted · BYOK · No vendor lock-in</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── FOOTER ────────────────────────────────────────────────────────── -->
+  <footer>
+    <div class="container">
+      <div class="footer-inner">
+        <div class="footer-logo">SPRINTFOUNDRY</div>
+        <ul class="footer-links">
+          <li><a href="#how">How it works</a></li>
+          <li><a href="#agents">Agents</a></li>
+          <li><a href="#quickstart">Docs</a></li>
+          <li><a href="https://github.com/trivedi/agentsdlc">GitHub</a></li>
+        </ul>
+        <div class="footer-legal">© 2025 SprintFoundry. MIT License.</div>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    // ─── REVEAL ON SCROLL ──────────────────────────────────────────────── //
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(e => {
+        if (e.isIntersecting) {
+          e.target.classList.add('visible');
+        }
+      });
+    }, { threshold: 0.12, rootMargin: '0px 0px -40px 0px' });
+
+    document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+
+    // ─── MONITOR WIDGET ANIMATION ─────────────────────────────────────── //
+    let runSec = 4 * 60 + 12;
+    setInterval(() => {
+      runSec++;
+      const m = String(Math.floor(runSec / 60)).padStart(2, '0');
+      const s = String(runSec % 60).padStart(2, '0');
+      const el = document.getElementById('monAgent1');
+      if (el) el.textContent = `Active: developer · claude-sonnet-4-5 · 00:${m}:${s}`;
+      // Slowly advance the progress bar
+      const bar = document.getElementById('monBar1');
+      if (bar) {
+        const pct = Math.min(98, 57 + Math.floor(runSec / 30));
+        bar.style.width = pct + '%';
+      }
+      // At ~3min mark flip to qa
+      if (runSec === 4 * 60 + 40) {
+        const chips = document.getElementById('monChips1');
+        if (chips) chips.innerHTML = `
+          <span class="mon-chip done">product</span>
+          <span class="mon-chip done">architect</span>
+          <span class="mon-chip done">developer</span>
+          <span class="mon-chip running">qa</span>
+          <span class="mon-chip">security</span>`;
+        if (el) el.textContent = 'Active: qa · claude-haiku-4-5 · 00:00:03';
+        const bar2 = document.getElementById('monBar1');
+        if (bar2) bar2.style.width = '75%';
+        runSec = 0;
+      }
+    }, 1000);
+
+    // Monitor refresh ticker
+    let refreshSec = 0;
+    setInterval(() => {
+      refreshSec++;
+      const el = document.getElementById('monRefresh');
+      if (!el) return;
+      if (refreshSec < 60) el.textContent = `refreshed ${refreshSec}s ago`;
+      else el.textContent = `refreshed ${Math.floor(refreshSec/60)}m ago`;
+    }, 1000);
+
+    // ─── COPY CODE ────────────────────────────────────────────────────── //
+    function copyCode(btn) {
+      const block = btn.closest('.code-block').querySelector('pre.code-body');
+      navigator.clipboard.writeText(block.innerText).then(() => {
+        btn.textContent = 'copied!';
+        setTimeout(() => btn.textContent = 'copy', 2000);
+      });
+    }
+
+    // ─── NAV SCROLL STATE ─────────────────────────────────────────────── //
+    window.addEventListener('scroll', () => {
+      const nav = document.querySelector('nav');
+      if (window.scrollY > 60) {
+        nav.style.background = 'rgba(11,12,15,0.97)';
+      } else {
+        nav.style.background = 'rgba(11,12,15,0.85)';
+      }
+    }, { passive: true });
+
+    // ─── MOBILE NAV ────────────────────────────────────────────────────── //
+    const navMenuBtn = document.querySelector('.nav-menu-btn');
+    const navMobile = document.getElementById('navMobile');
+    if (navMenuBtn && navMobile) {
+      const closeMobileMenu = () => {
+        navMobile.classList.remove('open');
+        navMobile.hidden = true;
+        navMenuBtn.setAttribute('aria-expanded', 'false');
+      };
+      navMenuBtn.addEventListener('click', () => {
+        const isOpen = navMobile.classList.toggle('open');
+        navMobile.hidden = !isOpen;
+        navMenuBtn.setAttribute('aria-expanded', String(isOpen));
+      });
+      navMobile.querySelectorAll('a').forEach((link) => {
+        link.addEventListener('click', closeMobileMenu);
+      });
+      window.addEventListener('resize', () => {
+        if (window.innerWidth > 900) closeMobileMenu();
+      });
+    }
+
+  </script>
+</body>
+</html>
