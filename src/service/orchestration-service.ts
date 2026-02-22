@@ -69,7 +69,8 @@ export class OrchestrationService {
   async handleTask(
     ticketId: string,
     source: "linear" | "github" | "jira" | "prompt",
-    promptText?: string
+    promptText?: string,
+    opts?: { dryRun?: boolean }
   ): Promise<TaskRun> {
     // 1. Create the run
     const run = this.createRun(ticketId);
@@ -89,15 +90,22 @@ export class OrchestrationService {
       const workspacePath = await this.workspace.create(run.run_id);
       console.log(`[orchestrator] Workspace created: ${workspacePath}`);
 
-      console.log(`[orchestrator] Cloning repo and creating branch...`);
-      await this.git.cloneAndBranch(workspacePath, ticket);
-      console.log(`[orchestrator] Repo cloned successfully.`);
+      if (opts?.dryRun) {
+        // Skip git clone in dry-run — plan is generated from ticket context only
+        console.log(`[orchestrator] Dry-run mode — skipping git clone.`);
+      } else {
+        console.log(`[orchestrator] Cloning repo and creating branch...`);
+        await this.git.cloneAndBranch(workspacePath, ticket);
+        console.log(`[orchestrator] Repo cloned successfully.`);
+      }
 
       // Initialize event store after clone. Initializing earlier can create
       // workspace files (e.g. .events.jsonl) that make `git clone ... .` fail.
       await this.events.initialize(workspacePath);
 
-      await this.runRegistryPreflight(workspacePath);
+      if (!opts?.dryRun) {
+        await this.runRegistryPreflight(workspacePath);
+      }
 
       // 4. Get plan from orchestrator agent
       run.status = "planning";
@@ -126,7 +134,12 @@ export class OrchestrationService {
         injected_steps: validatedPlan.steps.length - plan.steps.length,
       });
 
-      // 6. Execute the plan
+      // 6. Execute the plan (skip if dry-run)
+      if (opts?.dryRun) {
+        run.status = "completed";
+        console.log(`[orchestrator] Dry-run mode — skipping execution.`);
+        return run;
+      }
       run.status = "executing";
       console.log(`[orchestrator] Starting plan execution...`);
       await this.executePlan(run, validatedPlan, workspacePath);

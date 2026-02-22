@@ -34,6 +34,9 @@ export class GitManager {
       workspacePath
     );
 
+    // Ensure git identity is set (required for checkpoint commits)
+    this.ensureGitIdentity(workspacePath);
+
     // Enable Entire session tracking on the cloned repo (best-effort)
     this.tryEnableEntire(workspacePath);
 
@@ -87,8 +90,12 @@ export class GitManager {
 
     const message = `chore(sprintfoundry): run ${runId} step ${stepNumber} ${agentId}`;
     this.exec(["git", "commit", "-m", message], workspacePath);
-    this.exec(["git", "push", "-u", "origin", "HEAD"], workspacePath);
-    console.log(`[git] Step ${stepNumber} checkpoint committed and pushed: "${message}"`);
+    try {
+      this.exec(["git", "push", "-u", "origin", "HEAD"], workspacePath);
+      console.log(`[git] Step ${stepNumber} checkpoint committed and pushed: "${message}"`);
+    } catch (pushErr) {
+      console.warn(`[git] Step ${stepNumber} checkpoint committed locally (push skipped: ${(pushErr as Error).message.split("\n")[0]})`);
+    }
     return true;
   }
 
@@ -289,6 +296,15 @@ export class GitManager {
       if (runtimePattern.test(file)) {
         this.execRaw(["git", "reset", "HEAD", "--", file], workspacePath);
       }
+    }
+  }
+
+  private ensureGitIdentity(cwd: string): void {
+    const emailResult = this.execRaw(["git", "config", "--global", "user.email"], cwd);
+    if (!emailResult.stdout.trim()) {
+      this.execRaw(["git", "config", "--global", "user.email", "sprintfoundry@localhost"], cwd);
+      this.execRaw(["git", "config", "--global", "user.name", "SprintFoundry"], cwd);
+      console.log(`[git] No git identity configured — set default: SprintFoundry <sprintfoundry@localhost>`);
     }
   }
 

@@ -98,6 +98,13 @@ budget_overrides:
   per_task_total_tokens: 300000
   per_task_max_cost_usd: 3.00
 
+# Temp guardrails for SDK testing
+guardrails:
+  deny_commands:
+    - "rm\\s+-rf"
+  allow_paths:
+    - "**"
+
 branch_strategy:
   prefix: feat/
   include_ticket_id: true

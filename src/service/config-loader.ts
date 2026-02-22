@@ -55,5 +55,16 @@ export async function loadConfig(configDir: string, projectName?: string) {
     }
   }
 
-  return { platform, project: project! };
+  const resolved = project!;
+  // Ensure optional fields are never undefined
+  resolved.rules = resolved.rules ?? [];
+  resolved.agents = resolved.agents ?? [];
+  resolved.integrations = resolved.integrations ?? ({} as typeof resolved.integrations);
+  resolved.branch_strategy = resolved.branch_strategy ?? {
+    prefix: "feat/",
+    include_ticket_id: true,
+    naming: "kebab-case",
+  };
+
+  return { platform, project: resolved };
 }

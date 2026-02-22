@@ -62,9 +62,14 @@ From source, replace `sprintfoundry` with `pnpm dev --`.
 ## Monitor
 
 ```bash
+# From npm/brew install:
+sprintfoundry monitor
+
+# From source:
 pnpm monitor
-# Open http://127.0.0.1:4310/
 ```
+
+Open http://127.0.0.1:4310/
 
 The monitor shows all runs, live step progress, agent output, token usage, and cost.
 
@@ -77,6 +82,7 @@ Commands:
   run       Execute an end-to-end task
   validate  Validate platform and project configuration
   review    Submit a human review decision for a pending gate
+  monitor   Start the monitor web UI
 
 Options (run):
   --project <name>      Project config name (matches config/<name>.yaml)
@@ -84,14 +90,15 @@ Options (run):
   --ticket <id>         Ticket ID (for github/linear/jira sources)
   --prompt <text>       Task description (for prompt source)
   --dry-run             Plan only, do not execute steps
-  --step <n>            Resume from a specific step number
-  --workspace <path>    Use an existing workspace directory
+
+Options (monitor):
+  --port <port>         Port to listen on (default: 4310)
 
 Options (review):
   --workspace <path>    Path to the run workspace
   --review-id <id>      Review gate ID (from monitor or workspace)
-  --decision <d>        approved | rejected | changes_requested
-  --comment <text>      Optional review comment
+  --decision <d>        approved | rejected
+  --feedback <text>     Optional review comment
 ```
 
 ## Configuration

@@ -69,11 +69,68 @@ export class PlanValidator {
       }
     }
 
+    // Remap any hallucinated agent IDs to the nearest known agent
+    this.remapUnknownAgents(validated);
+
     // Final validation: ensure plan is coherent
     this.validateDependencies(validated);
     this.validateNoDuplicateSteps(validated);
 
     return validated;
+  }
+
+  // ---- Agent Remap (hallucination guard) ----
+
+  /**
+   * If the orchestrator LLM outputs an agent ID that doesn't exist in
+   * platform.yaml (e.g. "js-developer"), remap it to the closest known agent:
+   *   1. Try stripping a leading "<stack>-" prefix (js-developer → developer)
+   *   2. Try matching by role keyword in the ID (anything ending in "-qa" → qa role)
+   *   3. If the project catalog limits agents, prefer catalog members
+   *
+   * Steps whose agent cannot be resolved are removed with a warning.
+   */
+  private remapUnknownAgents(plan: ExecutionPlan): void {
+    const knownIds = new Set(this.agentDefs.map((d) => d.type));
+    const catalog = this.projectConfig.agents;
+
+    plan.steps = plan.steps.filter((step) => {
+      if (knownIds.has(step.agent)) return true;
+
+      // Attempt prefix-strip remap: "js-developer" → "developer", "ts-qa" → "qa"
+      const parts = step.agent.split("-");
+      for (let i = 1; i < parts.length; i++) {
+        const candidate = parts.slice(i).join("-");
+        if (knownIds.has(candidate)) {
+          console.warn(
+            `[plan-validator] Unknown agent "${step.agent}" remapped to "${candidate}"`
+          );
+          step.agent = candidate as AgentType;
+          return true;
+        }
+      }
+
+      // Attempt role-match: find any agent whose role keyword appears in the ID
+      const matchByRole = this.agentDefs.find((d) =>
+        step.agent.includes(d.role) &&
+        (!catalog || catalog.length === 0 || catalog.includes(d.type))
+      );
+      if (matchByRole) {
+        console.warn(
+          `[plan-validator] Unknown agent "${step.agent}" remapped to "${matchByRole.type}" via role match`
+        );
+        step.agent = matchByRole.type as AgentType;
+        return true;
+      }
+
+      console.warn(
+        `[plan-validator] Dropping step ${step.step_number}: unknown agent "${step.agent}" (not in platform.yaml)`
+      );
+      return false;
+    });
+
+    // Re-number steps after potential removals
+    plan.steps.forEach((s, i) => { s.step_number = i + 1; });
   }
 
   // ---- Role Lookup ----

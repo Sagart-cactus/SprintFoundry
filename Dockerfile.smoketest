@@ -1,0 +1,26 @@
+FROM node:20-slim
+
+# Install pnpm
+RUN npm install -g pnpm@9
+
+WORKDIR /sprintfoundry
+
+# Copy source (respect .dockerignore)
+COPY package.json pnpm-lock.yaml tsconfig.json ./
+COPY src/ ./src/
+COPY monitor/ ./monitor/
+COPY config/platform.yaml ./config/platform.yaml
+COPY config/project.example.yaml ./config/project.example.yaml
+COPY src/agents/ ./src/agents/
+COPY src/agents-codex/ ./src/agents-codex/
+COPY plugins/ ./plugins/
+
+# Install deps and build
+RUN pnpm install --frozen-lockfile
+RUN pnpm build
+
+# Copy smoke test script
+COPY scripts/smoke-test.sh /smoke-test.sh
+RUN chmod +x /smoke-test.sh
+
+ENTRYPOINT ["/smoke-test.sh"]

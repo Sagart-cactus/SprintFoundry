@@ -3,6 +3,7 @@
 import { Command } from "commander";
 import * as fs from "fs/promises";
 import * as path from "path";
+import { fileURLToPath } from "url";
 import type { TaskSource } from "./shared/types.js";
 import { OrchestrationService } from "./service/orchestration-service.js";
 import { loadConfig } from "./service/config-loader.js";
@@ -17,7 +18,7 @@ const program = new Command();
 program
   .name("sprintfoundry")
   .description("AI-powered multi-agent software development lifecycle")
-  .version("0.2.0");
+  .version("0.2.1");
 
 program
   .command("run")
@@ -27,6 +28,7 @@ program
   .option("--prompt <text>", "Direct prompt text (required for source=prompt)")
   .option("--config <dir>", "Config directory", "config")
   .option("--project <name>", "Project name (loads <name>.yaml or project-<name>.yaml)")
+  .option("--dry-run", "Plan only — generate and print the execution plan without running agents")
   .action(async (opts) => {
     const source = opts.source as TaskSource;
 
@@ -50,16 +52,29 @@ program
     console.log(`  Project: ${project.name} (${project.project_id})`);
     if (project.stack) console.log(`  Stack: ${project.stack}`);
     if (project.agents) console.log(`  Agents: ${project.agents.join(", ")}`);
+    if (opts.dryRun) console.log(`  Mode: dry-run (plan only)`);
     console.log("");
 
-    const run = await service.handleTask(ticketId, source, opts.prompt);
+    const run = await service.handleTask(ticketId, source, opts.prompt, { dryRun: !!opts.dryRun });
 
     console.log("");
-    console.log(`Run complete.`);
-    console.log(`  Status: ${run.status}`);
-    console.log(`  Steps executed: ${run.steps.length}`);
-    console.log(`  Total tokens: ${run.total_tokens_used.toLocaleString()}`);
-    console.log(`  Total cost: $${run.total_cost_usd.toFixed(2)}`);
+    if (opts.dryRun) {
+      console.log(`Dry-run complete. Execution plan:`);
+      const plan = run.validated_plan ?? run.plan;
+      if (plan) {
+        console.log(`  Classification: ${plan.classification}`);
+        console.log(`  Steps: ${plan.steps.length}`);
+        for (const step of plan.steps) {
+          console.log(`    ${step.step_number}. [${step.agent}] ${step.task.slice(0, 100)}`);
+        }
+      }
+    } else {
+      console.log(`Run complete.`);
+      console.log(`  Status: ${run.status}`);
+      console.log(`  Steps executed: ${run.steps.length}`);
+      console.log(`  Total tokens: ${run.total_tokens_used.toLocaleString()}`);
+      console.log(`  Total cost: $${run.total_cost_usd.toFixed(2)}`);
+    }
 
     if (run.pr_url) {
       console.log(`  PR: ${run.pr_url}`);
@@ -125,6 +140,28 @@ program
       "utf-8"
     );
     console.log(`Review decision written: ${decisionPath}`);
+  });
+
+program
+  .command("monitor")
+  .description("Start the monitor web UI")
+  .option("--port <port>", "Port to listen on", "4310")
+  .action(async (opts) => {
+    const { spawn } = await import("child_process");
+    const __filename = fileURLToPath(import.meta.url);
+    const __dirname = path.dirname(__filename);
+    // Works for both: npm global install (dist/) and source (src/)
+    const serverPath = path.resolve(__dirname, "../monitor/server.mjs");
+    try {
+      await fs.access(serverPath);
+    } catch {
+      console.error(`Monitor server not found at ${serverPath}`);
+      console.error("If installed from source, run: pnpm monitor");
+      process.exit(1);
+    }
+    console.log(`Starting monitor on http://127.0.0.1:${opts.port}/`);
+    const proc = spawn("node", [serverPath, "--port", opts.port], { stdio: "inherit" });
+    proc.on("exit", (code) => process.exit(code ?? 0));
   });
 
 const projectCmd = new Command("project").description("Project management commands");

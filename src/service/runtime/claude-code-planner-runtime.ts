@@ -55,6 +55,7 @@ export class ClaudeCodePlannerRuntime implements PlannerRuntime {
       cwd: workspacePath,
       env: {
         ...process.env,
+        CLAUDECODE: undefined, // unset to allow nested claude invocations
         ...(apiKey ? { ANTHROPIC_API_KEY: apiKey } : {}),
         ...(model ? { ANTHROPIC_MODEL: model } : {}),
       },
@@ -146,6 +147,7 @@ Each step: { "step_number": 900+N, "agent": "id", "model": "string", "task": "de
         cwd: workspacePath,
         env: {
           ...process.env,
+          CLAUDECODE: undefined, // unset to allow nested claude invocations
           ...(apiKey ? { ANTHROPIC_API_KEY: apiKey } : {}),
           ...(model ? { ANTHROPIC_MODEL: model } : {}),
         },

@@ -43,6 +43,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       cwd: config.workspacePath,
       env: {
         ...process.env,
+        CLAUDECODE: undefined, // unset to allow nested claude invocations
         ...(config.apiKey ? { ANTHROPIC_API_KEY: config.apiKey } : {}),
         ANTHROPIC_MODEL: config.modelConfig.model,
         ...(config.runtime.env ?? {}),
@@ -105,6 +106,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     const flags = config.cliFlags ?? {};
     const env = {
       ...process.env,
+      CLAUDECODE: undefined, // unset to allow nested claude invocations
       ...(config.apiKey ? { ANTHROPIC_API_KEY: config.apiKey } : {}),
       ANTHROPIC_MODEL: config.modelConfig.model,
       ...(config.runtime.env ?? {}),

@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.git/
+*.log
+video/
+.playwright-cli/
+.playwright-mcp/
+workspaces/
+config/project.yaml
+config/project-*.yaml
+!config/project.example.yaml

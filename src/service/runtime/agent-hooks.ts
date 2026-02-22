@@ -1,4 +1,5 @@
 import path from "path";
+import { realpathSync } from "fs";
 import type { GuardrailConfig } from "../../shared/types.js";
 
 export type GuardrailToolCall = {
@@ -35,6 +36,24 @@ export function evaluateGuardrail(
   return { allowed: true };
 }
 
+// Resolve symlinks for path comparison. Falls back to path.resolve if the
+// path doesn't exist yet (e.g., a file being created for the first time).
+function realpath(p: string): string {
+  // Walk up until we find an existing ancestor, then append the rest
+  const parts = p.split(path.sep);
+  for (let i = parts.length; i > 0; i--) {
+    const candidate = parts.slice(0, i).join(path.sep) || path.sep;
+    try {
+      const real = realpathSync(candidate);
+      const remainder = parts.slice(i).join(path.sep);
+      return remainder ? path.join(real, remainder) : real;
+    } catch {
+      // path does not exist, try shorter prefix
+    }
+  }
+  return p;
+}
+
 function matchCommandGuards(command: string, denyPatterns?: string[]): GuardrailDecision {
   if (!denyPatterns || denyPatterns.length === 0) return { allowed: true };
   for (const pattern of denyPatterns) {
@@ -62,8 +81,8 @@ function matchPathGuards(
   guardrails: GuardrailConfig,
   workspacePath: string
 ): GuardrailDecision {
-  const resolved = path.resolve(workspacePath, rawPath);
-  const workspaceRoot = path.resolve(workspacePath);
+  const resolved = realpath(path.resolve(workspacePath, rawPath));
+  const workspaceRoot = realpath(path.resolve(workspacePath));
   const isInsideWorkspace = resolved === workspaceRoot || resolved.startsWith(workspaceRoot + path.sep);
   const relPath = path.relative(workspaceRoot, resolved).replace(/\\/g, "/");
 
