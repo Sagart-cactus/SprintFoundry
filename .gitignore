@@ -10,6 +10,9 @@ mnt/user-data/outputs/
 coverage/
 *.log
 
+# Local video/animation project (kept locally, not committed)
+video/
+
 # Runtime artifacts
 .codex-home/
 .agent-context/
