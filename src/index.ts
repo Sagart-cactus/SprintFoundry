@@ -265,7 +265,7 @@ program
         if (rt.mode === "container") needsDocker = true;
       } else if (rt.provider === "codex") {
         if (rt.mode === "local_process") needsCodexCli = true;
-        if (rt.mode === "local_process" || rt.mode === "local_sdk") needsOpenaiKey = true;
+        if (rt.mode === "local_sdk") needsOpenaiKey = true;
       }
     };
 
