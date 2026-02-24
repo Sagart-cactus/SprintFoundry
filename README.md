@@ -201,4 +201,7 @@ docs/                # Full documentation
 
 ## License
 
-MIT
+SprintFoundry is licensed under the Apache License 2.0.
+See the LICENSE file for details.
+
+Copyright (c) 2026 Sagar Trivedi.
