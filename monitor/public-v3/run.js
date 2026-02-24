@@ -41,6 +41,8 @@ const state = {
   expandedReviewSections: new Set(),
   // Cached diff content: "reviewId:filePath" → diff string
   artifactDiffs: new Map(),
+  // Track open <details> inside the detail drawer (metadata section + nested entries)
+  expandedDrawerSections: new Set(),
   drawer: {
     open: false,
     step: null,
@@ -895,6 +897,72 @@ async function loadDrawerArtifactDiff(stepNumber, filePath, detailsEl) {
   }
 }
 
+// ── Metadata UI renderer ──
+
+function renderMetaEntry(key, value, keyPath = key) {
+  const label = escapeHtml(key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()));
+
+  // Nested object or array → collapsible sub-section spanning both columns
+  if (value !== null && typeof value === "object") {
+    const isArr = Array.isArray(value);
+    const count = isArr ? value.length : Object.keys(value).length;
+    const countLabel = `${count} ${isArr ? "items" : "fields"}`;
+    // Stable ID scoped to the current drawer step + key path so it survives refreshes
+    const nestedId = `meta-${state.drawer.step}-${keyPath}`;
+
+    let innerHtml;
+    if (isArr && value.every((v) => typeof v !== "object" || v === null)) {
+      // Simple array → chips
+      innerHtml = `<div class="meta-chips">${value.map((v) => `<span class="meta-chip">${escapeHtml(String(v ?? ""))}</span>`).join("")}</div>`;
+    } else if (!isArr) {
+      // Nested object → recursive key-value grid (pass down the key path)
+      innerHtml = `<div class="result-grid">${Object.entries(value).map(([k, v]) => renderMetaEntry(k, v, `${keyPath}.${k}`)).join("")}</div>`;
+    } else {
+      // Complex array → fall back to raw JSON tree
+      innerHtml = `<div class="json-tree">${renderValueTree(value)}</div>`;
+    }
+    return `
+      <div class="meta-nested-wrap">
+        <details class="meta-nested" data-detail-id="${escapeHtml(nestedId)}" ${state.expandedDrawerSections.has(nestedId) ? "open" : ""}>
+          <summary>${label} <span class="detail-count">${escapeHtml(countLabel)}</span></summary>
+          <div class="meta-nested-body">${innerHtml}</div>
+        </details>
+      </div>`;
+  }
+
+  // null / undefined
+  if (value === null || value === undefined) {
+    return `<div class="result-key">${label}</div><div class="result-value meta-null">—</div>`;
+  }
+
+  // Boolean
+  if (typeof value === "boolean") {
+    return `<div class="result-key">${label}</div><div class="result-value"><span class="meta-bool ${value ? "meta-bool--yes" : "meta-bool--no"}">${value ? "Yes" : "No"}</span></div>`;
+  }
+
+  // URL string → link
+  if (typeof value === "string" && /^https?:\/\//.test(value)) {
+    return `<div class="result-key">${label}</div><div class="result-value"><a class="meta-link" href="${escapeHtml(value)}" target="_blank" rel="noopener noreferrer">${escapeHtml(value)}</a></div>`;
+  }
+
+  // Number → mono
+  if (typeof value === "number") {
+    return `<div class="result-key">${label}</div><div class="result-value meta-mono">${escapeHtml(String(value))}</div>`;
+  }
+
+  // Default string
+  return `<div class="result-key">${label}</div><div class="result-value">${escapeHtml(String(value))}</div>`;
+}
+
+function renderMetadataUI(metadata) {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return '<p class="empty">No metadata</p>';
+  }
+  const entries = Object.entries(metadata);
+  if (!entries.length) return '<p class="empty">Empty</p>';
+  return `<div class="result-grid">${entries.map(([k, v]) => renderMetaEntry(k, v)).join("")}</div>`;
+}
+
 async function renderDrawer() {
   if (!state.drawer.open || !Number.isFinite(state.drawer.step)) return;
   const stepNumber = state.drawer.step;
@@ -922,6 +990,30 @@ async function renderDrawer() {
         <div>${renderAgentErr(stepStderr, stepNumFilter)}</div>
       </section>
     `;
+    return;
+  }
+
+  if (state.drawer.mode === "files") {
+    detailDrawerTitle.textContent = "Files Modified";
+    detailDrawerBody.innerHTML = '<p class="empty">Loading…</p>';
+    try {
+      const payload = await ensureStepResult(stepNumber);
+      const result = payload?.result;
+      const artifactsCreated = Array.isArray(result?.artifacts_created) ? result.artifacts_created : [];
+      const artifactsModified = Array.isArray(result?.artifacts_modified) ? result.artifacts_modified : [];
+      detailDrawerBody.innerHTML = `
+        <section class="drawer-section">
+          <h3>Files Created (${artifactsCreated.length})</h3>
+          ${renderArtifactDiffDetails(stepNumber, artifactsCreated)}
+        </section>
+        <section class="drawer-section">
+          <h3>Files Modified (${artifactsModified.length})</h3>
+          ${renderArtifactDiffDetails(stepNumber, artifactsModified)}
+        </section>
+      `;
+    } catch (err) {
+      detailDrawerBody.innerHTML = `<p class="empty">Error: ${escapeHtml(String(err))}</p>`;
+    }
     return;
   }
 
@@ -960,10 +1052,12 @@ async function renderDrawer() {
       <h3>Issues (${issues.length})</h3>
       ${issues.length ? `<ul class="result-list">${issues.map((issue) => `<li>${escapeHtml(String(issue))}</li>`).join("")}</ul>` : '<p class="empty">None</p>'}
     </section>
-    <section class="drawer-section">
-      <h3>Metadata</h3>
-      <div class="json-tree">${renderValueTree(result.metadata ?? {})}</div>
-    </section>
+    <details class="drawer-section drawer-collapsible" data-detail-id="${escapeHtml(`drawer-meta-${stepNumber}`)}" ${state.expandedDrawerSections.has(`drawer-meta-${stepNumber}`) ? "open" : ""}>
+      <summary>Metadata <span class="detail-count">${escapeHtml(String(Object.keys(result.metadata ?? {}).length))} fields</span></summary>
+      <div class="drawer-collapsible-body">
+        ${renderMetadataUI(result.metadata ?? {})}
+      </div>
+    </details>
   `;
 }
 
@@ -1038,6 +1132,9 @@ function renderFeed(runData, events, stepMeta) {
                 </button>
                 <button class="feed-action-btn" type="button" data-drawer-action="result" data-step="${escapeHtml(String(step.step_number))}">
                   Step Result
+                </button>
+                <button class="feed-action-btn feed-action-btn--files" type="button" data-drawer-action="files" data-step="${escapeHtml(String(step.step_number))}">
+                  Files Modified
                 </button>
               </div>
             `
@@ -1206,7 +1303,7 @@ runFeed.addEventListener("click", (event) => {
   const mode = actionBtn.dataset.drawerAction;
   const stepNumber = Number(actionBtn.dataset.step);
   if (!Number.isFinite(stepNumber)) return;
-  if (mode === "output" || mode === "result") {
+  if (mode === "output" || mode === "result" || mode === "files") {
     openDrawer(mode, stepNumber);
   }
 });
@@ -1255,17 +1352,28 @@ sidebarPlan.addEventListener(
 detailDrawer.addEventListener("toggle", (event) => {
   const details = event.target;
   if (!(details instanceof HTMLDetailsElement)) return;
+
+  // Artifact diff sections (files drawer + result drawer)
   const artifactPath = details.dataset.artifactPath;
   const step = Number(details.dataset.step);
-  if (!artifactPath || !Number.isFinite(step)) return;
-  const key = `step-${step}:${artifactPath}`;
-  if (details.open) {
-    state.expandedReviewSections.add(key);
-    if (!state.artifactDiffs.has(key)) {
-      void loadDrawerArtifactDiff(step, artifactPath, details);
+  if (artifactPath && Number.isFinite(step)) {
+    const key = `step-${step}:${artifactPath}`;
+    if (details.open) {
+      state.expandedReviewSections.add(key);
+      if (!state.artifactDiffs.has(key)) {
+        void loadDrawerArtifactDiff(step, artifactPath, details);
+      }
+    } else {
+      state.expandedReviewSections.delete(key);
     }
-  } else {
-    state.expandedReviewSections.delete(key);
+    return;
+  }
+
+  // Generic collapsible sections: metadata top-level + nested meta entries
+  const detailId = details.dataset.detailId;
+  if (detailId) {
+    if (details.open) state.expandedDrawerSections.add(detailId);
+    else state.expandedDrawerSections.delete(detailId);
   }
 }, true);
 

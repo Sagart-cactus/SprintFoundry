@@ -106,26 +106,65 @@ function runDuration(run) {
   return Math.max(...ends) - Math.min(...starts);
 }
 
+function runStartMs(run) {
+  const starts = (run.steps ?? [])
+    .map((s) => Date.parse(s.started_at || ""))
+    .filter(Number.isFinite);
+  return starts.length ? Math.min(...starts) : null;
+}
+
+function fmtElapsed(ms) {
+  if (ms == null || Number.isNaN(ms) || ms < 0) return null;
+  const sec = Math.floor(ms / 1000);
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  const pad = (n) => String(n).padStart(2, "0");
+  return h > 0 ? `${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+}
+
 function activeAgent(run) {
   const status = String(run.status ?? "").toLowerCase();
 
-  // For completed runs, show total duration
   if (status === "completed") {
     const dur = runDuration(run);
     return dur != null ? `Ran ${fmtDuration(dur)}` : "Completed";
   }
 
-  // For failed runs, show failure hint
   if (status === "failed") {
     const failedStep = (run.steps ?? []).find((s) => s.status === "failed");
     return failedStep ? `Failed at ${failedStep.agent || "step"} ${failedStep.step_number}` : "Failed";
   }
 
   const running = (run.steps ?? []).find((s) => s.status === "running");
-  if (running) return `${running.agent || "agent"} · step ${running.step_number}`;
+  if (running) {
+    const model = run.step_models?.[String(running.step_number)] || "";
+    const startMs = runStartMs(run);
+    const elapsed = startMs != null ? fmtElapsed(Date.now() - startMs) : null;
+    const parts = [running.agent || "agent"];
+    if (model) parts.push(model);
+    if (elapsed) parts.push(elapsed);
+    return parts.join(" · ");
+  }
+
   const next = (run.steps ?? []).find((s) => s.status === "pending");
-  if (next) return `${next.agent || "agent"} · next ${next.step_number}`;
+  if (next) return `${next.agent || "agent"} · next up`;
   return "-";
+}
+
+function renderStepPills(run) {
+  const steps = run.steps ?? [];
+  if (!steps.length) return "";
+  return steps
+    .map((step) => {
+      const cls =
+        step.status === "completed" ? "completed" :
+        step.status === "running"   ? "running"   :
+        step.status === "failed"    ? "failed"    : "";
+      const label = step.agent || `step${step.step_number}`;
+      return `<span class="step-pill ${escapeHtml(cls)}">${escapeHtml(label)}</span>`;
+    })
+    .join("");
 }
 
 function matchesSearch(run, query) {
@@ -166,6 +205,7 @@ function renderLane(container, runs) {
       const cardClasses = ["run-card", escapeHtml(status)];
       if (stale) cardClasses.push("stale");
 
+      const pills = renderStepPills(run);
       return `
         <a class="${cardClasses.join(" ")}" href="/v3/run?project=${encodeURIComponent(run.project_id)}&run=${encodeURIComponent(run.run_id)}">
           <div class="card-head">
@@ -178,11 +218,8 @@ function renderLane(container, runs) {
             <span class="chip">${escapeHtml(run.project_id)}</span>
             <span class="chip">${escapeHtml(run.classification || "unclassified")}</span>
           </div>
-          <div class="metric-row">
-            <span>${escapeHtml(`${progress.done} of ${progress.total} steps`)}</span>
-            <span>${escapeHtml(humanTokens(totalTokens(run)))}</span>
-          </div>
           <div class="progress"><span style="width:${progress.pct}%"></span></div>
+          ${pills ? `<div class="step-pills">${pills}</div>` : ""}
           <p class="active-agent">${escapeHtml(activeAgent(run))}</p>
         </a>
       `;
