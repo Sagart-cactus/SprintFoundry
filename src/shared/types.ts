@@ -58,7 +58,8 @@ export type TaskClassification =
   | "infrastructure"
   | "security_fix"
   | "documentation"
-  | "product_question";
+  | "product_question"
+  | "direct";
 
 export interface PlanStep {
   step_number: number;

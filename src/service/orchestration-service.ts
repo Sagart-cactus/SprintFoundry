@@ -13,6 +13,7 @@ import type {
   PlanStep,
   StepExecution,
   AgentResult,
+  AgentDefinition,
   ProjectConfig,
   PlatformConfig,
   BudgetConfig,
@@ -26,6 +27,7 @@ import type {
   RuntimeConfig,
   RuntimeMetadataEnvelope,
 } from "../shared/types.js";
+import { parse as parseYaml } from "yaml";
 import { PlanValidator } from "./plan-validator.js";
 import { AgentRunner } from "./agent-runner.js";
 import { EventStore } from "./event-store.js";
@@ -70,7 +72,7 @@ export class OrchestrationService {
     ticketId: string,
     source: "linear" | "github" | "jira" | "prompt",
     promptText?: string,
-    opts?: { dryRun?: boolean }
+    opts?: { dryRun?: boolean; agent?: string; agentFile?: string }
   ): Promise<TaskRun> {
     // 1. Create the run
     const run = this.createRun(ticketId);
@@ -105,6 +107,11 @@ export class OrchestrationService {
 
       if (!opts?.dryRun) {
         await this.runRegistryPreflight(workspacePath);
+      }
+
+      // 4a. Direct single-agent mode (bypasses orchestrator + plan validator)
+      if (opts?.agent) {
+        return await this.runDirectAgent(run, opts.agent, ticket, workspacePath, opts.agentFile);
       }
 
       // 4. Get plan from orchestrator agent
@@ -170,6 +177,77 @@ export class OrchestrationService {
     } finally {
       await this.events.close();
     }
+  }
+
+  // ---- Direct Single-Agent Execution ----
+
+  private async runDirectAgent(
+    run: TaskRun,
+    agentId: string,
+    ticket: TicketDetails,
+    workspacePath: string,
+    agentFile?: string
+  ): Promise<TaskRun> {
+    // If an inline agent file was provided, load and register it temporarily
+    if (agentFile) {
+      try {
+        const raw = await fs.readFile(agentFile, "utf-8");
+        const def = parseYaml(raw) as AgentDefinition;
+        if (!def?.type) throw new Error("Agent file must contain a 'type' field");
+        if (!this.platformConfig.agent_definitions.find((a) => a.type === def.type)) {
+          this.platformConfig.agent_definitions.push(def);
+        }
+      } catch (err) {
+        throw new Error(`Failed to load agent file "${agentFile}": ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    // Validate agent ID exists in the catalog
+    const agentDef = this.platformConfig.agent_definitions.find((a) => a.type === agentId);
+    if (!agentDef) {
+      const available = this.platformConfig.agent_definitions.map((a) => a.type).join(", ");
+      throw new Error(`Agent '${agentId}' not found. Available agents: ${available}`);
+    }
+
+    console.log(`[orchestrator] Direct mode: running agent '${agentId}' (role: ${agentDef.role})`);
+
+    // Build a synthetic single-step plan — no LLM, no validator
+    const plan: ExecutionPlan = {
+      plan_id: `direct-${Date.now()}`,
+      ticket_id: ticket.id,
+      classification: "direct",
+      reasoning: `Direct single-agent run: ${agentId}`,
+      steps: [
+        {
+          step_number: 1,
+          agent: agentId,
+          task: ticket.description || ticket.title,
+          context_inputs: [{ type: "ticket" }],
+          depends_on: [],
+          estimated_complexity: "medium",
+        },
+      ],
+      parallel_groups: [],
+      human_gates: [],
+    };
+
+    run.plan = plan;
+    run.validated_plan = plan;
+    run.status = "executing";
+
+    await this.emitEvent(run.run_id, "task.plan_generated", { plan });
+
+    await this.executePlan(run, plan, workspacePath);
+
+    if ((run.status as string) === "completed") {
+      const prUrl = await this.git.createPullRequest(workspacePath, run);
+      run.pr_url = prUrl;
+      await this.emitEvent(run.run_id, "pr.created", { prUrl });
+      await this.tickets.updateStatus(ticket, "in_review", prUrl);
+      await this.notifications.send(`Task ${ticket.id} completed. PR: ${prUrl}`);
+    }
+
+    return run;
   }
 
   // ---- Plan Execution Engine ----
