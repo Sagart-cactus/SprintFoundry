@@ -111,6 +111,11 @@ export class OrchestrationService {
 
       // 4a. Direct single-agent mode (bypasses orchestrator + plan validator)
       if (opts?.agent) {
+        if (opts?.dryRun) {
+          run.status = "completed";
+          console.log(`[orchestrator] Dry-run mode — skipping direct agent execution.`);
+          return run;
+        }
         return await this.runDirectAgent(run, opts.agent, ticket, workspacePath, opts.agentFile);
       }
 
