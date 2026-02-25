@@ -1,7 +1,7 @@
 import * as fs from "fs/promises";
 import * as path from "path";
 import { parse as parseYaml } from "yaml";
-import type { PlatformConfig, ProjectConfig } from "../shared/types.js";
+import type { AgentDefinition, PlatformConfig, ProjectConfig } from "../shared/types.js";
 
 export async function loadYaml<T>(filePath: string): Promise<T> {
   const raw = await fs.readFile(filePath, "utf-8");
@@ -65,6 +65,28 @@ export async function loadConfig(configDir: string, projectName?: string) {
     include_ticket_id: true,
     naming: "kebab-case",
   };
+
+  // Merge custom agent definitions from config/agents/*.yaml
+  // Each file defines a single AgentDefinition; types not already in platform.yaml are added.
+  const agentsDir = path.join(configDir, "agents");
+  try {
+    const entries = await fs.readdir(agentsDir);
+    for (const entry of entries) {
+      if (!entry.endsWith(".yaml") && !entry.endsWith(".yml")) continue;
+      try {
+        const raw = await fs.readFile(path.join(agentsDir, entry), "utf-8");
+        const interpolated = raw.replace(/\$\{(\w+)\}/g, (_, v) => process.env[v] ?? "");
+        const def = parseYaml(interpolated) as AgentDefinition;
+        if (def?.type && !platform.agent_definitions.find((a) => a.type === def.type)) {
+          platform.agent_definitions.push(def);
+        }
+      } catch {
+        // Skip malformed or unreadable agent files
+      }
+    }
+  } catch {
+    // config/agents/ directory doesn't exist — that's fine
+  }
 
   return { platform, project: resolved };
 }

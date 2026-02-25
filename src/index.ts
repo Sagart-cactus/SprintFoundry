@@ -9,6 +9,7 @@ import { OrchestrationService } from "./service/orchestration-service.js";
 import { loadConfig } from "./service/config-loader.js";
 import { migrateEnvVars } from "./service/env-compat.js";
 import { runProjectCreate } from "./commands/project-create.js";
+import { runAgentCreate } from "./commands/agent-create.js";
 
 // Migrate deprecated AGENTSDLC_* env vars to SPRINTFOUNDRY_*
 migrateEnvVars();
@@ -29,6 +30,8 @@ program
   .option("--config <dir>", "Config directory", "config")
   .option("--project <name>", "Project name (loads <name>.yaml or project-<name>.yaml)")
   .option("--dry-run", "Plan only — generate and print the execution plan without running agents")
+  .option("--agent <agent>", "Run a single agent directly, bypassing SDLC orchestration")
+  .option("--agent-file <path>", "Path to a YAML/JSON file defining a custom agent inline (used with --agent)")
   .action(async (opts) => {
     const source = opts.source as TaskSource;
 
@@ -53,9 +56,14 @@ program
     if (project.stack) console.log(`  Stack: ${project.stack}`);
     if (project.agents) console.log(`  Agents: ${project.agents.join(", ")}`);
     if (opts.dryRun) console.log(`  Mode: dry-run (plan only)`);
+    if (opts.agent) console.log(`  Direct agent: ${opts.agent}${opts.agentFile ? ` (from ${opts.agentFile})` : ""}`);
     console.log("");
 
-    const run = await service.handleTask(ticketId, source, opts.prompt, { dryRun: !!opts.dryRun });
+    const run = await service.handleTask(ticketId, source, opts.prompt, {
+      dryRun: !!opts.dryRun,
+      agent: opts.agent,
+      agentFile: opts.agentFile,
+    });
 
     console.log("");
     if (opts.dryRun) {
@@ -423,6 +431,18 @@ projectCmd
   });
 
 program.addCommand(projectCmd);
+
+const agentCmd = new Command("agent").description("Agent management commands");
+
+agentCmd
+  .command("create")
+  .description("Interactively create a new custom agent definition")
+  .option("--config <dir>", "Config directory", "config")
+  .action(async (opts) => {
+    await runAgentCreate(opts.config);
+  });
+
+program.addCommand(agentCmd);
 
 const argv =
   process.argv[2] === "--"
