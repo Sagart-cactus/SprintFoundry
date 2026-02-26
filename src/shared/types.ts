@@ -21,6 +21,21 @@ export type AgentRole =
 
 export type TaskSource = "linear" | "github" | "jira" | "prompt";
 
+// ----- Project Stack Detection -----
+
+export interface ProjectStack {
+  stack: "node" | "go" | "python" | "rust" | "ruby" | "elixir" | "jvm" | "unknown";
+  package_manager?: string;          // pnpm, npm, yarn, bun, poetry, uv, pip, pipenv, etc.
+  detected_from: string[];           // manifest files that triggered detection
+  pre_commit_hooks: "husky" | "lefthook" | "pre-commit" | "none";
+  monorepo: boolean;
+  install_cmd?: string;
+  build_cmd?: string;
+  test_cmd?: string;
+  lint_cmd?: string;
+  typecheck_cmd?: string;
+}
+
 // ----- Ticket / Task -----
 
 export interface TicketDetails {

@@ -26,6 +26,7 @@ import type {
   RunStatus,
   RuntimeConfig,
   RuntimeMetadataEnvelope,
+  ProjectStack,
 } from "../shared/types.js";
 import { parse as parseYaml } from "yaml";
 import { PlanValidator } from "./plan-validator.js";
@@ -99,6 +100,14 @@ export class OrchestrationService {
         console.log(`[orchestrator] Cloning repo and creating branch...`);
         await this.git.cloneAndBranch(workspacePath, ticket);
         console.log(`[orchestrator] Repo cloned successfully.`);
+
+        // Detect project stack once — write .agent-context/stack.json for planner + all agents
+        const stack = await this.detectProjectStack(workspacePath);
+        console.log(
+          `[orchestrator] Stack detected: ${stack.stack}${stack.package_manager ? `/${stack.package_manager}` : ""}` +
+          (stack.pre_commit_hooks !== "none" ? ` (pre-commit: ${stack.pre_commit_hooks})` : "")
+        );
+        await this.emitEvent(run.run_id, "task.stack_detected", { stack });
       }
 
       // Initialize event store after clone. Initializing earlier can create
@@ -1045,6 +1054,132 @@ export class OrchestrationService {
   private buildRegistryPingUrl(registry: string): string {
     const normalized = registry.endsWith("/") ? registry : `${registry}/`;
     return new URL("-/ping", normalized).toString();
+  }
+
+  // ---- Project Stack Detection ----
+
+  async detectProjectStack(workspacePath: string): Promise<ProjectStack> {
+    const check = (f: string) =>
+      fs.access(path.join(workspacePath, f)).then(() => true, () => false);
+
+    let stack: ProjectStack["stack"] = "unknown";
+    let package_manager: string | undefined;
+    const detected_from: string[] = [];
+
+    if (await check("go.mod")) {
+      stack = "go"; detected_from.push("go.mod");
+    } else if (await check("Cargo.toml")) {
+      stack = "rust"; detected_from.push("Cargo.toml");
+    } else if (
+      await check("pyproject.toml") || await check("requirements.txt") || await check("setup.py")
+    ) {
+      stack = "python";
+      detected_from.push("pyproject.toml/requirements.txt/setup.py");
+      if (await check("poetry.lock")) package_manager = "poetry";
+      else if (await check("uv.lock")) package_manager = "uv";
+      else if (await check("Pipfile.lock")) package_manager = "pipenv";
+      else package_manager = "pip";
+    } else if (await check("Gemfile")) {
+      stack = "ruby"; detected_from.push("Gemfile");
+    } else if (await check("mix.exs")) {
+      stack = "elixir"; detected_from.push("mix.exs");
+    } else if (await check("pom.xml") || await check("build.gradle") || await check("build.gradle.kts")) {
+      stack = "jvm"; detected_from.push("pom.xml/build.gradle");
+    } else if (await check("package.json")) {
+      stack = "node"; detected_from.push("package.json");
+      if (await check("pnpm-lock.yaml")) package_manager = "pnpm";
+      else if (await check("yarn.lock")) package_manager = "yarn";
+      else if (await check("bun.lockb")) package_manager = "bun";
+      else package_manager = "npm";
+    }
+
+    // Detect pre-commit hooks
+    let pre_commit_hooks: ProjectStack["pre_commit_hooks"] = "none";
+    if (await check(".husky/pre-commit")) pre_commit_hooks = "husky";
+    else if (await check(".lefthook.yml") || await check("lefthook.yml")) pre_commit_hooks = "lefthook";
+    else if (await check(".pre-commit-config.yaml")) pre_commit_hooks = "pre-commit";
+
+    // Detect monorepo
+    const monorepo =
+      (await check("pnpm-workspace.yaml")) ||
+      (await check("go.work")) ||
+      (await check("nx.json")) ||
+      (await check("turbo.json"));
+
+    const commands = this.deriveStackCommands(stack, package_manager);
+    const stackInfo: ProjectStack = {
+      stack,
+      ...(package_manager ? { package_manager } : {}),
+      detected_from,
+      pre_commit_hooks,
+      monorepo,
+      ...commands,
+    };
+
+    // Write to .agent-context/stack.json — available to planner + all agents
+    const contextDir = path.join(workspacePath, ".agent-context");
+    await fs.mkdir(contextDir, { recursive: true });
+    await fs.writeFile(
+      path.join(contextDir, "stack.json"),
+      JSON.stringify(stackInfo, null, 2),
+      "utf-8"
+    );
+
+    return stackInfo;
+  }
+
+  private deriveStackCommands(
+    stack: string,
+    pm?: string
+  ): Partial<Pick<ProjectStack, "install_cmd" | "build_cmd" | "test_cmd" | "lint_cmd" | "typecheck_cmd">> {
+    switch (stack) {
+      case "node": {
+        const c = pm ?? "npm";
+        return {
+          install_cmd: `${c} install --frozen-lockfile`,
+          build_cmd: `${c} run build`,
+          test_cmd: `${c} test`,
+          lint_cmd: `${c} run lint`,
+          typecheck_cmd: `${c} run typecheck`,
+        };
+      }
+      case "go":
+        return {
+          install_cmd: "go mod download",
+          build_cmd: "go build ./...",
+          test_cmd: "go test -race ./...",
+          lint_cmd: "go vet ./...",
+          typecheck_cmd: "",
+        };
+      case "python": {
+        const run = pm === "poetry" ? "poetry run" : pm === "uv" ? "uv run" : "";
+        return {
+          install_cmd: pm === "poetry" ? "poetry install" : pm === "uv" ? "uv sync" : "pip install -e .",
+          build_cmd: "",
+          test_cmd: run ? `${run} pytest` : "pytest",
+          lint_cmd: run ? `${run} ruff check .` : "ruff check . || flake8 .",
+          typecheck_cmd: run ? `${run} mypy .` : "mypy .",
+        };
+      }
+      case "rust":
+        return {
+          install_cmd: "cargo fetch",
+          build_cmd: "cargo build",
+          test_cmd: "cargo test",
+          lint_cmd: "cargo clippy",
+          typecheck_cmd: "",
+        };
+      case "ruby":
+        return {
+          install_cmd: "bundle install",
+          build_cmd: "",
+          test_cmd: "bundle exec rspec",
+          lint_cmd: "bundle exec rubocop",
+          typecheck_cmd: "",
+        };
+      default:
+        return {};
+    }
   }
 
   async runQualityGate(
