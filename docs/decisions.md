@@ -125,7 +125,7 @@ Claude Code already handles the entire agentic loop — tool use, file editing, 
 - If Claude Code changes its CLI interface, agents break
 
 ### Future Consideration
-OpenHands SDK remains a potential migration target. Its MIT-licensed core (SDK, agent-server, Docker images) provides similar containerized execution with better observability. The `enterprise/` directory requires a paid license but we wouldn't need it. If we outgrow Claude Code's CLI-based approach, OpenHands SDK is the natural graduation path. Our agent CLAUDE.md files and orchestration service would remain unchanged — only the runner layer would swap.
+OpenHands SDK remains a potential migration target. Its Apache-licensed core (SDK, agent-server, Docker images) provides similar containerized execution with better observability. The `enterprise/` directory requires a paid license but we wouldn't need it. If we outgrow Claude Code's CLI-based approach, OpenHands SDK is the natural graduation path. Our agent CLAUDE.md files and orchestration service would remain unchanged — only the runner layer would swap.
 
 ---
 
