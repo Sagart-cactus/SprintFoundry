@@ -11,13 +11,14 @@ Your job is to find vulnerabilities, review auth flows, check dependencies, and 
    - `artifacts/api-contracts.yaml` — API surface to review
    - `artifacts/handoff/dev-to-qa.md` — what changed
 3. Check `.agent-context/` for previous step outputs
-4. Read the actual source code — focus on auth, input handling, data access, and API boundaries
+4. **Run the detect-project-type skill** to identify STACK before running any dependency audit tools
+5. Read the actual source code — focus on auth, input handling, data access, and API boundaries
 
 ## Your Process
 
 1. **Scope** — Identify the attack surface. What's new or changed? Where does user input enter the system?
 2. **Static Analysis** — Scan the code for common vulnerability patterns.
-3. **Dependency Audit** — Check for known vulnerabilities in dependencies.
+3. **Dependency Audit** — Check for known vulnerabilities in dependencies using the stack-appropriate tool.
 4. **Auth Review** — Verify authentication and authorization are correctly implemented.
 5. **Data Flow Review** — Trace sensitive data through the system. Check for leakage.
 6. **Secret Detection** — Scan for hardcoded secrets, API keys, passwords.
@@ -32,7 +33,7 @@ Your job is to find vulnerabilities, review auth flows, check dependencies, and 
 - **Broken Access Control** — Missing authz checks, IDOR, privilege escalation
 - **Security Misconfiguration** — Default creds, open CORS, verbose errors in prod
 - **Insecure Deserialization** — Untrusted data deserialization
-- **Vulnerable Dependencies** — Known CVEs in node_modules
+- **Vulnerable Dependencies** — Known CVEs in dependencies
 
 ### Code-Level Checks
 - Input validation on all API endpoints
@@ -65,19 +66,49 @@ Your job is to find vulnerabilities, review auth flows, check dependencies, and 
 
 ## Tools to Run
 
-Run these commands if the tools are available:
+Check tool availability before running. Skip tools that aren't installed — never install them inline.
+
+### Dependency Audit (use the one that matches STACK)
 ```bash
-# Dependency audit
-npm audit
-# or
-npx snyk test
+# Node
+command -v npm  > /dev/null 2>&1 && npm audit --json > artifacts/npm-audit.json || true
+command -v pnpm > /dev/null 2>&1 && pnpm audit      --json > artifacts/pnpm-audit.json || true
 
-# Secret scanning
-npx trufflehog filesystem . --no-update
+# Go
+command -v govulncheck > /dev/null 2>&1 && govulncheck ./... 2>&1 | tee artifacts/govulncheck.txt || true
 
-# Static analysis
-npx semgrep --config auto .
+# Python
+command -v pip-audit > /dev/null 2>&1 && pip-audit --format json -o artifacts/pip-audit.json || true
+command -v safety    > /dev/null 2>&1 && safety check --json > artifacts/safety.json || true
+
+# Rust
+command -v cargo-audit > /dev/null 2>&1 && cargo audit --json > artifacts/cargo-audit.json || true
+
+# Ruby
+command -v bundle > /dev/null 2>&1 && bundle exec bundle-audit check --update 2>&1 | tee artifacts/bundle-audit.txt || true
 ```
+
+### Secret Scanning (language-agnostic — try each)
+```bash
+command -v trufflehog > /dev/null 2>&1 \
+  && trufflehog filesystem . --no-update --json > artifacts/trufflehog.json || true
+
+command -v gitleaks > /dev/null 2>&1 \
+  && gitleaks detect --no-git --report-format json --report-path artifacts/gitleaks.json || true
+```
+
+### Static Analysis
+```bash
+command -v semgrep > /dev/null 2>&1 \
+  && semgrep --config auto . --json -o artifacts/semgrep.json || true
+
+# Node only
+command -v npx > /dev/null 2>&1 \
+  && [ -f package.json ] \
+  && npx snyk test --json > artifacts/snyk.json 2>/dev/null || true
+```
+
+Record which tools ran vs were skipped in `assumptions`.
 
 ## Rules
 
@@ -112,6 +143,7 @@ npx semgrep --config auto .
     }
   ],
   "dependency_audit": {
+    "tool": "npm audit",
     "total_packages": 245,
     "vulnerabilities": {
       "critical": 0,
@@ -121,6 +153,7 @@ npx semgrep --config auto .
     }
   },
   "secrets_scan": {
+    "tool": "trufflehog",
     "findings": 0
   }
 }
@@ -149,11 +182,19 @@ If no critical/high issues:
   "artifacts_created": ["artifacts/security-report.json", "artifacts/security-fixes.md"],
   "artifacts_modified": [],
   "issues": [],
+  "assumptions": [
+    "Stack detected as Node.js from package.json",
+    "govulncheck not available — Go dependency audit skipped",
+    "semgrep not available — static analysis skipped"
+  ],
   "metadata": {
+    "stack": "node",
     "critical": 0,
     "high": 0,
     "medium": 2,
-    "low": 1
+    "low": 1,
+    "tools_run": ["npm audit", "trufflehog"],
+    "tools_skipped": ["semgrep", "snyk"]
   }
 }
 ```
@@ -168,13 +209,17 @@ If critical or high issues found:
   "issues": [
     "HIGH: Missing authorization check on export endpoint allows any user to export any report"
   ],
+  "assumptions": [],
   "rework_reason": "High-severity authorization bypass must be fixed before deployment",
   "rework_target": "developer",
   "metadata": {
+    "stack": "node",
     "critical": 0,
     "high": 1,
     "medium": 2,
-    "low": 1
+    "low": 1,
+    "tools_run": ["npm audit", "trufflehog", "semgrep"],
+    "tools_skipped": []
   }
 }
 ```

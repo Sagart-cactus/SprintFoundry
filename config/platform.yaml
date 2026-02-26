@@ -104,6 +104,8 @@ defaults:
   # Codex runtime skill injection (workspace-scoped, optional)
   codex_skills_enabled: false
   codex_skill_catalog:
+    detect-project-type:
+      path: plugins/language-detection/skills/detect-project-type
     code-quality:
       path: plugins/code-review/skills/code-quality
     error-handling:
@@ -116,8 +118,11 @@ defaults:
       path: plugins/code-review/skills/architecture-alignment
   codex_skills_per_agent:
     code-review: [code-quality, error-handling, performance-review, testing-standards, architecture-alignment]
-    developer: [code-quality, error-handling, performance-review]
+    developer: [detect-project-type, code-quality, error-handling, performance-review]
     go-developer: [code-quality, error-handling, performance-review]
+    qa: [detect-project-type, testing-standards]
+    security: [detect-project-type]
+    devops: [detect-project-type]
 
 # Global events directory for JSONL persistence
 events_dir: .sprintfoundry/events
@@ -254,6 +259,7 @@ agent_definitions:
     role: developer
     stack: js
     plugins:
+      - language-detection
       - js-nextjs
       - code-review
     description: >
@@ -329,15 +335,17 @@ agent_definitions:
     name: QA Agent
     role: qa
     stack: js
+    plugins:
+      - language-detection
     description: >
       Writes and runs tests, validates code against requirements.
       Always runs after the developer agent. Reports bugs and
       can trigger rework. For JavaScript/TypeScript projects.
     container_image: sprintfoundry/agent-qa:latest
     capabilities:
-      - Write unit tests (vitest)
+      - Write unit tests (vitest/jest/pytest/go test)
       - Write integration/API tests
-      - Write E2E tests (playwright)
+      - Write E2E tests (playwright/cypress)
       - Run test suites and report results
       - Validate code against acceptance criteria
       - Report bugs with severity classification
@@ -379,6 +387,8 @@ agent_definitions:
   - type: security
     name: Security Agent
     role: security
+    plugins:
+      - language-detection
     description: >
       Scans code for security vulnerabilities, reviews auth flows,
       checks for data leakage, dependency vulnerabilities.
@@ -386,7 +396,7 @@ agent_definitions:
     container_image: sprintfoundry/agent-security:latest
     capabilities:
       - Static analysis security scanning
-      - Dependency vulnerability checking
+      - Dependency vulnerability checking (npm audit, govulncheck, pip-audit, cargo audit)
       - Auth flow review
       - Data exposure analysis
       - Secret detection
