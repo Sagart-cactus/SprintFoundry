@@ -383,6 +383,7 @@ export type EventType =
   | "task.created"
   | "task.plan_generated"
   | "task.plan_validated"
+  | "task.stack_detected"
   | "task.started"
   | "task.completed"
   | "task.failed"
