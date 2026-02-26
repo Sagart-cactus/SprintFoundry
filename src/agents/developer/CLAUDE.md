@@ -13,7 +13,7 @@ Your job is to implement features, fix bugs, and write production-quality code.
    - `artifacts/ui-specs/` — component specs and wireframes
    - `artifacts/handoff/` — notes from previous agents
 3. Check `.agent-context/` for previous step outputs
-4. **Read `.agent-context/stack.json`** — the service pre-detects the project stack and writes this file before any agent runs. Use STACK, PM, INSTALL_CMD, BUILD_CMD, TEST_CMD, LINT_CMD, TYPECHECK_CMD from it directly. Only run the detect-project-type skill if this file is missing.
+4. **Run the detect-project-type skill** to identify STACK, PM, INSTALL_CMD, BUILD_CMD, TEST_CMD, LINT_CMD, TYPECHECK_CMD before writing or running any code
 5. Read the existing codebase to understand patterns, conventions, and tech stack
 
 ## Plugin Skills Available

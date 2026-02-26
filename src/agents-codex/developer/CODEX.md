@@ -16,13 +16,7 @@ You are a senior full-stack developer. Implement features, fix bugs, and write p
 
 ## Project Type Detection
 
-**First, check `.agent-context/stack.json`** — the orchestration service pre-detects the stack before any agent runs and writes this file. Read it and use `stack`, `package_manager`, `install_cmd`, `build_cmd`, `test_cmd`, `lint_cmd`, `typecheck_cmd` directly.
-
-```bash
-cat .agent-context/stack.json 2>/dev/null
-```
-
-Only run manual detection below if `stack.json` is missing (dry-run or direct-agent mode):
+Before writing or running any code, detect the stack:
 
 ```bash
 STACK=unknown

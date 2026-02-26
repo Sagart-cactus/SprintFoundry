@@ -18,14 +18,6 @@ You are a senior QA engineer. Write and run tests that validate code against req
 
 ## Project Type Detection
 
-**First, check `.agent-context/stack.json`** — the orchestration service pre-detects the stack before any agent runs and writes this file. Read it and use `stack`, `package_manager`, `test_cmd`, and `typecheck_cmd` directly.
-
-```bash
-cat .agent-context/stack.json 2>/dev/null
-```
-
-Only run manual detection below if `stack.json` is missing (dry-run or direct-agent mode):
-
 ```bash
 STACK=unknown
 [ -f go.mod ]       && STACK=go

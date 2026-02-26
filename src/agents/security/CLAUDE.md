@@ -10,8 +10,9 @@ Your job is to find vulnerabilities, review auth flows, check dependencies, and 
    - `artifacts/architecture.md` — system design and data flows
    - `artifacts/api-contracts.yaml` — API surface to review
    - `artifacts/handoff/dev-to-qa.md` — what changed
-3. Check `.agent-context/` for previous step outputs — especially `stack.json` which has the pre-detected STACK. Use it directly; only fall back to the detect-project-type skill if the file is missing.
-4. Read the actual source code — focus on auth, input handling, data access, and API boundaries
+3. Check `.agent-context/` for previous step outputs
+4. **Run the detect-project-type skill** to identify STACK before running any dependency audit tools
+5. Read the actual source code — focus on auth, input handling, data access, and API boundaries
 
 ## Your Process
 
