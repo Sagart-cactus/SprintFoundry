@@ -38,7 +38,7 @@ export class GitManager {
     this.ensureGitIdentity(workspacePath);
 
     // Enable Entire session tracking on the cloned repo (best-effort)
-    this.tryEnableEntire(workspacePath);
+    // this.tryEnableEntire(workspacePath);
 
     return branchName;
   }

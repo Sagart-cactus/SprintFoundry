@@ -27,7 +27,10 @@ export class ClaudeCodeRuntime implements AgentRuntime {
   }
 
   private async runLocal(config: RuntimeStepContext): Promise<RuntimeStepResult> {
-    const args = this.buildCliArgs(config);
+    // When there is an activity listener, use streaming so the monitor gets per-turn events.
+    if (config.onActivity) return this.runLocalStreaming(config);
+
+    const args = this.buildCliArgs(config, "json");
     const paths = this.buildLogPaths(config);
     await this.writeDebugFiles(paths, {
       timestamp: new Date().toISOString(),
@@ -74,13 +77,148 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     };
   }
 
-  private buildCliArgs(config: RuntimeStepContext): string[] {
+  private async runLocalStreaming(config: RuntimeStepContext): Promise<RuntimeStepResult> {
+    const paths = this.buildLogPaths(config);
+    const args = this.buildCliArgs(config, "stream-json");
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      CLAUDECODE: undefined, // unset to allow nested claude invocations
+      ...(config.apiKey ? { ANTHROPIC_API_KEY: config.apiKey } : {}),
+      ANTHROPIC_MODEL: config.modelConfig.model,
+      ...(config.runtime.env ?? {}),
+    };
+
+    await this.writeDebugFiles(paths, {
+      timestamp: new Date().toISOString(),
+      step_number: config.stepNumber,
+      step_attempt: config.stepAttempt,
+      runtime_mode: config.runtime.mode,
+      runtime_provider: config.runtime.provider,
+      runtime_command: "claude",
+      output_format: "stream-json",
+      model: config.modelConfig.model,
+      api_key_present: Boolean(config.apiKey),
+    });
+
+    return new Promise((resolve, reject) => {
+      const proc = spawn("claude", args, {
+        cwd: config.workspacePath,
+        env,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      proc.stdin?.end(); // signal EOF immediately so interactive prompts don't hang
+
+      const stdoutLines: string[] = [];
+      let stderrData = "";
+      let lineBuffer = "";
+      let runtimeId: string | null = null;
+      let tokensUsed = 0;
+      let costUsd: number | undefined;
+      let timedOut = false;
+
+      const timeoutHandle = setTimeout(() => {
+        timedOut = true;
+        proc.kill("SIGTERM");
+      }, config.timeoutMinutes * 60 * 1000);
+
+      proc.stdout?.on("data", (chunk: Buffer) => {
+        lineBuffer += chunk.toString();
+        const lines = lineBuffer.split("\n");
+        lineBuffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          stdoutLines.push(trimmed);
+
+          let msg: Record<string, unknown>;
+          try {
+            msg = JSON.parse(trimmed) as Record<string, unknown>;
+          } catch {
+            continue;
+          }
+
+          // Extract session ID from any message that carries it
+          if (typeof msg.session_id === "string" && msg.session_id) {
+            runtimeId = msg.session_id;
+          }
+
+          // Extract token usage and cost from the final result line
+          if (msg.type === "result") {
+            const usage = msg.usage as Record<string, number> | undefined;
+            if (usage) {
+              tokensUsed = (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0);
+            }
+            if (typeof msg.total_cost_usd === "number") costUsd = msg.total_cost_usd;
+          }
+
+          // Emit per-turn activity events (tool calls, file edits, commands, thinking)
+          const activities = this.extractActivityEventsFromSdkMessage(msg);
+          for (const activity of activities) {
+            void this.safeEmitActivity(config, activity);
+          }
+        }
+      });
+
+      proc.stderr?.on("data", (chunk: Buffer) => {
+        stderrData += chunk.toString();
+      });
+
+      const finish = async (code: number | null) => {
+        clearTimeout(timeoutHandle);
+        if (lineBuffer.trim()) stdoutLines.push(lineBuffer.trim());
+        const stdout = stdoutLines.join("\n");
+        await Promise.all([
+          fs.writeFile(paths.stepStdoutPath, stdout, "utf-8"),
+          fs.writeFile(paths.stepStderrPath, stderrData, "utf-8"),
+        ]);
+        await this.copyLatestLogs(paths.stepStdoutPath, paths.stepStderrPath, paths.latestStdoutPath, paths.latestStderrPath);
+
+        if (timedOut) return reject(new Error("Process claude timed out"));
+        if (code !== 0) return reject(new Error(`Process claude exited with code 1. ${stderrData.slice(0, 300)}`));
+
+        const finalRuntimeId = runtimeId ?? `claude-stream-${Date.now()}`;
+        const runtimeMetadata = this.buildRuntimeMetadata(config, finalRuntimeId, {
+          resume: this.buildResumeMetadata(config),
+          provider_metadata: {
+            output_parsing: "stream-jsonl",
+            session_id_source: "stdout_stream",
+          },
+        });
+        resolve({
+          tokens_used: tokensUsed,
+          cost_usd: costUsd,
+          runtime_id: finalRuntimeId,
+          resume_used: runtimeMetadata.resume?.used,
+          resume_failed: runtimeMetadata.resume?.failed,
+          resume_fallback: runtimeMetadata.resume?.fallback_to_fresh,
+          runtime_metadata: runtimeMetadata,
+        });
+      };
+
+      proc.on("close", (code) => { finish(code).catch(reject); });
+      proc.on("error", async (err) => {
+        clearTimeout(timeoutHandle);
+        await Promise.all([
+          fs.writeFile(paths.stepStdoutPath, stdoutLines.join("\n"), "utf-8").catch(() => {}),
+          fs.writeFile(paths.stepStderrPath, stderrData, "utf-8").catch(() => {}),
+        ]);
+        reject(err);
+      });
+    });
+  }
+
+  private buildCliArgs(config: RuntimeStepContext, outputFormat: string): string[] {
     const flags = config.cliFlags ?? {};
     const taskPrompt = this.readTaskPrompt();
     const args: string[] = config.resumeSessionId
       ? ["--resume", config.resumeSessionId, "-p", taskPrompt]
       : ["-p", taskPrompt];
-    args.push("--output-format", flags.output_format ?? "json");
+    // outputFormat arg takes precedence — streaming path must not be overridden by platform config
+    args.push("--output-format", outputFormat);
+    if (outputFormat === "stream-json") {
+      args.push("--verbose");
+    }
     if (flags.skip_permissions !== false) {
       args.push("--dangerously-skip-permissions");
     }

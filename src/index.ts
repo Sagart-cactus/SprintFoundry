@@ -4,6 +4,10 @@ import { Command } from "commander";
 import * as fs from "fs/promises";
 import * as path from "path";
 import { fileURLToPath } from "url";
+import { createRequire } from "module";
+
+const require = createRequire(import.meta.url);
+const { version } = require("../package.json");
 import type { PlatformConfig, ProjectConfig, RuntimeConfig, TaskSource } from "./shared/types.js";
 import { OrchestrationService } from "./service/orchestration-service.js";
 import { loadConfig } from "./service/config-loader.js";
@@ -19,7 +23,7 @@ const program = new Command();
 program
   .name("sprintfoundry")
   .description("AI-powered multi-agent software development lifecycle")
-  .version("0.2.1");
+  .version(version);
 
 program
   .command("run")
