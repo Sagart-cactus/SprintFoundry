@@ -94,6 +94,7 @@ export class PlanValidator {
     const knownIds = new Set(this.agentDefs.map((d) => d.type));
     const catalog = this.projectConfig.agents;
 
+    const beforeCount = plan.steps.length;
     plan.steps = plan.steps.filter((step) => {
       if (knownIds.has(step.agent)) return true;
 
@@ -129,8 +130,11 @@ export class PlanValidator {
       return false;
     });
 
-    // Re-number steps after potential removals
-    plan.steps.forEach((s, i) => { s.step_number = i + 1; });
+    // Only re-number when steps were actually removed; preserving original numbers
+    // lets validateNoDuplicateSteps catch plans that already had duplicate step numbers.
+    if (plan.steps.length !== beforeCount) {
+      plan.steps.forEach((s, i) => { s.step_number = i + 1; });
+    }
   }
 
   // ---- Role Lookup ----

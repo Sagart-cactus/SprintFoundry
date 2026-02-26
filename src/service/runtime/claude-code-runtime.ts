@@ -119,6 +119,10 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       const timeoutHandle = setTimeout(() => {
         timedOut = true;
         proc.kill("SIGTERM");
+        // Force-kill after 5 s grace period if the process ignores SIGTERM
+        setTimeout(() => {
+          try { proc.kill("SIGKILL"); } catch { /* already exited */ }
+        }, 5000);
       }, config.timeoutMinutes * 60 * 1000);
 
       proc.stdout?.on("data", (chunk: Buffer) => {
@@ -166,7 +170,20 @@ export class ClaudeCodeRuntime implements AgentRuntime {
 
       const finish = async (code: number | null) => {
         clearTimeout(timeoutHandle);
-        if (lineBuffer.trim()) stdoutLines.push(lineBuffer.trim());
+        // Parse any remaining buffered content — the final `result` line may lack a trailing newline
+        const remaining = lineBuffer.trim();
+        if (remaining) {
+          stdoutLines.push(remaining);
+          try {
+            const msg = JSON.parse(remaining) as Record<string, unknown>;
+            if (typeof msg.session_id === "string" && msg.session_id) runtimeId = msg.session_id;
+            if (msg.type === "result") {
+              const usage = msg.usage as Record<string, number> | undefined;
+              if (usage) tokensUsed = (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0);
+              if (typeof msg.total_cost_usd === "number") costUsd = msg.total_cost_usd;
+            }
+          } catch { /* not JSON */ }
+        }
         const stdout = stdoutLines.join("\n");
         await Promise.all([
           fs.writeFile(paths.stepStdoutPath, stdout, "utf-8"),
