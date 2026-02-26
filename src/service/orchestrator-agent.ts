@@ -328,33 +328,41 @@ Analyze this ticket and return an execution plan as JSON.`;
       sections.push("File structure: unavailable");
     }
 
-    // Read package.json if it exists
+    // Read pre-detected project stack (written by orchestration-service after clone)
     try {
-      const pkg = await fs.readFile(
-        path.join(workspacePath, "package.json"),
+      const stackJson = await fs.readFile(
+        path.join(workspacePath, ".agent-context", "stack.json"),
         "utf-8"
       );
-      const parsed = JSON.parse(pkg);
-      sections.push("### Tech Stack (from package.json)");
-      sections.push(`Dependencies: ${Object.keys(parsed.dependencies ?? {}).join(", ")}`);
-      sections.push(`Dev Dependencies: ${Object.keys(parsed.devDependencies ?? {}).join(", ")}`);
+      const stack = JSON.parse(stackJson);
+      sections.push("### Detected Project Stack");
+      sections.push(`Stack: ${stack.stack}${stack.package_manager ? ` (package manager: ${stack.package_manager})` : ""}`);
+      sections.push(`Detected from: ${(stack.detected_from ?? []).join(", ") || "file structure"}`);
+      if (stack.test_cmd) sections.push(`Test command: ${stack.test_cmd}`);
+      if (stack.monorepo) sections.push("Monorepo: yes");
+      if (stack.pre_commit_hooks && stack.pre_commit_hooks !== "none") {
+        sections.push(`Pre-commit hooks: ${stack.pre_commit_hooks}`);
+      }
+      sections.push("");
+      sections.push("IMPORTANT: Use the stack-appropriate agent (e.g. 'go-developer'/'go-qa' for Go, 'developer'/'qa' for Node.js). The stack has been pre-detected — do not choose agents based on guesswork.");
     } catch {
-      // No package.json
-    }
+      // Stack not pre-detected (dry-run or direct mode) — fall back to reading manifests
+      try {
+        const pkg = await fs.readFile(path.join(workspacePath, "package.json"), "utf-8");
+        const parsed = JSON.parse(pkg);
+        sections.push("### Tech Stack (from package.json)");
+        sections.push(`Dependencies: ${Object.keys(parsed.dependencies ?? {}).join(", ")}`);
+        sections.push(`Dev Dependencies: ${Object.keys(parsed.devDependencies ?? {}).join(", ")}`);
+      } catch { /* No package.json */ }
 
-    // Read go.mod if it exists
-    try {
-      const gomod = await fs.readFile(
-        path.join(workspacePath, "go.mod"),
-        "utf-8"
-      );
-      sections.push("### Tech Stack (from go.mod)");
-      const moduleMatch = gomod.match(/^module\s+(.+)$/m);
-      if (moduleMatch) sections.push(`Module: ${moduleMatch[1]}`);
-      const goMatch = gomod.match(/^go\s+(.+)$/m);
-      if (goMatch) sections.push(`Go version: ${goMatch[1]}`);
-    } catch {
-      // No go.mod
+      try {
+        const gomod = await fs.readFile(path.join(workspacePath, "go.mod"), "utf-8");
+        sections.push("### Tech Stack (from go.mod)");
+        const moduleMatch = gomod.match(/^module\s+(.+)$/m);
+        if (moduleMatch) sections.push(`Module: ${moduleMatch[1]}`);
+        const goMatch = gomod.match(/^go\s+(.+)$/m);
+        if (goMatch) sections.push(`Go version: ${goMatch[1]}`);
+      } catch { /* No go.mod */ }
     }
 
     // Read existing artifacts if any
