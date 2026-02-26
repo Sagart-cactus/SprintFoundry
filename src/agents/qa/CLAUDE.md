@@ -11,9 +11,8 @@ Your job is to write and run tests that validate code against requirements.
    - `artifacts/user-stories.md` — user stories to validate
    - `artifacts/handoff/dev-to-qa.md` — developer's notes on what changed
    - `artifacts/api-contracts.yaml` — expected API behavior
-3. Check `.agent-context/` for previous step outputs
-4. **Run the detect-project-type skill** to identify STACK, TEST_CMD, and test frameworks present before writing or running any tests
-5. Read the actual source code to understand what was implemented
+3. Check `.agent-context/` for previous step outputs — especially `stack.json` which contains the pre-detected STACK, TEST_CMD, and package manager. Use it directly; only fall back to the detect-project-type skill if the file is missing.
+4. Read the actual source code to understand what was implemented
 
 ## Your Process
 

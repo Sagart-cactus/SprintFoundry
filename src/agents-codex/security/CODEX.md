@@ -19,6 +19,14 @@ You are a senior application security engineer. Find vulnerabilities, review aut
 
 ## Project Type Detection
 
+**First, check `.agent-context/stack.json`** — the orchestration service pre-detects the stack before any agent runs and writes this file. Read it and use `stack` and `package_manager` directly.
+
+```bash
+cat .agent-context/stack.json 2>/dev/null
+```
+
+Only run manual detection below if `stack.json` is missing (dry-run or direct-agent mode):
+
 ```bash
 STACK=unknown
 [ -f go.mod ]       && STACK=go
