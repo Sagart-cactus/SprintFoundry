@@ -43,8 +43,8 @@ describe("GitManager", () => {
 
     await git.cloneAndBranch("/workspace", makeTicket({ id: "TEST-1", title: "My Feature" }));
 
-    // 3 calls: git clone, git checkout, entire enable (tryEnableEntire — best-effort, may succeed or fail)
-    expect(mockSpawnSync).toHaveBeenCalledTimes(3);
+    // 5 calls: git clone, git checkout, ensureGitIdentity (check email + set email + set name)
+    expect(mockSpawnSync).toHaveBeenCalledTimes(5);
 
     const cloneCall = (mockSpawnSync as any).mock.calls[0] as any[];
     expect(cloneCall[0]).toBe("git");
