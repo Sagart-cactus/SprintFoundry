@@ -414,3 +414,42 @@ export interface TaskEvent {
   timestamp: Date;
   data: Record<string, unknown>;
 }
+
+// ----- Session Management -----
+
+export type ActivityState =
+  | "active"
+  | "ready"
+  | "idle"
+  | "waiting_input"
+  | "blocked"
+  | "exited"
+  | "unknown";
+
+export interface ActivityDetection {
+  state: ActivityState;
+  last_event_at: string | null;
+  elapsed_ms: number | null;
+  detail?: string;
+}
+
+export interface RunSessionMetadata {
+  run_id: string;
+  project_id: string;
+  ticket_id: string;
+  ticket_source: TaskSource;
+  ticket_title: string;
+  status: RunStatus;
+  current_step: number;
+  total_steps: number;
+  plan_classification: string | null;
+  workspace_path: string | null;
+  branch: string | null;
+  pr_url: string | null;
+  total_tokens: number;
+  total_cost_usd: number;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+  error: string | null;
+}

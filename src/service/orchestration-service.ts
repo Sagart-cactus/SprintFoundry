@@ -46,6 +46,7 @@ import type {
   TrackerPlugin,
   NotifierPlugin,
 } from "../shared/plugin-types.js";
+import { SessionManager } from "./session-manager.js";
 
 export class OrchestrationService {
   private validator: PlanValidator;
@@ -57,6 +58,7 @@ export class OrchestrationService {
   private git: GitManager;
   private notifications: NotificationService;
   private sessions: RuntimeSessionStore;
+  private sessionManager: SessionManager;
   private registry: PluginRegistry | null;
 
   constructor(
@@ -74,6 +76,15 @@ export class OrchestrationService {
     this.git = new GitManager(projectConfig.repo, projectConfig.branch_strategy);
     this.notifications = new NotificationService(projectConfig.integrations);
     this.sessions = new RuntimeSessionStore();
+    this.sessionManager = new SessionManager();
+  }
+
+  // ---- Session persistence (fire-and-forget, never fails the run) ----
+
+  private persistSession(run: TaskRun, extra?: { workspace_path?: string; branch?: string }): void {
+    this.sessionManager.persist(run, extra).catch((err) => {
+      console.warn(`[session] Failed to persist session ${run.run_id}: ${err instanceof Error ? err.message : String(err)}`);
+    });
   }
 
   // ---- Plugin accessors (prefer plugin if registered, else legacy) ----
@@ -110,6 +121,7 @@ export class OrchestrationService {
 
       run.ticket = ticket;
       await this.emitEvent(run.run_id, "task.created", { ticket });
+      this.persistSession(run);
 
       // 3. Prepare workspace (clone repo, create branch)
       console.log(`[orchestrator] Creating workspace for run ${run.run_id}...`);
@@ -153,6 +165,7 @@ export class OrchestrationService {
 
       // 4. Get plan from orchestrator agent
       run.status = "planning";
+      this.persistSession(run, { workspace_path: workspacePath });
       console.log(`[orchestrator] Generating execution plan via ${this.plannerRuntime.constructor.name}...`);
       const plan = await this.plannerRuntime.generatePlan(
         ticket,
@@ -185,6 +198,7 @@ export class OrchestrationService {
         return run;
       }
       run.status = "executing";
+      this.persistSession(run, { workspace_path: workspacePath });
       console.log(`[orchestrator] Starting plan execution...`);
       await this.executePlan(run, validatedPlan, workspacePath);
 
@@ -200,6 +214,7 @@ export class OrchestrationService {
         await this.notifications.send(
           `Task ${ticket.id} completed. PR: ${prUrl}`
         );
+        this.persistSession(run, { workspace_path: workspacePath });
       }
 
       return run;
@@ -210,6 +225,7 @@ export class OrchestrationService {
       await this.notifications.send(
         `Task ${run.ticket?.id ?? ticketId} failed: ${run.error}`
       );
+      this.persistSession(run);
       return run;
     } finally {
       await this.events.close();
@@ -465,6 +481,7 @@ export class OrchestrationService {
       total_tokens: run.total_tokens_used,
       total_cost: run.total_cost_usd,
     });
+    this.persistSession(run, { workspace_path: workspacePath });
   }
 
   // ---- Single Step Execution ----
