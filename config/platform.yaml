@@ -124,6 +124,13 @@ defaults:
     security: [detect-project-type]
     devops: [detect-project-type]
 
+# ----- Workspace Strategy -----
+# "tmpdir" — full git clone into a temp directory per run (default)
+# "worktree" — shared base clone with git worktrees per run + sub-worktrees for parallel steps
+workspace:
+  strategy: tmpdir
+  base_repo_dir: /var/cache/sprintfoundry/repos   # only used by worktree strategy
+
 # Global events directory for JSONL persistence
 events_dir: .sprintfoundry/events
 

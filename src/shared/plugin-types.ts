@@ -70,6 +70,20 @@ export interface WorkspacePlugin {
 
   /** List existing workspace run IDs. */
   list(): Promise<string[]>;
+
+  // ---- Optional sub-worktree support for parallel step isolation ----
+
+  /** Whether this plugin supports sub-worktree isolation for parallel steps. */
+  readonly supportsSubWorktrees?: boolean;
+
+  /** Create an isolated sub-worktree from the run workspace for a parallel step. */
+  createSubWorktree?(parentPath: string, stepNumber: number): Promise<string>;
+
+  /** Merge changes from a sub-worktree back into the parent workspace. */
+  mergeSubWorktree?(parentPath: string, subWorktreePath: string, stepNumber: number): Promise<void>;
+
+  /** Remove a sub-worktree (cleanup after merge or failure). */
+  removeSubWorktree?(subWorktreePath: string): Promise<void>;
 }
 
 // ----- Tracker Plugin -----

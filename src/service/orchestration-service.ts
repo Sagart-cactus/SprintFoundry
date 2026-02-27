@@ -382,10 +382,39 @@ export class OrchestrationService {
         // Phase 1: Execute in parallel, collecting rework signals instead of handling them inline.
         // This prevents multiple parallel steps from each spawning an independent developer rework call.
         const reworkSignals: Array<{ step: PlanStep; agentResult: AgentResult; currentRework: number }> = [];
+
+        // Use sub-worktree isolation when the workspace plugin supports it.
+        // Each parallel step gets its own worktree so file changes can't conflict.
+        const wsPlugin = this.getWorkspacePlugin();
+        const useSubWorktrees = wsPlugin?.supportsSubWorktrees === true
+          && typeof wsPlugin.createSubWorktree === "function"
+          && typeof wsPlugin.mergeSubWorktree === "function";
+
         const results = await Promise.all(
-          parallelGroup.map((step) =>
-            this.executeStep(run, step, workspacePath, reworkCounts, reworkSignals)
-          )
+          parallelGroup.map(async (step) => {
+            let stepWorkspace = workspacePath;
+            try {
+              if (useSubWorktrees) {
+                stepWorkspace = await wsPlugin!.createSubWorktree!(workspacePath, step.step_number);
+                console.log(`[parallel] Step ${step.step_number} using sub-worktree: ${stepWorkspace}`);
+              }
+              const result = await this.executeStep(run, step, stepWorkspace, reworkCounts, reworkSignals);
+              if (useSubWorktrees && result === "completed") {
+                await wsPlugin!.mergeSubWorktree!(workspacePath, stepWorkspace, step.step_number);
+                console.log(`[parallel] Step ${step.step_number} merged back to parent.`);
+              } else if (useSubWorktrees) {
+                // Clean up sub-worktree on failure/rework without merging
+                await wsPlugin!.removeSubWorktree?.(stepWorkspace);
+              }
+              return result;
+            } catch (err) {
+              // Clean up sub-worktree on unexpected error
+              if (useSubWorktrees && stepWorkspace !== workspacePath) {
+                try { await wsPlugin!.removeSubWorktree?.(stepWorkspace); } catch { /* best effort */ }
+              }
+              throw err;
+            }
+          })
         );
 
         // Hard failures take precedence

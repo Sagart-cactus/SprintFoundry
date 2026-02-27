@@ -89,6 +89,13 @@ api_keys:
 # # codex_skills_overrides:
 # #   ui-ux: [web-design-guidelines]
 
+# ----- Workspace Strategy (optional) -----
+# Override the platform default workspace strategy.
+# "worktree" enables git worktree-based workspaces with parallel step isolation.
+# workspace:
+#   strategy: worktree
+#   base_repo_dir: /var/cache/sprintfoundry/repos
+
 # ----- Branch Strategy -----
 branch_strategy:
   prefix: feat/
