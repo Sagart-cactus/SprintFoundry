@@ -6,6 +6,7 @@
 import type {
   AgentType,
   BranchStrategy,
+  EventPriority,
   RepoConfig,
   TaskEvent,
   TaskRun,
@@ -142,7 +143,7 @@ export interface SCMPlugin {
 
 // ----- Notifier Plugin -----
 
-export type EventPriority = "urgent" | "action" | "warning" | "info";
+export type { EventPriority } from "./types.js";
 
 export interface NotifierPlugin {
   readonly name: string;

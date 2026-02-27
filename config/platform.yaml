@@ -127,6 +127,46 @@ defaults:
 # Global events directory for JSONL persistence
 events_dir: .sprintfoundry/events
 
+# ----- Post-PR Lifecycle & Reactions -----
+# Controls automated responses to CI failures, review comments, and merge readiness.
+# Disabled by default — enable per project in project.yaml.
+
+lifecycle:
+  enabled: false
+  poll_interval_ms: 30000
+
+  reactions:
+    ci-failed:
+      auto: true
+      action: trigger-rework        # Uses planRework() with CI failure context
+      retries: 2
+      escalate_after: 3
+      priority: warning
+    changes-requested:
+      auto: true
+      action: trigger-rework        # Uses planRework() with review comment context
+      retries: 1
+      escalate_after: 30m
+      priority: action
+    approved-and-green:
+      auto: false
+      action: notify                # Notify human — don't auto-merge by default
+      retries: 0
+      escalate_after: 0
+      priority: action
+    agent-stuck:
+      auto: true
+      action: notify
+      retries: 0
+      escalate_after: 10m
+      priority: urgent
+
+  notification_routing:
+    urgent: [console]
+    action: [console]
+    warning: [console]
+    info: [console]
+
 # ----- Mandatory Platform Rules -----
 # These cannot be overridden by projects or the orchestrator agent
 

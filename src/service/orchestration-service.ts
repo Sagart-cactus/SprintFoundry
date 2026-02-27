@@ -45,8 +45,11 @@ import type {
   WorkspacePlugin,
   TrackerPlugin,
   NotifierPlugin,
+  SCMPlugin,
 } from "../shared/plugin-types.js";
 import { SessionManager } from "./session-manager.js";
+import { LifecycleManager, defaultLifecycleConfig } from "./lifecycle-manager.js";
+import { NotificationRouter, defaultRoutingConfig } from "./notification-router.js";
 
 export class OrchestrationService {
   private validator: PlanValidator;
@@ -59,6 +62,8 @@ export class OrchestrationService {
   private notifications: NotificationService;
   private sessions: RuntimeSessionStore;
   private sessionManager: SessionManager;
+  private lifecycleManager: LifecycleManager | null = null;
+  private notificationRouter: NotificationRouter | null = null;
   private registry: PluginRegistry | null;
 
   constructor(
@@ -77,6 +82,23 @@ export class OrchestrationService {
     this.notifications = new NotificationService(projectConfig.integrations);
     this.sessions = new RuntimeSessionStore();
     this.sessionManager = new SessionManager();
+
+    // Initialize lifecycle manager if an SCM plugin is available
+    const scmPlugin = this.registry?.getFirst<SCMPlugin>("scm") ?? null;
+    if (scmPlugin) {
+      const notifierPlugins = new Map<string, NotifierPlugin>();
+      const notifierPlugin = this.registry?.getFirst<NotifierPlugin>("notifier");
+      if (notifierPlugin) {
+        notifierPlugins.set(notifierPlugin.name, notifierPlugin);
+      }
+      this.notificationRouter = new NotificationRouter(notifierPlugins, defaultRoutingConfig());
+      this.lifecycleManager = new LifecycleManager(
+        defaultLifecycleConfig(),
+        scmPlugin,
+        this.sessionManager,
+        this.notificationRouter
+      );
+    }
   }
 
   // ---- Session persistence (fire-and-forget, never fails the run) ----
@@ -85,6 +107,23 @@ export class OrchestrationService {
     this.sessionManager.persist(run, extra).catch((err) => {
       console.warn(`[session] Failed to persist session ${run.run_id}: ${err instanceof Error ? err.message : String(err)}`);
     });
+  }
+
+  // ---- Lifecycle watch (non-blocking, only when SCM plugin is available) ----
+
+  private startLifecycleWatch(run: TaskRun, _workspacePath: string): void {
+    if (!this.lifecycleManager || !run.pr_url) return;
+
+    // Use the ticket ID as a fallback branch identifier
+    const branch = run.ticket?.id ?? run.run_id;
+
+    this.lifecycleManager.watch(
+      run.run_id,
+      branch,
+      run.pr_url,
+      this.projectConfig.repo.url
+    );
+    this.lifecycleManager.start();
   }
 
   // ---- Plugin accessors (prefer plugin if registered, else legacy) ----
@@ -215,6 +254,9 @@ export class OrchestrationService {
           `Task ${ticket.id} completed. PR: ${prUrl}`
         );
         this.persistSession(run, { workspace_path: workspacePath });
+
+        // Start lifecycle monitoring for this PR (non-blocking)
+        this.startLifecycleWatch(run, workspacePath);
       }
 
       return run;
@@ -298,6 +340,9 @@ export class OrchestrationService {
       await this.emitEvent(run.run_id, "pr.created", { prUrl });
       await this.tickets.updateStatus(ticket, "in_review", prUrl);
       await this.notifications.send(`Task ${ticket.id} completed. PR: ${prUrl}`);
+
+      // Start lifecycle monitoring for this PR (non-blocking)
+      this.startLifecycleWatch(run, workspacePath);
     }
 
     return run;

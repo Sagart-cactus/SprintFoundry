@@ -453,3 +453,41 @@ export interface RunSessionMetadata {
   completed_at: string | null;
   error: string | null;
 }
+
+// ----- Reaction Engine Configuration -----
+
+export type ReactionTrigger =
+  | "ci-failed"
+  | "changes-requested"
+  | "approved-and-green"
+  | "agent-stuck";
+
+export type ReactionAction =
+  | "trigger-rework"
+  | "notify"
+  | "auto-merge";
+
+export interface ReactionConfig {
+  trigger: ReactionTrigger;
+  auto: boolean;
+  action: ReactionAction;
+  retries: number;
+  escalate_after: number | string; // count or duration like "30m"
+  priority: EventPriority;
+}
+
+export type EventPriority = "urgent" | "action" | "warning" | "info";
+
+export interface NotificationRoutingConfig {
+  urgent: string[];   // notifier names
+  action: string[];
+  warning: string[];
+  info: string[];
+}
+
+export interface LifecycleConfig {
+  enabled: boolean;
+  poll_interval_ms: number;
+  reactions: Record<ReactionTrigger, ReactionConfig>;
+  notification_routing: NotificationRoutingConfig;
+}
