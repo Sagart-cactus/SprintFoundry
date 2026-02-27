@@ -40,6 +40,12 @@ import { RuntimeSessionStore } from "./runtime-session-store.js";
 import type { PlannerRuntime } from "./runtime/types.js";
 import { PlannerFactory } from "./runtime/planner-factory.js";
 import type { RuntimeActivityEvent } from "./runtime/types.js";
+import type { PluginRegistry } from "./plugin-registry.js";
+import type {
+  WorkspacePlugin,
+  TrackerPlugin,
+  NotifierPlugin,
+} from "../shared/plugin-types.js";
 
 export class OrchestrationService {
   private validator: PlanValidator;
@@ -51,11 +57,14 @@ export class OrchestrationService {
   private git: GitManager;
   private notifications: NotificationService;
   private sessions: RuntimeSessionStore;
+  private registry: PluginRegistry | null;
 
   constructor(
     private platformConfig: PlatformConfig,
-    private projectConfig: ProjectConfig
+    private projectConfig: ProjectConfig,
+    registry?: PluginRegistry
   ) {
+    this.registry = registry ?? null;
     this.validator = new PlanValidator(platformConfig, projectConfig);
     this.agentRunner = new AgentRunner(platformConfig, projectConfig);
     this.plannerRuntime = new PlannerFactory().create(platformConfig, projectConfig);
@@ -65,6 +74,20 @@ export class OrchestrationService {
     this.git = new GitManager(projectConfig.repo, projectConfig.branch_strategy);
     this.notifications = new NotificationService(projectConfig.integrations);
     this.sessions = new RuntimeSessionStore();
+  }
+
+  // ---- Plugin accessors (prefer plugin if registered, else legacy) ----
+
+  private getWorkspacePlugin(): WorkspacePlugin | null {
+    return this.registry?.getFirst<WorkspacePlugin>("workspace") ?? null;
+  }
+
+  private getTrackerPlugin(): TrackerPlugin | null {
+    return this.registry?.getFirst<TrackerPlugin>("tracker") ?? null;
+  }
+
+  private getNotifierPlugin(): NotifierPlugin | null {
+    return this.registry?.getFirst<NotifierPlugin>("notifier") ?? null;
   }
 
   // ---- Main entry point ----
