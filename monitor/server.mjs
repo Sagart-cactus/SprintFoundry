@@ -2,7 +2,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { promises as fs } from "node:fs";
+import { promises as fs, watchFile, unwatchFile, statSync, openSync, readSync, closeSync } from "node:fs";
 import { execFile } from "node:child_process";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -438,6 +438,97 @@ async function serveStatic(res, pathname, rootDir = publicV3Dir) {
   res.end(body);
 }
 
+// ---- SSE (Server-Sent Events) infrastructure ----
+
+/** @type {Set<http.ServerResponse>} */
+const sseClients = new Set();
+
+/** @type {Map<string, { offset: number, clients: Set<http.ServerResponse> }>} */
+const sseWatchers = new Map();
+
+const SSE_HEARTBEAT_MS = 15_000;
+const SSE_POLL_MS = 1_000;
+
+function sseWrite(res, event, data) {
+  try {
+    if (event) res.write(`event: ${event}\n`);
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  } catch {
+    // Client disconnected
+  }
+}
+
+function readNewEventsFromOffset(filePath, offset) {
+  let content = "";
+  let newOffset = offset;
+  try {
+    const stat = statSync(filePath);
+    if (stat.size <= offset) return { events: [], newOffset: offset };
+    const fd = openSync(filePath, "r");
+    const buf = Buffer.alloc(stat.size - offset);
+    readSync(fd, buf, 0, buf.length, offset);
+    closeSync(fd);
+    content = buf.toString("utf-8");
+    newOffset = stat.size;
+  } catch {
+    return { events: [], newOffset: offset };
+  }
+  const events = content
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+    .filter(Boolean);
+  return { events, newOffset };
+}
+
+function startSSEWatcher(eventsFilePath, res) {
+  let watcher = sseWatchers.get(eventsFilePath);
+  if (!watcher) {
+    let currentOffset = 0;
+    try {
+      const stat = statSync(eventsFilePath);
+      currentOffset = stat.size; // Start from current end — only stream NEW events
+    } catch {
+      currentOffset = 0;
+    }
+    watcher = { offset: currentOffset, clients: new Set() };
+    sseWatchers.set(eventsFilePath, watcher);
+
+    // Use watchFile for reliable cross-platform JSONL append detection
+    watchFile(eventsFilePath, { interval: SSE_POLL_MS }, () => {
+      const w = sseWatchers.get(eventsFilePath);
+      if (!w || w.clients.size === 0) return;
+      const { events, newOffset } = readNewEventsFromOffset(eventsFilePath, w.offset);
+      w.offset = newOffset;
+      for (const event of events) {
+        for (const client of w.clients) {
+          sseWrite(client, "event", event);
+        }
+      }
+    });
+  }
+  watcher.clients.add(res);
+}
+
+function stopSSEWatcher(eventsFilePath, res) {
+  const watcher = sseWatchers.get(eventsFilePath);
+  if (!watcher) return;
+  watcher.clients.delete(res);
+  if (watcher.clients.size === 0) {
+    unwatchFile(eventsFilePath);
+    sseWatchers.delete(eventsFilePath);
+  }
+}
+
+// Heartbeat to keep SSE connections alive through proxies
+const sseHeartbeatInterval = setInterval(() => {
+  for (const client of sseClients) {
+    try { client.write(`:heartbeat\n\n`); } catch { /* ignore */ }
+  }
+}, SSE_HEARTBEAT_MS);
+sseHeartbeatInterval.unref?.();
+
 const server = http.createServer(async (req, res) => {
   const reqUrl = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
   const pathname = reqUrl.pathname;
@@ -490,6 +581,74 @@ const server = http.createServer(async (req, res) => {
       const runPath = safeJoin(runsRoot, project, run);
       const events = await readEvents(runPath);
       sendJson(res, 200, { events: events.slice(Math.max(0, events.length - limit)) });
+      return;
+    }
+
+    // ---- SSE event stream ----
+    if (pathname === "/api/events/stream") {
+      const project = reqUrl.searchParams.get("project");
+      const run = reqUrl.searchParams.get("run");
+
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no", // Disable buffering in nginx
+      });
+
+      // Send initial connected message
+      sseWrite(res, "connected", { ts: Date.now() });
+      sseClients.add(res);
+
+      // If project+run specified, watch that specific run's events file
+      const watchedFiles = [];
+      if (project && run) {
+        try {
+          const runPath = safeJoin(runsRoot, project, run);
+          const eventsFile = path.join(runPath, ".events.jsonl");
+          startSSEWatcher(eventsFile, res);
+          watchedFiles.push(eventsFile);
+        } catch {
+          // Invalid path — just stream heartbeats
+        }
+      } else {
+        // No specific run — watch all known runs' event files
+        // (scan once at connection time; new runs picked up on reconnect)
+        try {
+          const projects = await fs.readdir(runsRoot, { withFileTypes: true }).catch(() => []);
+          for (const projectDir of projects) {
+            if (!projectDir.isDirectory()) continue;
+            const projectPath = path.join(runsRoot, projectDir.name);
+            const runDirs = await fs.readdir(projectPath, { withFileTypes: true }).catch(() => []);
+            for (const runDir of runDirs) {
+              if (!runDir.isDirectory() || !runDir.name.startsWith("run-")) continue;
+              const eventsFile = path.join(projectPath, runDir.name, ".events.jsonl");
+              startSSEWatcher(eventsFile, res);
+              watchedFiles.push(eventsFile);
+            }
+          }
+        } catch {
+          // Scan failed — just stream heartbeats
+        }
+      }
+
+      // Also send periodic run summary refreshes so the list view stays current
+      const summaryInterval = setInterval(async () => {
+        try {
+          const runs = await listRuns();
+          sseWrite(res, "runs", { runs });
+        } catch {
+          // Transient failure — skip this tick
+        }
+      }, 5000);
+
+      req.on("close", () => {
+        sseClients.delete(res);
+        clearInterval(summaryInterval);
+        for (const file of watchedFiles) {
+          stopSSEWatcher(file, res);
+        }
+      });
       return;
     }
 
