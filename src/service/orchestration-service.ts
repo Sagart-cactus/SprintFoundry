@@ -27,6 +27,7 @@ import type {
   RuntimeConfig,
   RuntimeMetadataEnvelope,
   ProjectStack,
+  TaskSource,
 } from "../shared/types.js";
 import { parse as parseYaml } from "yaml";
 import { PlanValidator } from "./plan-validator.js";
@@ -40,6 +41,16 @@ import { RuntimeSessionStore } from "./runtime-session-store.js";
 import type { PlannerRuntime } from "./runtime/types.js";
 import { PlannerFactory } from "./runtime/planner-factory.js";
 import type { RuntimeActivityEvent } from "./runtime/types.js";
+import type { PluginRegistry } from "./plugin-registry.js";
+import type {
+  WorkspacePlugin,
+  TrackerPlugin,
+  NotifierPlugin,
+  SCMPlugin,
+} from "../shared/plugin-types.js";
+import { SessionManager } from "./session-manager.js";
+import { LifecycleManager, defaultLifecycleConfig } from "./lifecycle-manager.js";
+import { NotificationRouter, defaultRoutingConfig } from "./notification-router.js";
 
 export class OrchestrationService {
   private validator: PlanValidator;
@@ -51,11 +62,17 @@ export class OrchestrationService {
   private git: GitManager;
   private notifications: NotificationService;
   private sessions: RuntimeSessionStore;
+  private sessionManager: SessionManager;
+  private lifecycleManager: LifecycleManager | null = null;
+  private notificationRouter: NotificationRouter | null = null;
+  private registry: PluginRegistry | null;
 
   constructor(
     private platformConfig: PlatformConfig,
-    private projectConfig: ProjectConfig
+    private projectConfig: ProjectConfig,
+    registry?: PluginRegistry
   ) {
+    this.registry = registry ?? null;
     this.validator = new PlanValidator(platformConfig, projectConfig);
     this.agentRunner = new AgentRunner(platformConfig, projectConfig);
     this.plannerRuntime = new PlannerFactory().create(platformConfig, projectConfig);
@@ -65,6 +82,114 @@ export class OrchestrationService {
     this.git = new GitManager(projectConfig.repo, projectConfig.branch_strategy);
     this.notifications = new NotificationService(projectConfig.integrations);
     this.sessions = new RuntimeSessionStore();
+    this.sessionManager = new SessionManager();
+
+    // Initialize lifecycle manager if an SCM plugin is available
+    const scmPlugin = this.registry?.getFirst<SCMPlugin>("scm") ?? null;
+    if (scmPlugin) {
+      const lifecycleConfig = this.platformConfig.lifecycle ?? defaultLifecycleConfig();
+      const notifierPlugins = new Map<string, NotifierPlugin>();
+      const notifierPlugin = this.registry?.getFirst<NotifierPlugin>("notifier");
+      if (notifierPlugin) {
+        notifierPlugins.set(notifierPlugin.name, notifierPlugin);
+      }
+      this.notificationRouter = new NotificationRouter(
+        notifierPlugins,
+        lifecycleConfig.notification_routing ?? defaultRoutingConfig()
+      );
+      this.lifecycleManager = new LifecycleManager(
+        lifecycleConfig,
+        scmPlugin,
+        this.sessionManager,
+        this.notificationRouter
+      );
+    }
+  }
+
+  // ---- Session persistence (fire-and-forget, never fails the run) ----
+
+  private persistSession(run: TaskRun, extra?: { workspace_path?: string; branch?: string }): void {
+    this.sessionManager.persist(run, extra).catch((err) => {
+      console.warn(`[session] Failed to persist session ${run.run_id}: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  }
+
+  // ---- Lifecycle watch (non-blocking, only when SCM plugin is available) ----
+
+  private startLifecycleWatch(run: TaskRun, _workspacePath: string): void {
+    if (!this.lifecycleManager || !run.pr_url) return;
+
+    // Use the ticket ID as a fallback branch identifier
+    const branch = run.ticket?.id ?? run.run_id;
+
+    this.lifecycleManager.watch(
+      run.run_id,
+      branch,
+      run.pr_url,
+      this.projectConfig.repo.url
+    );
+    this.lifecycleManager.start();
+  }
+
+  // ---- Plugin accessors (prefer plugin if registered, else legacy) ----
+
+  private getWorkspacePlugin(): WorkspacePlugin | null {
+    return this.registry?.getFirst<WorkspacePlugin>("workspace") ?? null;
+  }
+
+  private getTrackerPlugin(): TrackerPlugin | null {
+    return this.registry?.getFirst<TrackerPlugin>("tracker") ?? null;
+  }
+
+  private getNotifierPlugin(): NotifierPlugin | null {
+    return this.registry?.getFirst<NotifierPlugin>("notifier") ?? null;
+  }
+
+  private async fetchTicket(ticketId: string, source: TaskSource): Promise<TicketDetails> {
+    const tracker = this.getTrackerPlugin();
+    if (tracker) return tracker.fetch(ticketId, source);
+    return this.tickets.fetch(ticketId, source);
+  }
+
+  private async updateTicketStatus(
+    ticket: TicketDetails,
+    status: string,
+    prUrl?: string
+  ): Promise<void> {
+    const tracker = this.getTrackerPlugin();
+    if (tracker) {
+      await tracker.updateStatus(ticket, status, prUrl);
+      return;
+    }
+    await this.tickets.updateStatus(ticket, status, prUrl);
+  }
+
+  private async sendNotification(message: string): Promise<void> {
+    const notifier = this.getNotifierPlugin();
+    if (notifier) {
+      await notifier.notify(message);
+      return;
+    }
+    await this.notifications.send(message);
+  }
+
+  private async commitStepChanges(
+    workspacePath: string,
+    runId: string,
+    stepNumber: number,
+    agent: AgentType
+  ): Promise<boolean> {
+    const wsPlugin = this.getWorkspacePlugin();
+    if (wsPlugin) {
+      return wsPlugin.commitStepChanges(workspacePath, runId, stepNumber, agent);
+    }
+    return this.git.commitStepCheckpoint(workspacePath, runId, stepNumber, agent);
+  }
+
+  private async createPullRequest(workspacePath: string, run: TaskRun): Promise<string> {
+    const wsPlugin = this.getWorkspacePlugin();
+    if (wsPlugin) return wsPlugin.createPullRequest(workspacePath, run);
+    return this.git.createPullRequest(workspacePath, run);
   }
 
   // ---- Main entry point ----
@@ -83,24 +208,42 @@ export class OrchestrationService {
       // 2. Fetch ticket details (or create from prompt)
       const ticket = source === "prompt"
         ? this.createTicketFromPrompt(ticketId, promptText!)
-        : await this.tickets.fetch(ticketId, source);
+        : await this.fetchTicket(ticketId, source);
 
       run.ticket = ticket;
       await this.emitEvent(run.run_id, "task.created", { ticket });
+      this.persistSession(run);
 
       // 3. Prepare workspace (clone repo, create branch)
-      console.log(`[orchestrator] Creating workspace for run ${run.run_id}...`);
-      const workspacePath = await this.workspace.create(run.run_id);
-      console.log(`[orchestrator] Workspace created: ${workspacePath}`);
+      let workspacePath: string;
+      const wsPlugin = this.getWorkspacePlugin();
 
-      if (opts?.dryRun) {
-        // Skip git clone in dry-run — plan is generated from ticket context only
-        console.log(`[orchestrator] Dry-run mode — skipping git clone.`);
+      if (!opts?.dryRun && wsPlugin) {
+        console.log(`[orchestrator] Creating workspace for run ${run.run_id} via plugin ${wsPlugin.name}...`);
+        const workspace = await wsPlugin.create(
+          run.run_id,
+          this.projectConfig.repo,
+          this.projectConfig.branch_strategy,
+          ticket
+        );
+        workspacePath = workspace.path;
+        console.log(`[orchestrator] Workspace created: ${workspacePath} (branch: ${workspace.branch})`);
       } else {
-        console.log(`[orchestrator] Cloning repo and creating branch...`);
-        await this.git.cloneAndBranch(workspacePath, ticket);
-        console.log(`[orchestrator] Repo cloned successfully.`);
+        console.log(`[orchestrator] Creating workspace for run ${run.run_id}...`);
+        workspacePath = await this.workspace.create(run.run_id);
+        console.log(`[orchestrator] Workspace created: ${workspacePath}`);
 
+        if (opts?.dryRun) {
+          // Skip git clone in dry-run — plan is generated from ticket context only
+          console.log(`[orchestrator] Dry-run mode — skipping git clone.`);
+        } else {
+          console.log(`[orchestrator] Cloning repo and creating branch...`);
+          await this.git.cloneAndBranch(workspacePath, ticket);
+          console.log(`[orchestrator] Repo cloned successfully.`);
+        }
+      }
+
+      if (!opts?.dryRun) {
         // Detect project stack once — write .agent-context/stack.json for planner + all agents
         const stack = await this.detectProjectStack(workspacePath);
         console.log(
@@ -130,6 +273,7 @@ export class OrchestrationService {
 
       // 4. Get plan from orchestrator agent
       run.status = "planning";
+      this.persistSession(run, { workspace_path: workspacePath });
       console.log(`[orchestrator] Generating execution plan via ${this.plannerRuntime.constructor.name}...`);
       const plan = await this.plannerRuntime.generatePlan(
         ticket,
@@ -162,21 +306,26 @@ export class OrchestrationService {
         return run;
       }
       run.status = "executing";
+      this.persistSession(run, { workspace_path: workspacePath });
       console.log(`[orchestrator] Starting plan execution...`);
       await this.executePlan(run, validatedPlan, workspacePath);
 
       // 7. If all passed, create PR and update ticket
       if ((run.status as string) === "completed") {
-        const prUrl = await this.git.createPullRequest(workspacePath, run);
+        const prUrl = await this.createPullRequest(workspacePath, run);
         run.pr_url = prUrl;
         await this.emitEvent(run.run_id, "pr.created", { prUrl });
 
-        await this.tickets.updateStatus(ticket, "in_review", prUrl);
+        await this.updateTicketStatus(ticket, "in_review", prUrl);
         await this.emitEvent(run.run_id, "ticket.updated", { status: "in_review" });
 
-        await this.notifications.send(
+        await this.sendNotification(
           `Task ${ticket.id} completed. PR: ${prUrl}`
         );
+        this.persistSession(run, { workspace_path: workspacePath });
+
+        // Start lifecycle monitoring for this PR (non-blocking)
+        this.startLifecycleWatch(run, workspacePath);
       }
 
       return run;
@@ -184,9 +333,10 @@ export class OrchestrationService {
       run.status = "failed";
       run.error = error instanceof Error ? error.message : String(error);
       await this.emitEvent(run.run_id, "task.failed", { error: run.error });
-      await this.notifications.send(
+      await this.sendNotification(
         `Task ${run.ticket?.id ?? ticketId} failed: ${run.error}`
       );
+      this.persistSession(run);
       return run;
     } finally {
       await this.events.close();
@@ -254,11 +404,14 @@ export class OrchestrationService {
     await this.executePlan(run, plan, workspacePath);
 
     if ((run.status as string) === "completed") {
-      const prUrl = await this.git.createPullRequest(workspacePath, run);
+      const prUrl = await this.createPullRequest(workspacePath, run);
       run.pr_url = prUrl;
       await this.emitEvent(run.run_id, "pr.created", { prUrl });
-      await this.tickets.updateStatus(ticket, "in_review", prUrl);
-      await this.notifications.send(`Task ${ticket.id} completed. PR: ${prUrl}`);
+      await this.updateTicketStatus(ticket, "in_review", prUrl);
+      await this.sendNotification(`Task ${ticket.id} completed. PR: ${prUrl}`);
+
+      // Start lifecycle monitoring for this PR (non-blocking)
+      this.startLifecycleWatch(run, workspacePath);
     }
 
     return run;
@@ -298,10 +451,39 @@ export class OrchestrationService {
         // Phase 1: Execute in parallel, collecting rework signals instead of handling them inline.
         // This prevents multiple parallel steps from each spawning an independent developer rework call.
         const reworkSignals: Array<{ step: PlanStep; agentResult: AgentResult; currentRework: number }> = [];
+
+        // Use sub-worktree isolation when the workspace plugin supports it.
+        // Each parallel step gets its own worktree so file changes can't conflict.
+        const wsPlugin = this.getWorkspacePlugin();
+        const useSubWorktrees = wsPlugin?.supportsSubWorktrees === true
+          && typeof wsPlugin.createSubWorktree === "function"
+          && typeof wsPlugin.mergeSubWorktree === "function";
+
         const results = await Promise.all(
-          parallelGroup.map((step) =>
-            this.executeStep(run, step, workspacePath, reworkCounts, reworkSignals)
-          )
+          parallelGroup.map(async (step) => {
+            let stepWorkspace = workspacePath;
+            try {
+              if (useSubWorktrees) {
+                stepWorkspace = await wsPlugin!.createSubWorktree!(workspacePath, step.step_number);
+                console.log(`[parallel] Step ${step.step_number} using sub-worktree: ${stepWorkspace}`);
+              }
+              const result = await this.executeStep(run, step, stepWorkspace, reworkCounts, reworkSignals);
+              if (useSubWorktrees && result === "completed") {
+                await wsPlugin!.mergeSubWorktree!(workspacePath, stepWorkspace, step.step_number);
+                console.log(`[parallel] Step ${step.step_number} merged back to parent.`);
+              } else if (useSubWorktrees) {
+                // Clean up sub-worktree on failure/rework without merging
+                await wsPlugin!.removeSubWorktree?.(stepWorkspace);
+              }
+              return result;
+            } catch (err) {
+              // Clean up sub-worktree on unexpected error
+              if (useSubWorktrees && stepWorkspace !== workspacePath) {
+                try { await wsPlugin!.removeSubWorktree?.(stepWorkspace); } catch { /* best effort */ }
+              }
+              throw err;
+            }
+          })
         );
 
         // Hard failures take precedence
@@ -319,7 +501,7 @@ export class OrchestrationService {
 
           if (reworkSignals.some((s) => s.currentRework >= maxRework)) {
             run.status = "failed";
-            await this.notifications.send(
+            await this.sendNotification(
               `Parallel group exceeded max rework cycles (${maxRework}). Escalating.`
             );
             return;
@@ -419,6 +601,12 @@ export class OrchestrationService {
             if (!approved) {
               run.status = "failed";
               run.error = "Human review rejected";
+              await this.emitEvent(run.run_id, "task.failed", {
+                error: run.error,
+                reason: "human_gate_rejected",
+                step: stepNum,
+              });
+              this.persistSession(run, { workspace_path: workspacePath });
               return;
             }
             const reviewedStep = run.steps.find(
@@ -442,6 +630,7 @@ export class OrchestrationService {
       total_tokens: run.total_tokens_used,
       total_cost: run.total_cost_usd,
     });
+    this.persistSession(run, { workspace_path: workspacePath });
   }
 
   // ---- Single Step Execution ----
@@ -636,7 +825,7 @@ export class OrchestrationService {
       if (result.agentResult.status === "complete") {
         // Create a git checkpoint commit before emitting step.completed
         try {
-          const committed = await this.git.commitStepCheckpoint(
+          const committed = await this.commitStepChanges(
             workspacePath,
             run.run_id,
             step.step_number,
@@ -724,7 +913,7 @@ export class OrchestrationService {
         // Check rework budget
         if (currentRework >= maxRework) {
           stepExec.status = "failed";
-          await this.notifications.send(
+          await this.sendNotification(
             `Step ${step.step_number} (${step.agent}) exceeded max rework cycles (${maxRework}). Escalating.`
           );
           await this.emitEvent(run.run_id, "step.failed", {
@@ -971,7 +1160,7 @@ export class OrchestrationService {
     };
 
     await this.emitEvent(run.run_id, "human_gate.requested", { review });
-    await this.notifications.send(
+    await this.sendNotification(
       `Human review requested for task ${run.ticket.id} after step ${afterStep}: ${reason}`
     );
 
@@ -1360,12 +1549,12 @@ export class OrchestrationService {
 
   private findParallelGroup(
     ready: PlanStep[],
-    groups: Array<number[] | { step_numbers?: number[] }>
+    groups: Array<number[] | { step_numbers?: number[]; steps?: number[] }>
   ): PlanStep[] {
     for (const group of groups) {
       const stepNumbers = Array.isArray(group)
         ? group
-        : (group?.step_numbers ?? []);
+        : (group?.step_numbers ?? group?.steps ?? []);
       const matching = ready.filter((s) => stepNumbers.includes(s.step_number));
       if (matching.length > 1) return matching;
     }

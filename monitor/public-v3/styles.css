@@ -323,6 +323,37 @@ button {
   font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
 }
 
+/* SSE connection indicator */
+.sse-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.7rem;
+}
+.sse-indicator::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.sse-indicator.connected::before {
+  background: var(--ok);
+  box-shadow: 0 0 4px var(--ok);
+}
+.sse-indicator.connecting::before {
+  background: var(--warn);
+  animation: sse-pulse 1.2s ease-in-out infinite;
+}
+.sse-indicator.disconnected::before {
+  background: var(--err);
+}
+@keyframes sse-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
 .run-summary {
   position: sticky;
   top: 72px;

@@ -2,13 +2,14 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { promises as fs } from "node:fs";
+import { promises as fs, watchFile, unwatchFile, statSync, openSync, readSync, closeSync } from "node:fs";
 import { execFile } from "node:child_process";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const publicV3Dir = path.join(__dirname, "public-v3");
 const runsRoot = process.env.SPRINTFOUNDRY_RUNS_ROOT ?? process.env.AGENTSDLC_RUNS_ROOT ?? path.join(os.tmpdir(), "sprintfoundry");
+const sessionsRoot = process.env.SPRINTFOUNDRY_SESSIONS_DIR ?? path.join(os.homedir(), ".sprintfoundry", "sessions");
 
 const portArgIndex = process.argv.indexOf("--port");
 const portArg = portArgIndex !== -1 ? process.argv[portArgIndex + 1] : undefined;
@@ -140,7 +141,7 @@ function safeJoin(base, ...parts) {
 
 async function listRuns() {
   const projects = await fs.readdir(runsRoot, { withFileTypes: true }).catch(() => []);
-  const runs = [];
+  const byKey = new Map();
 
   for (const projectDir of projects) {
     if (!projectDir.isDirectory()) continue;
@@ -154,12 +155,65 @@ async function listRuns() {
       if (!runId.startsWith("run-")) continue;
       const runPath = path.join(projectPath, runId);
       const summary = await loadRunSummary(projectId, runId, runPath);
-      runs.push(summary);
+      byKey.set(`${projectId}/${runId}`, summary);
     }
   }
 
+  const sessions = await listSessionMetadata();
+  for (const session of sessions) {
+    const runId = session?.run_id;
+    const projectId = session?.project_id;
+    const workspacePath = session?.workspace_path;
+    if (!runId || !projectId || !workspacePath) continue;
+    const key = `${projectId}/${runId}`;
+    if (byKey.has(key)) continue;
+    const summary = await loadRunSummary(projectId, runId, workspacePath, session);
+    byKey.set(key, summary);
+  }
+
+  const runs = Array.from(byKey.values());
   runs.sort((a, b) => (b.last_event_ts ?? 0) - (a.last_event_ts ?? 0));
   return runs;
+}
+
+async function listSessionMetadata() {
+  const entries = await fs.readdir(sessionsRoot, { withFileTypes: true }).catch(() => []);
+  const sessions = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+    const fullPath = path.join(sessionsRoot, entry.name);
+    const raw = await fs.readFile(fullPath, "utf-8").catch(() => "");
+    if (!raw) continue;
+    try {
+      sessions.push(JSON.parse(raw));
+    } catch {
+      // Skip malformed session files.
+    }
+  }
+  return sessions;
+}
+
+async function resolveRunPath(projectId, runId) {
+  const runPath = safeJoin(runsRoot, projectId, runId);
+  const exists = await fs.stat(runPath).then((s) => s.isDirectory(), () => false);
+  if (exists) return runPath;
+
+  const sessions = await listSessionMetadata();
+  const match = sessions.find(
+    (s) =>
+      s?.project_id === projectId &&
+      s?.run_id === runId &&
+      typeof s?.workspace_path === "string" &&
+      s.workspace_path.length > 0
+  );
+  if (match?.workspace_path) {
+    const sessionPathExists = await fs
+      .stat(match.workspace_path)
+      .then((s) => s.isDirectory(), () => false);
+    if (sessionPathExists) return match.workspace_path;
+  }
+
+  throw new Error(`Run not found: ${projectId}/${runId}`);
 }
 
 async function readEvents(runPath) {
@@ -231,28 +285,31 @@ function buildStepStatus(plan, events) {
   return Array.from(byStep.values()).sort((a, b) => a.step_number - b.step_number);
 }
 
-async function loadRunSummary(projectId, runId, runPath) {
+async function loadRunSummary(projectId, runId, runPath, session = null) {
   const events = await readEvents(runPath);
   const planEvent = events.find((e) => e.event_type === "task.plan_generated");
   const plan = planEvent?.data?.plan ?? null;
   const steps = buildStepStatus(plan, events);
   const last = events.at(-1);
+  const hasEvents = events.length > 0;
   return {
     project_id: projectId,
     run_id: runId,
-    status: inferStatus(events),
-    classification: plan?.classification ?? null,
-    step_count: plan?.steps?.length ?? 0,
+    status: hasEvents ? inferStatus(events) : (session?.status ?? "unknown"),
+    classification: plan?.classification ?? session?.plan_classification ?? null,
+    step_count: hasEvents ? (plan?.steps?.length ?? 0) : (session?.total_steps ?? 0),
     steps,
-    started_at: events.find((e) => e.event_type === "task.created")?.timestamp ?? null,
+    started_at: events.find((e) => e.event_type === "task.created")?.timestamp ?? session?.created_at ?? null,
     last_event_type: last?.event_type ?? null,
-    last_event_ts: last?.timestamp ? Date.parse(last.timestamp) : null,
+    last_event_ts: last?.timestamp
+      ? Date.parse(last.timestamp)
+      : (session?.updated_at ? Date.parse(session.updated_at) : null),
     workspace_path: runPath,
   };
 }
 
 async function loadRun(projectId, runId) {
-  const runPath = safeJoin(runsRoot, projectId, runId);
+  const runPath = await resolveRunPath(projectId, runId);
   const summary = await loadRunSummary(projectId, runId, runPath);
   const events = await readEvents(runPath);
   const planEvent = events.find((e) => e.event_type === "task.plan_generated");
@@ -364,7 +421,7 @@ async function readStepLogText(runPath, kind, stepNumber, lines) {
 }
 
 async function readLogText(projectId, runId, kind, lines = 400, stepNumber = null) {
-  const runPath = safeJoin(runsRoot, projectId, runId);
+  const runPath = await resolveRunPath(projectId, runId);
 
   // Per-step log requested: read the step-specific file directly.
   if (stepNumber != null && (kind === "agent_stdout" || kind === "agent_stderr")) {
@@ -391,7 +448,7 @@ async function readLogText(projectId, runId, kind, lines = 400, stepNumber = nul
 }
 
 async function listFiles(projectId, runId, root = "") {
-  const runPath = safeJoin(runsRoot, projectId, runId);
+  const runPath = await resolveRunPath(projectId, runId);
   const start = safeJoin(runPath, root || ".");
   const out = [];
 
@@ -437,6 +494,97 @@ async function serveStatic(res, pathname, rootDir = publicV3Dir) {
   res.writeHead(200, { "Content-Type": contentType });
   res.end(body);
 }
+
+// ---- SSE (Server-Sent Events) infrastructure ----
+
+/** @type {Set<http.ServerResponse>} */
+const sseClients = new Set();
+
+/** @type {Map<string, { offset: number, clients: Set<http.ServerResponse> }>} */
+const sseWatchers = new Map();
+
+const SSE_HEARTBEAT_MS = 15_000;
+const SSE_POLL_MS = 1_000;
+
+function sseWrite(res, event, data) {
+  try {
+    if (event) res.write(`event: ${event}\n`);
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  } catch {
+    // Client disconnected
+  }
+}
+
+function readNewEventsFromOffset(filePath, offset) {
+  let content = "";
+  let newOffset = offset;
+  try {
+    const stat = statSync(filePath);
+    if (stat.size <= offset) return { events: [], newOffset: offset };
+    const fd = openSync(filePath, "r");
+    const buf = Buffer.alloc(stat.size - offset);
+    readSync(fd, buf, 0, buf.length, offset);
+    closeSync(fd);
+    content = buf.toString("utf-8");
+    newOffset = stat.size;
+  } catch {
+    return { events: [], newOffset: offset };
+  }
+  const events = content
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+    .filter(Boolean);
+  return { events, newOffset };
+}
+
+function startSSEWatcher(eventsFilePath, res) {
+  let watcher = sseWatchers.get(eventsFilePath);
+  if (!watcher) {
+    let currentOffset = 0;
+    try {
+      const stat = statSync(eventsFilePath);
+      currentOffset = stat.size; // Start from current end — only stream NEW events
+    } catch {
+      currentOffset = 0;
+    }
+    watcher = { offset: currentOffset, clients: new Set() };
+    sseWatchers.set(eventsFilePath, watcher);
+
+    // Use watchFile for reliable cross-platform JSONL append detection
+    watchFile(eventsFilePath, { interval: SSE_POLL_MS }, () => {
+      const w = sseWatchers.get(eventsFilePath);
+      if (!w || w.clients.size === 0) return;
+      const { events, newOffset } = readNewEventsFromOffset(eventsFilePath, w.offset);
+      w.offset = newOffset;
+      for (const event of events) {
+        for (const client of w.clients) {
+          sseWrite(client, "event", event);
+        }
+      }
+    });
+  }
+  watcher.clients.add(res);
+}
+
+function stopSSEWatcher(eventsFilePath, res) {
+  const watcher = sseWatchers.get(eventsFilePath);
+  if (!watcher) return;
+  watcher.clients.delete(res);
+  if (watcher.clients.size === 0) {
+    unwatchFile(eventsFilePath);
+    sseWatchers.delete(eventsFilePath);
+  }
+}
+
+// Heartbeat to keep SSE connections alive through proxies
+const sseHeartbeatInterval = setInterval(() => {
+  for (const client of sseClients) {
+    try { client.write(`:heartbeat\n\n`); } catch { /* ignore */ }
+  }
+}, SSE_HEARTBEAT_MS);
+sseHeartbeatInterval.unref?.();
 
 const server = http.createServer(async (req, res) => {
   const reqUrl = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
@@ -487,9 +635,72 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { error: "Missing project/run query params" });
         return;
       }
-      const runPath = safeJoin(runsRoot, project, run);
+      const runPath = await resolveRunPath(project, run);
       const events = await readEvents(runPath);
       sendJson(res, 200, { events: events.slice(Math.max(0, events.length - limit)) });
+      return;
+    }
+
+    // ---- SSE event stream ----
+    if (pathname === "/api/events/stream") {
+      const project = reqUrl.searchParams.get("project");
+      const run = reqUrl.searchParams.get("run");
+
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no", // Disable buffering in nginx
+      });
+
+      // Send initial connected message
+      sseWrite(res, "connected", { ts: Date.now() });
+      sseClients.add(res);
+
+      // If project+run specified, watch that specific run's events file
+      const watchedFiles = [];
+      if (project && run) {
+        try {
+          const runPath = await resolveRunPath(project, run);
+          const eventsFile = path.join(runPath, ".events.jsonl");
+          startSSEWatcher(eventsFile, res);
+          watchedFiles.push(eventsFile);
+        } catch {
+          // Invalid path — just stream heartbeats
+        }
+      } else {
+        // No specific run — watch all known runs' event files
+        // (scan once at connection time; new runs picked up on reconnect)
+        try {
+          const runs = await listRuns();
+          for (const summary of runs) {
+            if (!summary.workspace_path) continue;
+            const eventsFile = path.join(summary.workspace_path, ".events.jsonl");
+            startSSEWatcher(eventsFile, res);
+            watchedFiles.push(eventsFile);
+          }
+        } catch {
+          // Scan failed — just stream heartbeats
+        }
+      }
+
+      // Also send periodic run summary refreshes so the list view stays current
+      const summaryInterval = setInterval(async () => {
+        try {
+          const runs = await listRuns();
+          sseWrite(res, "runs", { runs });
+        } catch {
+          // Transient failure — skip this tick
+        }
+      }, 5000);
+
+      req.on("close", () => {
+        sseClients.delete(res);
+        clearInterval(summaryInterval);
+        for (const file of watchedFiles) {
+          stopSSEWatcher(file, res);
+        }
+      });
       return;
     }
 
@@ -518,7 +729,7 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { error: "Missing or invalid project/run/step query params" });
         return;
       }
-      const runPath = safeJoin(runsRoot, project, run);
+      const runPath = await resolveRunPath(project, run);
       const runSummary = await loadRunSummary(project, run, runPath);
       const maxCompletedStep = runSummary.steps
         .filter((step) => step.status === "completed" || step.status === "failed")
@@ -554,7 +765,7 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { error: "Missing project, run, or file" });
         return;
       }
-      const runPath = safeJoin(runsRoot, project, run);
+      const runPath = await resolveRunPath(project, run);
       const absFile = path.resolve(runPath, file);
       if (!absFile.startsWith(runPath + path.sep) && absFile !== runPath) {
         sendJson(res, 400, { error: "Invalid file path" });
@@ -599,7 +810,7 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { error: "Missing project/run query params" });
         return;
       }
-      const runPath = safeJoin(runsRoot, project, run);
+      const runPath = await resolveRunPath(project, run);
       const reviewDir = path.join(runPath, ".sprintfoundry", "reviews");
       const entries = await fs.readdir(reviewDir).catch(() => []);
       const reviews = [];
@@ -637,7 +848,7 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { error: "Invalid review_id format" });
         return;
       }
-      const runPath = safeJoin(runsRoot, project, runId);
+      const runPath = await resolveRunPath(project, runId);
       const reviewDir = path.join(runPath, ".sprintfoundry", "reviews");
       await fs.mkdir(reviewDir, { recursive: true });
       const decisionPath = path.join(reviewDir, `${review_id}.decision.json`);

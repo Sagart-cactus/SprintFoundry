@@ -184,6 +184,11 @@ export interface PlatformConfig {
   rules: PlatformRule[];
   agent_definitions: AgentDefinition[];
   events_dir?: string;
+  lifecycle?: LifecycleConfig;
+  workspace?: {
+    strategy?: "tmpdir" | "worktree";
+    base_repo_dir?: string;
+  };
 }
 
 export interface ProjectConfig {
@@ -200,6 +205,10 @@ export interface ProjectConfig {
   agents?: string[];    // agent IDs this project uses (filters the catalog)
   runtime_overrides?: Partial<Record<string, RuntimeConfig>>;
   planner_runtime_override?: RuntimeConfig;
+  workspace?: {
+    strategy?: "tmpdir" | "worktree";
+    base_repo_dir?: string;
+  };
   codex_skills_enabled?: boolean;
   codex_skill_catalog_overrides?: Record<string, CodexSkillDefinition>;
   codex_skills_overrides?: Record<string, string[]>;
@@ -413,4 +422,81 @@ export interface TaskEvent {
   event_type: EventType;
   timestamp: Date;
   data: Record<string, unknown>;
+}
+
+// ----- Session Management -----
+
+export type ActivityState =
+  | "active"
+  | "ready"
+  | "idle"
+  | "waiting_input"
+  | "blocked"
+  | "exited"
+  | "unknown";
+
+export interface ActivityDetection {
+  state: ActivityState;
+  last_event_at: string | null;
+  elapsed_ms: number | null;
+  detail?: string;
+}
+
+export interface RunSessionMetadata {
+  run_id: string;
+  project_id: string;
+  ticket_id: string;
+  ticket_source: TaskSource;
+  ticket_title: string;
+  status: RunStatus;
+  current_step: number;
+  total_steps: number;
+  plan_classification: string | null;
+  workspace_path: string | null;
+  branch: string | null;
+  pr_url: string | null;
+  total_tokens: number;
+  total_cost_usd: number;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+  error: string | null;
+}
+
+// ----- Reaction Engine Configuration -----
+
+export type ReactionTrigger =
+  | "ci-failed"
+  | "changes-requested"
+  | "approved-and-green"
+  | "agent-stuck";
+
+export type ReactionAction =
+  | "trigger-rework"
+  | "notify"
+  | "auto-merge";
+
+export interface ReactionConfig {
+  trigger: ReactionTrigger;
+  auto: boolean;
+  action: ReactionAction;
+  retries: number;
+  escalate_after: number | string; // count or duration like "30m"
+  priority: EventPriority;
+}
+
+export type EventPriority = "urgent" | "action" | "warning" | "info";
+
+export interface NotificationRoutingConfig {
+  urgent: string[];   // notifier names
+  action: string[];
+  warning: string[];
+  info: string[];
+}
+
+export interface LifecycleConfig {
+  enabled: boolean;
+  poll_interval_ms: number;
+  reactions: Record<ReactionTrigger, ReactionConfig>;
+  notification_routing: NotificationRoutingConfig;
 }

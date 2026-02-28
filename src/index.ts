@@ -3,6 +3,7 @@
 import { Command } from "commander";
 import * as fs from "fs/promises";
 import * as path from "path";
+import * as os from "os";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
 
@@ -14,11 +15,68 @@ import { loadConfig } from "./service/config-loader.js";
 import { migrateEnvVars } from "./service/env-compat.js";
 import { runProjectCreate } from "./commands/project-create.js";
 import { runAgentCreate } from "./commands/agent-create.js";
+import { SessionManager } from "./service/session-manager.js";
+import { getActivityState } from "./service/activity-detector.js";
+import { PluginRegistry } from "./service/plugin-registry.js";
+import { tmpdirWorkspaceModule } from "./plugins/workspace-tmpdir/index.js";
+import { worktreeWorkspaceModule } from "./plugins/workspace-worktree/index.js";
+import { defaultTrackerModule } from "./plugins/tracker-default/index.js";
+import { consoleNotifierModule } from "./plugins/notifier-console/index.js";
+import { githubSCMModule } from "./plugins/scm-github/index.js";
 
 // Migrate deprecated AGENTSDLC_* env vars to SPRINTFOUNDRY_*
 migrateEnvVars();
 
 const program = new Command();
+
+function buildPluginRegistry(platform: PlatformConfig, project: ProjectConfig): PluginRegistry {
+  const registry = new PluginRegistry();
+
+  const workspaceStrategy =
+    project.workspace?.strategy ??
+    platform.workspace?.strategy ??
+    "tmpdir";
+  const baseRepoDir =
+    project.workspace?.base_repo_dir ??
+    platform.workspace?.base_repo_dir ??
+    path.join(os.tmpdir(), "sprintfoundry-worktrees");
+
+  if (workspaceStrategy === "worktree") {
+    registry.register(worktreeWorkspaceModule, {
+      project_id: project.project_id,
+      base_repo_dir: baseRepoDir,
+    });
+  } else {
+    registry.register(tmpdirWorkspaceModule, {
+      project_id: project.project_id,
+    });
+  }
+
+  registry.register(defaultTrackerModule, {
+    integrations: project.integrations,
+  });
+  registry.register(consoleNotifierModule, {
+    integrations: project.integrations,
+  });
+
+  const ticketSource = project.integrations?.ticket_source;
+  if (ticketSource?.type === "github") {
+    const token = String(ticketSource.config?.token ?? "").trim();
+    const owner = String(ticketSource.config?.owner ?? "").trim();
+    const repo = String(ticketSource.config?.repo ?? "").trim();
+    if (token && owner && repo) {
+      registry.register(githubSCMModule, {
+        token,
+        owner,
+        repo,
+      });
+    } else {
+      console.warn("[sprintfoundry] SCM plugin github not registered: missing token/owner/repo");
+    }
+  }
+
+  return registry;
+}
 
 program
   .name("sprintfoundry")
@@ -49,7 +107,8 @@ program
     }
 
     const { platform, project } = await loadConfig(opts.config, opts.project);
-    const service = new OrchestrationService(platform, project);
+    const registry = buildPluginRegistry(platform, project);
+    const service = new OrchestrationService(platform, project, registry);
 
     const ticketId = opts.ticket ?? `prompt-${Date.now()}`;
 
@@ -447,6 +506,143 @@ agentCmd
   });
 
 program.addCommand(agentCmd);
+
+// ---- Session management commands ----
+
+program
+  .command("sessions")
+  .description("List all tracked run sessions")
+  .option("--status <status>", "Filter by status (pending, planning, executing, completed, failed, cancelled)")
+  .option("--json", "Output as JSON")
+  .action(async (opts) => {
+    const mgr = new SessionManager();
+    let sessions = await mgr.list();
+
+    if (opts.status) {
+      sessions = sessions.filter((s) => s.status === opts.status);
+    }
+
+    if (opts.json) {
+      console.log(JSON.stringify(sessions, null, 2));
+      return;
+    }
+
+    if (sessions.length === 0) {
+      console.log("No sessions found.");
+      return;
+    }
+
+    console.log(`\n  ${"RUN ID".padEnd(20)} ${"STATUS".padEnd(14)} ${"STEP".padEnd(7)} ${"COST".padEnd(10)} ${"TICKET".padEnd(20)} TITLE`);
+    console.log(`  ${"─".repeat(20)} ${"─".repeat(14)} ${"─".repeat(7)} ${"─".repeat(10)} ${"─".repeat(20)} ${"─".repeat(30)}`);
+
+    for (const s of sessions) {
+      const step = s.total_steps > 0 ? `${s.current_step}/${s.total_steps}` : "-";
+      const cost = `$${s.total_cost_usd.toFixed(2)}`;
+      const title = s.ticket_title.length > 40 ? s.ticket_title.slice(0, 37) + "..." : s.ticket_title;
+      console.log(
+        `  ${s.run_id.padEnd(20)} ${s.status.padEnd(14)} ${step.padEnd(7)} ${cost.padEnd(10)} ${s.ticket_id.padEnd(20)} ${title}`
+      );
+    }
+    console.log(`\n  ${sessions.length} session(s)\n`);
+  });
+
+program
+  .command("session <id>")
+  .description("Show details for a specific run session")
+  .option("--json", "Output as JSON")
+  .option("--activity", "Check agent activity state (reads Claude Code JSONL)")
+  .action(async (id, opts) => {
+    const mgr = new SessionManager();
+    const session = await mgr.get(id);
+
+    if (!session) {
+      console.error(`Session not found: ${id}`);
+      process.exit(1);
+    }
+
+    if (opts.json) {
+      const output: Record<string, unknown> = { ...session };
+      if (opts.activity && session.workspace_path) {
+        output.activity = await getActivityState(session.workspace_path);
+      }
+      console.log(JSON.stringify(output, null, 2));
+      return;
+    }
+
+    console.log(`\n  Session: ${session.run_id}`);
+    console.log(`  ${"─".repeat(50)}`);
+    console.log(`  Status:         ${session.status}`);
+    console.log(`  Project:        ${session.project_id}`);
+    console.log(`  Ticket:         ${session.ticket_id} (${session.ticket_source})`);
+    console.log(`  Title:          ${session.ticket_title}`);
+    if (session.plan_classification) {
+      console.log(`  Classification: ${session.plan_classification}`);
+    }
+    console.log(`  Steps:          ${session.current_step}/${session.total_steps}`);
+    console.log(`  Tokens:         ${session.total_tokens.toLocaleString()}`);
+    console.log(`  Cost:           $${session.total_cost_usd.toFixed(2)}`);
+    if (session.workspace_path) {
+      console.log(`  Workspace:      ${session.workspace_path}`);
+    }
+    if (session.branch) {
+      console.log(`  Branch:         ${session.branch}`);
+    }
+    if (session.pr_url) {
+      console.log(`  PR:             ${session.pr_url}`);
+    }
+    console.log(`  Created:        ${session.created_at}`);
+    console.log(`  Updated:        ${session.updated_at}`);
+    if (session.completed_at) {
+      console.log(`  Completed:      ${session.completed_at}`);
+    }
+    if (session.error) {
+      console.log(`  Error:          ${session.error}`);
+    }
+
+    if (opts.activity && session.workspace_path) {
+      console.log(`\n  Agent Activity`);
+      console.log(`  ${"─".repeat(50)}`);
+      const activity = await getActivityState(session.workspace_path);
+      console.log(`  State:          ${activity.state}`);
+      if (activity.last_event_at) {
+        console.log(`  Last event:     ${activity.last_event_at}`);
+      }
+      if (activity.elapsed_ms !== null) {
+        console.log(`  Elapsed:        ${Math.round(activity.elapsed_ms / 1000)}s`);
+      }
+      if (activity.detail) {
+        console.log(`  Detail:         ${activity.detail}`);
+      }
+    }
+
+    console.log("");
+  });
+
+program
+  .command("cancel <id>")
+  .description("Mark a run session as cancelled")
+  .action(async (id) => {
+    const mgr = new SessionManager();
+    const session = await mgr.get(id);
+
+    if (!session) {
+      console.error(`Session not found: ${id}`);
+      process.exit(1);
+    }
+
+    if (session.status === "completed" || session.status === "cancelled") {
+      console.log(`Session ${id} is already ${session.status}.`);
+      return;
+    }
+
+    const updated = await mgr.updateStatus(id, "cancelled");
+    if (updated) {
+      console.log(`Session ${id} marked as cancelled.`);
+    } else {
+      console.error(`Failed to update session ${id}.`);
+      process.exit(1);
+    }
+  });
 
 const argv =
   process.argv[2] === "--"

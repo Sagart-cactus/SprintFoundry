@@ -14,10 +14,15 @@ import http from "node:http";
 import { spawn, ChildProcess } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import os from "node:os";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const serverMjs = path.resolve(__dirname, "../../monitor/server.mjs");
 let BASE = "";
+let tmpRunsRoot = "";
+let tmpSessionsRoot = "";
+let tmpWorkspacesRoot = "";
 
 function get(url: string): Promise<{ status: number; body: string; contentType: string }> {
   return new Promise((resolve, reject) => {
@@ -38,9 +43,67 @@ function get(url: string): Promise<{ status: number; body: string; contentType: 
 let serverProcess: ChildProcess;
 
 beforeAll(async () => {
+  tmpRunsRoot = mkdtempSync(path.join(os.tmpdir(), "sf-monitor-runs-"));
+  tmpSessionsRoot = mkdtempSync(path.join(os.tmpdir(), "sf-monitor-sessions-"));
+  tmpWorkspacesRoot = mkdtempSync(path.join(os.tmpdir(), "sf-monitor-workspaces-"));
+
+  // Regular run under runsRoot
+  const regularRunDir = path.join(tmpRunsRoot, "regular-project", "run-regular");
+  mkdirSync(regularRunDir, { recursive: true });
+  writeFileSync(
+    path.join(regularRunDir, ".events.jsonl"),
+    JSON.stringify({ event_type: "task.created", timestamp: new Date().toISOString(), data: {} }) + "\n",
+    "utf-8"
+  );
+
+  // Session-backed run with workspace path outside runsRoot
+  const externalWorkspace = path.join(tmpWorkspacesRoot, "run-session-only");
+  mkdirSync(externalWorkspace, { recursive: true });
+  writeFileSync(
+    path.join(externalWorkspace, ".events.jsonl"),
+    [
+      JSON.stringify({ event_type: "task.created", timestamp: "2026-02-28T00:00:00Z", data: {} }),
+      JSON.stringify({ event_type: "step.started", timestamp: "2026-02-28T00:01:00Z", data: { step: 1 } }),
+    ].join("\n") + "\n",
+    "utf-8"
+  );
+  writeFileSync(
+    path.join(tmpSessionsRoot, "run-session-only.json"),
+    JSON.stringify(
+      {
+        run_id: "run-session-only",
+        project_id: "session-only-project",
+        ticket_id: "PROMPT-1",
+        ticket_source: "prompt",
+        ticket_title: "Session-backed run",
+        status: "executing",
+        current_step: 1,
+        total_steps: 3,
+        plan_classification: "new_feature",
+        workspace_path: externalWorkspace,
+        branch: null,
+        pr_url: null,
+        total_tokens: 0,
+        total_cost_usd: 0,
+        created_at: "2026-02-28T00:00:00Z",
+        updated_at: "2026-02-28T00:01:00Z",
+        completed_at: null,
+        error: null,
+      },
+      null,
+      2
+    ),
+    "utf-8"
+  );
+
   await new Promise<void>((resolve, reject) => {
     serverProcess = spawn("node", [serverMjs], {
-      env: { ...process.env, MONITOR_PORT: "0" },
+      env: {
+        ...process.env,
+        MONITOR_PORT: "0",
+        SPRINTFOUNDRY_RUNS_ROOT: tmpRunsRoot,
+        SPRINTFOUNDRY_SESSIONS_DIR: tmpSessionsRoot,
+      },
       stdio: ["ignore", "pipe", "pipe"],
     });
     const timeout = setTimeout(() => reject(new Error("Server start timeout")), 5000);
@@ -72,6 +135,9 @@ beforeAll(async () => {
 
 afterAll(() => {
   serverProcess?.kill();
+  if (tmpRunsRoot) rmSync(tmpRunsRoot, { recursive: true, force: true });
+  if (tmpSessionsRoot) rmSync(tmpSessionsRoot, { recursive: true, force: true });
+  if (tmpWorkspacesRoot) rmSync(tmpWorkspacesRoot, { recursive: true, force: true });
 });
 
 describe("GET / — v3 default route", () => {
@@ -135,6 +201,14 @@ describe("GET /api/runs", () => {
     expect(data).toHaveProperty("runs");
     expect(Array.isArray(data.runs)).toBe(true);
   });
+
+  it("includes session-backed runs that are outside runs root", async () => {
+    const { body } = await get(`${BASE}/api/runs`);
+    const data = JSON.parse(body);
+    const run = data.runs.find((r: any) => r.run_id === "run-session-only");
+    expect(run).toBeDefined();
+    expect(run.project_id).toBe("session-only-project");
+  });
 });
 
 describe("GET /api/run", () => {
@@ -143,6 +217,14 @@ describe("GET /api/run", () => {
     expect(status).toBe(400);
     expect(JSON.parse(body)).toHaveProperty("error");
   });
+
+  it("loads a session-backed run via workspace path fallback", async () => {
+    const { status, body } = await get(`${BASE}/api/run?project=session-only-project&run=run-session-only`);
+    expect(status).toBe(200);
+    const data = JSON.parse(body);
+    expect(data.run_id).toBe("run-session-only");
+    expect(data.project_id).toBe("session-only-project");
+  });
 });
 
 describe("GET /api/events", () => {
@@ -150,6 +232,16 @@ describe("GET /api/events", () => {
     const { status, body } = await get(`${BASE}/api/events`);
     expect(status).toBe(400);
     expect(JSON.parse(body)).toHaveProperty("error");
+  });
+
+  it("loads events for session-backed run via workspace path fallback", async () => {
+    const { status, body } = await get(
+      `${BASE}/api/events?project=session-only-project&run=run-session-only&limit=20`
+    );
+    expect(status).toBe(200);
+    const data = JSON.parse(body);
+    expect(Array.isArray(data.events)).toBe(true);
+    expect(data.events.length).toBeGreaterThanOrEqual(1);
   });
 });
 

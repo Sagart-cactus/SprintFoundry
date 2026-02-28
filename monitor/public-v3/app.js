@@ -339,12 +339,105 @@ document.querySelectorAll(".lane h2").forEach((h2) => {
   });
 });
 
-setInterval(async () => {
-  try {
-    await fetchRuns();
-  } catch {
-    // keep current view on transient failure
-  }
-}, 5000);
+// ---- SSE real-time streaming with polling fallback ----
 
+const sseStatus = document.getElementById("sse-status");
+let sseSource = null;
+let pollingInterval = null;
+let sseConnected = false;
+
+function updateSSEIndicator(status) {
+  if (!sseStatus) return;
+  sseStatus.className = `sse-indicator ${status}`;
+  if (status === "connected") sseStatus.textContent = "Live";
+  else if (status === "connecting") sseStatus.textContent = "Connecting...";
+  else sseStatus.textContent = "Polling";
+}
+
+function startPolling() {
+  if (pollingInterval) return;
+  pollingInterval = setInterval(async () => {
+    try {
+      await fetchRuns();
+    } catch {
+      // keep current view on transient failure
+    }
+  }, 5000);
+}
+
+function stopPolling() {
+  if (pollingInterval) {
+    clearInterval(pollingInterval);
+    pollingInterval = null;
+  }
+}
+
+function connectSSE() {
+  if (sseSource) {
+    sseSource.close();
+    sseSource = null;
+  }
+
+  updateSSEIndicator("connecting");
+  sseSource = new EventSource("/api/events/stream");
+
+  sseSource.addEventListener("connected", () => {
+    sseConnected = true;
+    updateSSEIndicator("connected");
+    stopPolling();
+  });
+
+  sseSource.addEventListener("runs", (e) => {
+    try {
+      const payload = JSON.parse(e.data);
+      if (Array.isArray(payload.runs)) {
+        state.runs = payload.runs;
+        render();
+        stampRefresh();
+      }
+    } catch {
+      // Malformed data
+    }
+  });
+
+  sseSource.addEventListener("event", (e) => {
+    try {
+      const event = JSON.parse(e.data);
+      const runId = event.run_id;
+      if (runId) {
+        const existing = state.runs.find((r) => r.run_id === runId);
+        if (existing) {
+          existing.last_event_type = event.event_type;
+          existing.last_event_ts = event.timestamp ? Date.parse(event.timestamp) : Date.now();
+          if (event.event_type === "task.completed") existing.status = "completed";
+          else if (event.event_type === "task.failed") existing.status = "failed";
+          else if (event.event_type === "step.started") existing.status = "executing";
+          else if (event.event_type === "human_gate.requested") existing.status = "waiting_human_review";
+          else if (event.event_type === "task.plan_generated") existing.status = "planning";
+          render();
+          stampRefresh();
+        }
+      }
+    } catch {
+      // Malformed event
+    }
+  });
+
+  sseSource.onerror = () => {
+    sseConnected = false;
+    updateSSEIndicator("disconnected");
+    startPolling();
+  };
+
+  sseSource.onopen = () => {
+    if (sseConnected) return;
+    sseConnected = true;
+    updateSSEIndicator("connected");
+    stopPolling();
+  };
+}
+
+// Initial data load, then connect SSE
 await fetchRuns();
+connectSSE();
+startPolling();
