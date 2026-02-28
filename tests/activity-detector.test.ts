@@ -147,6 +147,29 @@ describe("getActivityState", () => {
     expect(result.detail).toContain("No session file");
   });
 
+  it("falls back to codex runtime log when Claude session file is missing", async () => {
+    const now = new Date().toISOString();
+    await fs.writeFile(
+      path.join(testDir, ".codex-runtime.stdout.log"),
+      JSON.stringify({ type: "turn.completed", timestamp: now }) + "\n",
+      "utf-8"
+    );
+
+    const result = await getActivityState(testDir);
+    expect(result.state).toBe("exited");
+    expect(result.detail).toContain("Runtime log indicates completion");
+  });
+
+  it("marks stale runtime log as blocked when no fresh updates exist", async () => {
+    const logPath = path.join(testDir, ".codex-runtime.stdout.log");
+    await fs.writeFile(logPath, JSON.stringify({ type: "agent_message" }) + "\n", "utf-8");
+    const old = new Date(Date.now() - 180_000);
+    await fs.utimes(logPath, old, old);
+
+    const result = await getActivityState(testDir, 30_000);
+    expect(result.state).toBe("blocked");
+  });
+
   it("returns exited when last event is exit", async () => {
     await writeJsonl(path.join(testDir, ".claude"), "session.jsonl", [
       { type: "start", timestamp: "2026-02-27T10:00:00Z" },

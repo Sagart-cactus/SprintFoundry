@@ -72,7 +72,8 @@ export class SessionManager {
     const filePath = this.getSessionPath(runId);
     try {
       const raw = await fs.readFile(filePath, "utf-8");
-      return JSON.parse(raw) as RunSessionMetadata;
+      const session = JSON.parse(raw) as RunSessionMetadata;
+      return await this.reconcileFromWorkspaceEvents(session);
     } catch {
       return null;
     }
@@ -91,7 +92,8 @@ export class SessionManager {
       for (const file of jsonFiles) {
         try {
           const raw = await fs.readFile(path.join(this.sessionsDir, file), "utf-8");
-          sessions.push(JSON.parse(raw) as RunSessionMetadata);
+          const parsed = JSON.parse(raw) as RunSessionMetadata;
+          sessions.push(await this.reconcileFromWorkspaceEvents(parsed));
         } catch {
           // Skip corrupt files
         }
@@ -149,5 +151,87 @@ export class SessionManager {
 
   private getSessionPath(runId: string): string {
     return path.join(this.sessionsDir, `${runId}.json`);
+  }
+
+  private async reconcileFromWorkspaceEvents(
+    session: RunSessionMetadata
+  ): Promise<RunSessionMetadata> {
+    // Terminal/cancelled states are authoritative.
+    if (
+      session.status === "completed" ||
+      session.status === "failed" ||
+      session.status === "cancelled"
+    ) {
+      return session;
+    }
+    if (!session.workspace_path) return session;
+
+    const eventsPath = path.join(session.workspace_path, ".events.jsonl");
+    const raw = await fs.readFile(eventsPath, "utf-8").catch(() => "");
+    if (!raw.trim()) return session;
+
+    const events = raw
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        try {
+          return JSON.parse(line) as { event_type?: string; timestamp?: string };
+        } catch {
+          return null;
+        }
+      })
+      .filter((evt): evt is { event_type?: string; timestamp?: string } => Boolean(evt));
+
+    if (events.length === 0) return session;
+
+    let derived: RunStatus | null = null;
+    let sawStepFailure = false;
+    let hasTerminalTaskEvent = false;
+
+    for (const event of events) {
+      const type = event.event_type;
+      if (type === "task.completed") {
+        derived = "completed";
+        hasTerminalTaskEvent = true;
+      } else if (type === "task.failed") {
+        derived = "failed";
+        hasTerminalTaskEvent = true;
+      } else if (type === "human_gate.requested") {
+        if (!hasTerminalTaskEvent) derived = "waiting_human_review";
+      } else if (type === "human_gate.approved") {
+        if (!hasTerminalTaskEvent) derived = "executing";
+      } else if (type === "human_gate.rejected") {
+        derived = "failed";
+        hasTerminalTaskEvent = true;
+      } else if (type === "step.failed") {
+        sawStepFailure = true;
+        if (!hasTerminalTaskEvent) derived = "executing";
+      } else if (type === "step.started") {
+        if (!hasTerminalTaskEvent) derived = "executing";
+      } else if (type === "task.plan_generated") {
+        if (!hasTerminalTaskEvent && !derived) derived = "planning";
+      } else if (type === "task.created") {
+        if (!hasTerminalTaskEvent && !derived) derived = "pending";
+      }
+    }
+
+    // If a step failed but no terminal task event was written, treat run as failed.
+    if (!hasTerminalTaskEvent && sawStepFailure) {
+      derived = "failed";
+    }
+
+    if (!derived || derived === session.status) return session;
+
+    const lastTimestamp = events.at(-1)?.timestamp;
+    return {
+      ...session,
+      status: derived,
+      updated_at: lastTimestamp ?? session.updated_at,
+      completed_at:
+        (derived === "completed" || derived === "failed")
+          ? (session.completed_at ?? lastTimestamp ?? null)
+          : session.completed_at,
+    };
   }
 }

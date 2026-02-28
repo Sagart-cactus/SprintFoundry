@@ -22,6 +22,11 @@ interface JsonlLine {
   [key: string]: unknown;
 }
 
+interface RuntimeLogCandidate {
+  path: string;
+  mtimeMs: number;
+}
+
 /**
  * Convert a workspace path to the Claude Code project path
  * where JSONL session files are stored.
@@ -52,6 +57,25 @@ export async function findLatestSessionFile(dir: string): Promise<string | null>
       }
     }
     return latest?.file ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function findLatestRuntimeLog(workspacePath: string): Promise<RuntimeLogCandidate | null> {
+  try {
+    const entries = await fs.readdir(workspacePath);
+    const candidates: RuntimeLogCandidate[] = [];
+    for (const entry of entries) {
+      if (!entry.endsWith(".stdout.log")) continue;
+      if (!entry.startsWith(".codex-runtime") && !entry.startsWith(".claude-runtime")) continue;
+      const fullPath = path.join(workspacePath, entry);
+      const stat = await fs.stat(fullPath);
+      candidates.push({ path: fullPath, mtimeMs: stat.mtimeMs });
+    }
+    if (candidates.length === 0) return null;
+    candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+    return candidates[0];
   } catch {
     return null;
   }
@@ -157,6 +181,50 @@ function classifyActivity(
   return { state: "blocked", last_event_at: lastTimestamp, elapsed_ms: elapsed, detail: `No activity for ${Math.round(elapsed / 1000)}s` };
 }
 
+function classifyRuntimeLogActivity(
+  lines: JsonlLine[],
+  thresholdMs: number,
+  mtimeMs: number,
+  sourcePath: string
+): ActivityDetection {
+  const elapsed = Date.now() - mtimeMs;
+  const last = lines.at(-1);
+  const lastType = typeof last?.type === "string" ? last.type : null;
+  const terminalTypes = new Set(["turn.completed", "result", "exit", "task.completed"]);
+
+  if (lastType && terminalTypes.has(lastType)) {
+    return {
+      state: "exited",
+      last_event_at: new Date(mtimeMs).toISOString(),
+      elapsed_ms: elapsed,
+      detail: `Runtime log indicates completion (${lastType})`,
+    };
+  }
+
+  if (elapsed < thresholdMs) {
+    return {
+      state: "active",
+      last_event_at: new Date(mtimeMs).toISOString(),
+      elapsed_ms: elapsed,
+      detail: `Recent runtime log activity (${path.basename(sourcePath)})`,
+    };
+  }
+  if (elapsed < thresholdMs * 3) {
+    return {
+      state: "idle",
+      last_event_at: new Date(mtimeMs).toISOString(),
+      elapsed_ms: elapsed,
+      detail: `Runtime log idle for ${Math.round(elapsed / 1000)}s`,
+    };
+  }
+  return {
+    state: "blocked",
+    last_event_at: new Date(mtimeMs).toISOString(),
+    elapsed_ms: elapsed,
+    detail: `No runtime log updates for ${Math.round(elapsed / 1000)}s`,
+  };
+}
+
 /**
  * Detect the activity state of an agent running in a workspace.
  *
@@ -170,12 +238,18 @@ export async function getActivityState(
   const claudeDir = toClaudeProjectPath(workspacePath);
   const sessionFile = await findLatestSessionFile(claudeDir);
 
-  if (!sessionFile) {
-    return { state: "unknown", last_event_at: null, elapsed_ms: null, detail: "No session file found" };
+  if (sessionFile) {
+    const lines = await parseJsonlFileTail(sessionFile);
+    return classifyActivity(lines, thresholdMs);
   }
 
-  const lines = await parseJsonlFileTail(sessionFile);
-  return classifyActivity(lines, thresholdMs);
+  const runtimeLog = await findLatestRuntimeLog(workspacePath);
+  if (runtimeLog) {
+    const lines = await parseJsonlFileTail(runtimeLog.path);
+    return classifyRuntimeLogActivity(lines, thresholdMs, runtimeLog.mtimeMs, runtimeLog.path);
+  }
+
+  return { state: "unknown", last_event_at: null, elapsed_ms: null, detail: "No session file found" };
 }
 
 /**

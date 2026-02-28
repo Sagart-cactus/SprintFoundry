@@ -135,11 +135,14 @@ class WorktreeWorkspacePlugin implements WorkspacePlugin {
 
     // 2. Create worktree for this run
     const worktreePath = path.join(this.baseDir, `run-${runId}`);
-    const branchName = this.buildBranchName(ticket, branchStrategy);
+    const branchName = this.resolveAvailableBranchName(
+      this.buildBranchName(ticket, branchStrategy),
+      runId
+    );
 
     console.log(`[worktree] Creating worktree for run ${runId}: ${worktreePath}`);
     git(
-      ["worktree", "add", "-b", branchName, worktreePath, `origin/${repoConfig.default_branch}`],
+      ["worktree", "add", "-b", branchName, worktreePath, repoConfig.default_branch],
       this.baseClonePath,
       repoConfig
     );
@@ -315,6 +318,27 @@ class WorktreeWorkspacePlugin implements WorkspacePlugin {
     parts.push(this.sanitize(ticket.title, sep).slice(0, 50));
 
     return prefix + parts.join(sep);
+  }
+
+  private resolveAvailableBranchName(baseName: string, runId: string): string {
+    if (!this.branchExists(baseName)) return baseName;
+    const suffix = runId.slice(-6).toLowerCase();
+    let candidate = `${baseName}-${suffix}`;
+    let index = 2;
+    while (this.branchExists(candidate)) {
+      candidate = `${baseName}-${suffix}-${index}`;
+      index += 1;
+    }
+    return candidate;
+  }
+
+  private branchExists(branch: string): boolean {
+    const result = gitRaw(
+      ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`],
+      this.baseClonePath,
+      this.repoConfig ?? undefined
+    );
+    return result.status === 0;
   }
 
   private sanitize(value: string, sep: "-" | "_"): string {

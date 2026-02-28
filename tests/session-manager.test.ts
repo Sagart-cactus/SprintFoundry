@@ -214,4 +214,67 @@ describe("SessionManager", () => {
     expect(session!.pr_url).toBe("https://github.com/test/repo/pull/42");
     expect(session!.error).toBeNull();
   });
+
+  it("reconciles stale executing status to failed from task.failed event", async () => {
+    const mgr = new SessionManager(testDir);
+    const workspace = path.join(testDir, "ws-run-reconcile");
+    await fs.mkdir(workspace, { recursive: true });
+    await fs.writeFile(
+      path.join(workspace, ".events.jsonl"),
+      [
+        JSON.stringify({ event_type: "task.created", timestamp: "2026-02-27T10:00:00Z" }),
+        JSON.stringify({ event_type: "task.failed", timestamp: "2026-02-27T10:05:00Z" }),
+      ].join("\n") + "\n",
+      "utf-8"
+    );
+
+    const run = makeRun({ run_id: "run-reconcile", status: "executing" });
+    await mgr.persist(run, { workspace_path: workspace });
+
+    const session = await mgr.get("run-reconcile");
+    expect(session!.status).toBe("failed");
+    expect(session!.updated_at).toBe("2026-02-27T10:05:00Z");
+  });
+
+  it("reconciles orphaned step.failed to failed when task.failed is missing", async () => {
+    const mgr = new SessionManager(testDir);
+    const workspace = path.join(testDir, "ws-run-orphan");
+    await fs.mkdir(workspace, { recursive: true });
+    await fs.writeFile(
+      path.join(workspace, ".events.jsonl"),
+      [
+        JSON.stringify({ event_type: "task.created", timestamp: "2026-02-27T10:00:00Z" }),
+        JSON.stringify({ event_type: "step.failed", timestamp: "2026-02-27T10:03:00Z", data: { step: 2 } }),
+      ].join("\n") + "\n",
+      "utf-8"
+    );
+
+    const run = makeRun({ run_id: "run-orphan", status: "executing" });
+    await mgr.persist(run, { workspace_path: workspace });
+
+    const session = await mgr.get("run-orphan");
+    expect(session!.status).toBe("failed");
+  });
+
+  it("reconciles human_gate.rejected to failed when task.failed is missing", async () => {
+    const mgr = new SessionManager(testDir);
+    const workspace = path.join(testDir, "ws-run-rejected");
+    await fs.mkdir(workspace, { recursive: true });
+    await fs.writeFile(
+      path.join(workspace, ".events.jsonl"),
+      [
+        JSON.stringify({ event_type: "task.created", timestamp: "2026-02-27T10:00:00Z" }),
+        JSON.stringify({ event_type: "human_gate.requested", timestamp: "2026-02-27T10:03:00Z" }),
+        JSON.stringify({ event_type: "human_gate.rejected", timestamp: "2026-02-27T10:04:00Z" }),
+      ].join("\n") + "\n",
+      "utf-8"
+    );
+
+    const run = makeRun({ run_id: "run-rejected", status: "executing" });
+    await mgr.persist(run, { workspace_path: workspace });
+
+    const session = await mgr.get("run-rejected");
+    expect(session!.status).toBe("failed");
+    expect(session!.updated_at).toBe("2026-02-27T10:04:00Z");
+  });
 });

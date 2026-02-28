@@ -3,6 +3,7 @@
 import { Command } from "commander";
 import * as fs from "fs/promises";
 import * as path from "path";
+import * as os from "os";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
 
@@ -16,11 +17,66 @@ import { runProjectCreate } from "./commands/project-create.js";
 import { runAgentCreate } from "./commands/agent-create.js";
 import { SessionManager } from "./service/session-manager.js";
 import { getActivityState } from "./service/activity-detector.js";
+import { PluginRegistry } from "./service/plugin-registry.js";
+import { tmpdirWorkspaceModule } from "./plugins/workspace-tmpdir/index.js";
+import { worktreeWorkspaceModule } from "./plugins/workspace-worktree/index.js";
+import { defaultTrackerModule } from "./plugins/tracker-default/index.js";
+import { consoleNotifierModule } from "./plugins/notifier-console/index.js";
+import { githubSCMModule } from "./plugins/scm-github/index.js";
 
 // Migrate deprecated AGENTSDLC_* env vars to SPRINTFOUNDRY_*
 migrateEnvVars();
 
 const program = new Command();
+
+function buildPluginRegistry(platform: PlatformConfig, project: ProjectConfig): PluginRegistry {
+  const registry = new PluginRegistry();
+
+  const workspaceStrategy =
+    project.workspace?.strategy ??
+    platform.workspace?.strategy ??
+    "tmpdir";
+  const baseRepoDir =
+    project.workspace?.base_repo_dir ??
+    platform.workspace?.base_repo_dir ??
+    path.join(os.tmpdir(), "sprintfoundry-worktrees");
+
+  if (workspaceStrategy === "worktree") {
+    registry.register(worktreeWorkspaceModule, {
+      project_id: project.project_id,
+      base_repo_dir: baseRepoDir,
+    });
+  } else {
+    registry.register(tmpdirWorkspaceModule, {
+      project_id: project.project_id,
+    });
+  }
+
+  registry.register(defaultTrackerModule, {
+    integrations: project.integrations,
+  });
+  registry.register(consoleNotifierModule, {
+    integrations: project.integrations,
+  });
+
+  const ticketSource = project.integrations?.ticket_source;
+  if (ticketSource?.type === "github") {
+    const token = String(ticketSource.config?.token ?? "").trim();
+    const owner = String(ticketSource.config?.owner ?? "").trim();
+    const repo = String(ticketSource.config?.repo ?? "").trim();
+    if (token && owner && repo) {
+      registry.register(githubSCMModule, {
+        token,
+        owner,
+        repo,
+      });
+    } else {
+      console.warn("[sprintfoundry] SCM plugin github not registered: missing token/owner/repo");
+    }
+  }
+
+  return registry;
+}
 
 program
   .name("sprintfoundry")
@@ -51,7 +107,8 @@ program
     }
 
     const { platform, project } = await loadConfig(opts.config, opts.project);
-    const service = new OrchestrationService(platform, project);
+    const registry = buildPluginRegistry(platform, project);
+    const service = new OrchestrationService(platform, project, registry);
 
     const ticketId = opts.ticket ?? `prompt-${Date.now()}`;
 

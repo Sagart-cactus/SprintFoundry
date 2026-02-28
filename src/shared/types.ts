@@ -184,6 +184,11 @@ export interface PlatformConfig {
   rules: PlatformRule[];
   agent_definitions: AgentDefinition[];
   events_dir?: string;
+  lifecycle?: LifecycleConfig;
+  workspace?: {
+    strategy?: "tmpdir" | "worktree";
+    base_repo_dir?: string;
+  };
 }
 
 export interface ProjectConfig {
@@ -200,6 +205,10 @@ export interface ProjectConfig {
   agents?: string[];    // agent IDs this project uses (filters the catalog)
   runtime_overrides?: Partial<Record<string, RuntimeConfig>>;
   planner_runtime_override?: RuntimeConfig;
+  workspace?: {
+    strategy?: "tmpdir" | "worktree";
+    base_repo_dir?: string;
+  };
   codex_skills_enabled?: boolean;
   codex_skill_catalog_overrides?: Record<string, CodexSkillDefinition>;
   codex_skills_overrides?: Record<string, string[]>;

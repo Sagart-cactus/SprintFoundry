@@ -9,6 +9,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const publicV3Dir = path.join(__dirname, "public-v3");
 const runsRoot = process.env.SPRINTFOUNDRY_RUNS_ROOT ?? process.env.AGENTSDLC_RUNS_ROOT ?? path.join(os.tmpdir(), "sprintfoundry");
+const sessionsRoot = process.env.SPRINTFOUNDRY_SESSIONS_DIR ?? path.join(os.homedir(), ".sprintfoundry", "sessions");
 
 const portArgIndex = process.argv.indexOf("--port");
 const portArg = portArgIndex !== -1 ? process.argv[portArgIndex + 1] : undefined;
@@ -140,7 +141,7 @@ function safeJoin(base, ...parts) {
 
 async function listRuns() {
   const projects = await fs.readdir(runsRoot, { withFileTypes: true }).catch(() => []);
-  const runs = [];
+  const byKey = new Map();
 
   for (const projectDir of projects) {
     if (!projectDir.isDirectory()) continue;
@@ -154,12 +155,65 @@ async function listRuns() {
       if (!runId.startsWith("run-")) continue;
       const runPath = path.join(projectPath, runId);
       const summary = await loadRunSummary(projectId, runId, runPath);
-      runs.push(summary);
+      byKey.set(`${projectId}/${runId}`, summary);
     }
   }
 
+  const sessions = await listSessionMetadata();
+  for (const session of sessions) {
+    const runId = session?.run_id;
+    const projectId = session?.project_id;
+    const workspacePath = session?.workspace_path;
+    if (!runId || !projectId || !workspacePath) continue;
+    const key = `${projectId}/${runId}`;
+    if (byKey.has(key)) continue;
+    const summary = await loadRunSummary(projectId, runId, workspacePath, session);
+    byKey.set(key, summary);
+  }
+
+  const runs = Array.from(byKey.values());
   runs.sort((a, b) => (b.last_event_ts ?? 0) - (a.last_event_ts ?? 0));
   return runs;
+}
+
+async function listSessionMetadata() {
+  const entries = await fs.readdir(sessionsRoot, { withFileTypes: true }).catch(() => []);
+  const sessions = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+    const fullPath = path.join(sessionsRoot, entry.name);
+    const raw = await fs.readFile(fullPath, "utf-8").catch(() => "");
+    if (!raw) continue;
+    try {
+      sessions.push(JSON.parse(raw));
+    } catch {
+      // Skip malformed session files.
+    }
+  }
+  return sessions;
+}
+
+async function resolveRunPath(projectId, runId) {
+  const runPath = safeJoin(runsRoot, projectId, runId);
+  const exists = await fs.stat(runPath).then((s) => s.isDirectory(), () => false);
+  if (exists) return runPath;
+
+  const sessions = await listSessionMetadata();
+  const match = sessions.find(
+    (s) =>
+      s?.project_id === projectId &&
+      s?.run_id === runId &&
+      typeof s?.workspace_path === "string" &&
+      s.workspace_path.length > 0
+  );
+  if (match?.workspace_path) {
+    const sessionPathExists = await fs
+      .stat(match.workspace_path)
+      .then((s) => s.isDirectory(), () => false);
+    if (sessionPathExists) return match.workspace_path;
+  }
+
+  throw new Error(`Run not found: ${projectId}/${runId}`);
 }
 
 async function readEvents(runPath) {
@@ -231,28 +285,31 @@ function buildStepStatus(plan, events) {
   return Array.from(byStep.values()).sort((a, b) => a.step_number - b.step_number);
 }
 
-async function loadRunSummary(projectId, runId, runPath) {
+async function loadRunSummary(projectId, runId, runPath, session = null) {
   const events = await readEvents(runPath);
   const planEvent = events.find((e) => e.event_type === "task.plan_generated");
   const plan = planEvent?.data?.plan ?? null;
   const steps = buildStepStatus(plan, events);
   const last = events.at(-1);
+  const hasEvents = events.length > 0;
   return {
     project_id: projectId,
     run_id: runId,
-    status: inferStatus(events),
-    classification: plan?.classification ?? null,
-    step_count: plan?.steps?.length ?? 0,
+    status: hasEvents ? inferStatus(events) : (session?.status ?? "unknown"),
+    classification: plan?.classification ?? session?.plan_classification ?? null,
+    step_count: hasEvents ? (plan?.steps?.length ?? 0) : (session?.total_steps ?? 0),
     steps,
-    started_at: events.find((e) => e.event_type === "task.created")?.timestamp ?? null,
+    started_at: events.find((e) => e.event_type === "task.created")?.timestamp ?? session?.created_at ?? null,
     last_event_type: last?.event_type ?? null,
-    last_event_ts: last?.timestamp ? Date.parse(last.timestamp) : null,
+    last_event_ts: last?.timestamp
+      ? Date.parse(last.timestamp)
+      : (session?.updated_at ? Date.parse(session.updated_at) : null),
     workspace_path: runPath,
   };
 }
 
 async function loadRun(projectId, runId) {
-  const runPath = safeJoin(runsRoot, projectId, runId);
+  const runPath = await resolveRunPath(projectId, runId);
   const summary = await loadRunSummary(projectId, runId, runPath);
   const events = await readEvents(runPath);
   const planEvent = events.find((e) => e.event_type === "task.plan_generated");
@@ -364,7 +421,7 @@ async function readStepLogText(runPath, kind, stepNumber, lines) {
 }
 
 async function readLogText(projectId, runId, kind, lines = 400, stepNumber = null) {
-  const runPath = safeJoin(runsRoot, projectId, runId);
+  const runPath = await resolveRunPath(projectId, runId);
 
   // Per-step log requested: read the step-specific file directly.
   if (stepNumber != null && (kind === "agent_stdout" || kind === "agent_stderr")) {
@@ -391,7 +448,7 @@ async function readLogText(projectId, runId, kind, lines = 400, stepNumber = nul
 }
 
 async function listFiles(projectId, runId, root = "") {
-  const runPath = safeJoin(runsRoot, projectId, runId);
+  const runPath = await resolveRunPath(projectId, runId);
   const start = safeJoin(runPath, root || ".");
   const out = [];
 
@@ -578,7 +635,7 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { error: "Missing project/run query params" });
         return;
       }
-      const runPath = safeJoin(runsRoot, project, run);
+      const runPath = await resolveRunPath(project, run);
       const events = await readEvents(runPath);
       sendJson(res, 200, { events: events.slice(Math.max(0, events.length - limit)) });
       return;
@@ -604,7 +661,7 @@ const server = http.createServer(async (req, res) => {
       const watchedFiles = [];
       if (project && run) {
         try {
-          const runPath = safeJoin(runsRoot, project, run);
+          const runPath = await resolveRunPath(project, run);
           const eventsFile = path.join(runPath, ".events.jsonl");
           startSSEWatcher(eventsFile, res);
           watchedFiles.push(eventsFile);
@@ -615,17 +672,12 @@ const server = http.createServer(async (req, res) => {
         // No specific run — watch all known runs' event files
         // (scan once at connection time; new runs picked up on reconnect)
         try {
-          const projects = await fs.readdir(runsRoot, { withFileTypes: true }).catch(() => []);
-          for (const projectDir of projects) {
-            if (!projectDir.isDirectory()) continue;
-            const projectPath = path.join(runsRoot, projectDir.name);
-            const runDirs = await fs.readdir(projectPath, { withFileTypes: true }).catch(() => []);
-            for (const runDir of runDirs) {
-              if (!runDir.isDirectory() || !runDir.name.startsWith("run-")) continue;
-              const eventsFile = path.join(projectPath, runDir.name, ".events.jsonl");
-              startSSEWatcher(eventsFile, res);
-              watchedFiles.push(eventsFile);
-            }
+          const runs = await listRuns();
+          for (const summary of runs) {
+            if (!summary.workspace_path) continue;
+            const eventsFile = path.join(summary.workspace_path, ".events.jsonl");
+            startSSEWatcher(eventsFile, res);
+            watchedFiles.push(eventsFile);
           }
         } catch {
           // Scan failed — just stream heartbeats
@@ -677,7 +729,7 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { error: "Missing or invalid project/run/step query params" });
         return;
       }
-      const runPath = safeJoin(runsRoot, project, run);
+      const runPath = await resolveRunPath(project, run);
       const runSummary = await loadRunSummary(project, run, runPath);
       const maxCompletedStep = runSummary.steps
         .filter((step) => step.status === "completed" || step.status === "failed")
@@ -713,7 +765,7 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { error: "Missing project, run, or file" });
         return;
       }
-      const runPath = safeJoin(runsRoot, project, run);
+      const runPath = await resolveRunPath(project, run);
       const absFile = path.resolve(runPath, file);
       if (!absFile.startsWith(runPath + path.sep) && absFile !== runPath) {
         sendJson(res, 400, { error: "Invalid file path" });
@@ -758,7 +810,7 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { error: "Missing project/run query params" });
         return;
       }
-      const runPath = safeJoin(runsRoot, project, run);
+      const runPath = await resolveRunPath(project, run);
       const reviewDir = path.join(runPath, ".sprintfoundry", "reviews");
       const entries = await fs.readdir(reviewDir).catch(() => []);
       const reviews = [];
@@ -796,7 +848,7 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { error: "Invalid review_id format" });
         return;
       }
-      const runPath = safeJoin(runsRoot, project, runId);
+      const runPath = await resolveRunPath(project, runId);
       const reviewDir = path.join(runPath, ".sprintfoundry", "reviews");
       await fs.mkdir(reviewDir, { recursive: true });
       const decisionPath = path.join(reviewDir, `${review_id}.decision.json`);

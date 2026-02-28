@@ -86,14 +86,18 @@ export class OrchestrationService {
     // Initialize lifecycle manager if an SCM plugin is available
     const scmPlugin = this.registry?.getFirst<SCMPlugin>("scm") ?? null;
     if (scmPlugin) {
+      const lifecycleConfig = this.platformConfig.lifecycle ?? defaultLifecycleConfig();
       const notifierPlugins = new Map<string, NotifierPlugin>();
       const notifierPlugin = this.registry?.getFirst<NotifierPlugin>("notifier");
       if (notifierPlugin) {
         notifierPlugins.set(notifierPlugin.name, notifierPlugin);
       }
-      this.notificationRouter = new NotificationRouter(notifierPlugins, defaultRoutingConfig());
+      this.notificationRouter = new NotificationRouter(
+        notifierPlugins,
+        lifecycleConfig.notification_routing ?? defaultRoutingConfig()
+      );
       this.lifecycleManager = new LifecycleManager(
-        defaultLifecycleConfig(),
+        lifecycleConfig,
         scmPlugin,
         this.sessionManager,
         this.notificationRouter
@@ -140,6 +144,53 @@ export class OrchestrationService {
     return this.registry?.getFirst<NotifierPlugin>("notifier") ?? null;
   }
 
+  private async fetchTicket(ticketId: string, source: TaskSource): Promise<TicketDetails> {
+    const tracker = this.getTrackerPlugin();
+    if (tracker) return tracker.fetch(ticketId, source);
+    return this.tickets.fetch(ticketId, source);
+  }
+
+  private async updateTicketStatus(
+    ticket: TicketDetails,
+    status: string,
+    prUrl?: string
+  ): Promise<void> {
+    const tracker = this.getTrackerPlugin();
+    if (tracker) {
+      await tracker.updateStatus(ticket, status, prUrl);
+      return;
+    }
+    await this.tickets.updateStatus(ticket, status, prUrl);
+  }
+
+  private async sendNotification(message: string): Promise<void> {
+    const notifier = this.getNotifierPlugin();
+    if (notifier) {
+      await notifier.notify(message);
+      return;
+    }
+    await this.notifications.send(message);
+  }
+
+  private async commitStepChanges(
+    workspacePath: string,
+    runId: string,
+    stepNumber: number,
+    agent: AgentType
+  ): Promise<boolean> {
+    const wsPlugin = this.getWorkspacePlugin();
+    if (wsPlugin) {
+      return wsPlugin.commitStepChanges(workspacePath, runId, stepNumber, agent);
+    }
+    return this.git.commitStepCheckpoint(workspacePath, runId, stepNumber, agent);
+  }
+
+  private async createPullRequest(workspacePath: string, run: TaskRun): Promise<string> {
+    const wsPlugin = this.getWorkspacePlugin();
+    if (wsPlugin) return wsPlugin.createPullRequest(workspacePath, run);
+    return this.git.createPullRequest(workspacePath, run);
+  }
+
   // ---- Main entry point ----
 
   async handleTask(
@@ -156,25 +207,42 @@ export class OrchestrationService {
       // 2. Fetch ticket details (or create from prompt)
       const ticket = source === "prompt"
         ? this.createTicketFromPrompt(ticketId, promptText!)
-        : await this.tickets.fetch(ticketId, source);
+        : await this.fetchTicket(ticketId, source);
 
       run.ticket = ticket;
       await this.emitEvent(run.run_id, "task.created", { ticket });
       this.persistSession(run);
 
       // 3. Prepare workspace (clone repo, create branch)
-      console.log(`[orchestrator] Creating workspace for run ${run.run_id}...`);
-      const workspacePath = await this.workspace.create(run.run_id);
-      console.log(`[orchestrator] Workspace created: ${workspacePath}`);
+      let workspacePath: string;
+      const wsPlugin = this.getWorkspacePlugin();
 
-      if (opts?.dryRun) {
-        // Skip git clone in dry-run — plan is generated from ticket context only
-        console.log(`[orchestrator] Dry-run mode — skipping git clone.`);
+      if (!opts?.dryRun && wsPlugin) {
+        console.log(`[orchestrator] Creating workspace for run ${run.run_id} via plugin ${wsPlugin.name}...`);
+        const workspace = await wsPlugin.create(
+          run.run_id,
+          this.projectConfig.repo,
+          this.projectConfig.branch_strategy,
+          ticket
+        );
+        workspacePath = workspace.path;
+        console.log(`[orchestrator] Workspace created: ${workspacePath} (branch: ${workspace.branch})`);
       } else {
-        console.log(`[orchestrator] Cloning repo and creating branch...`);
-        await this.git.cloneAndBranch(workspacePath, ticket);
-        console.log(`[orchestrator] Repo cloned successfully.`);
+        console.log(`[orchestrator] Creating workspace for run ${run.run_id}...`);
+        workspacePath = await this.workspace.create(run.run_id);
+        console.log(`[orchestrator] Workspace created: ${workspacePath}`);
 
+        if (opts?.dryRun) {
+          // Skip git clone in dry-run — plan is generated from ticket context only
+          console.log(`[orchestrator] Dry-run mode — skipping git clone.`);
+        } else {
+          console.log(`[orchestrator] Cloning repo and creating branch...`);
+          await this.git.cloneAndBranch(workspacePath, ticket);
+          console.log(`[orchestrator] Repo cloned successfully.`);
+        }
+      }
+
+      if (!opts?.dryRun) {
         // Detect project stack once — write .agent-context/stack.json for planner + all agents
         const stack = await this.detectProjectStack(workspacePath);
         console.log(
@@ -243,14 +311,14 @@ export class OrchestrationService {
 
       // 7. If all passed, create PR and update ticket
       if ((run.status as string) === "completed") {
-        const prUrl = await this.git.createPullRequest(workspacePath, run);
+        const prUrl = await this.createPullRequest(workspacePath, run);
         run.pr_url = prUrl;
         await this.emitEvent(run.run_id, "pr.created", { prUrl });
 
-        await this.tickets.updateStatus(ticket, "in_review", prUrl);
+        await this.updateTicketStatus(ticket, "in_review", prUrl);
         await this.emitEvent(run.run_id, "ticket.updated", { status: "in_review" });
 
-        await this.notifications.send(
+        await this.sendNotification(
           `Task ${ticket.id} completed. PR: ${prUrl}`
         );
         this.persistSession(run, { workspace_path: workspacePath });
@@ -264,7 +332,7 @@ export class OrchestrationService {
       run.status = "failed";
       run.error = error instanceof Error ? error.message : String(error);
       await this.emitEvent(run.run_id, "task.failed", { error: run.error });
-      await this.notifications.send(
+      await this.sendNotification(
         `Task ${run.ticket?.id ?? ticketId} failed: ${run.error}`
       );
       this.persistSession(run);
@@ -335,11 +403,11 @@ export class OrchestrationService {
     await this.executePlan(run, plan, workspacePath);
 
     if ((run.status as string) === "completed") {
-      const prUrl = await this.git.createPullRequest(workspacePath, run);
+      const prUrl = await this.createPullRequest(workspacePath, run);
       run.pr_url = prUrl;
       await this.emitEvent(run.run_id, "pr.created", { prUrl });
-      await this.tickets.updateStatus(ticket, "in_review", prUrl);
-      await this.notifications.send(`Task ${ticket.id} completed. PR: ${prUrl}`);
+      await this.updateTicketStatus(ticket, "in_review", prUrl);
+      await this.sendNotification(`Task ${ticket.id} completed. PR: ${prUrl}`);
 
       // Start lifecycle monitoring for this PR (non-blocking)
       this.startLifecycleWatch(run, workspacePath);
@@ -432,7 +500,7 @@ export class OrchestrationService {
 
           if (reworkSignals.some((s) => s.currentRework >= maxRework)) {
             run.status = "failed";
-            await this.notifications.send(
+            await this.sendNotification(
               `Parallel group exceeded max rework cycles (${maxRework}). Escalating.`
             );
             return;
@@ -532,6 +600,12 @@ export class OrchestrationService {
             if (!approved) {
               run.status = "failed";
               run.error = "Human review rejected";
+              await this.emitEvent(run.run_id, "task.failed", {
+                error: run.error,
+                reason: "human_gate_rejected",
+                step: stepNum,
+              });
+              this.persistSession(run, { workspace_path: workspacePath });
               return;
             }
             const reviewedStep = run.steps.find(
@@ -750,7 +824,7 @@ export class OrchestrationService {
       if (result.agentResult.status === "complete") {
         // Create a git checkpoint commit before emitting step.completed
         try {
-          const committed = await this.git.commitStepCheckpoint(
+          const committed = await this.commitStepChanges(
             workspacePath,
             run.run_id,
             step.step_number,
@@ -838,7 +912,7 @@ export class OrchestrationService {
         // Check rework budget
         if (currentRework >= maxRework) {
           stepExec.status = "failed";
-          await this.notifications.send(
+          await this.sendNotification(
             `Step ${step.step_number} (${step.agent}) exceeded max rework cycles (${maxRework}). Escalating.`
           );
           await this.emitEvent(run.run_id, "step.failed", {
@@ -1085,7 +1159,7 @@ export class OrchestrationService {
     };
 
     await this.emitEvent(run.run_id, "human_gate.requested", { review });
-    await this.notifications.send(
+    await this.sendNotification(
       `Human review requested for task ${run.ticket.id} after step ${afterStep}: ${reason}`
     );
 
@@ -1474,12 +1548,12 @@ export class OrchestrationService {
 
   private findParallelGroup(
     ready: PlanStep[],
-    groups: Array<number[] | { step_numbers?: number[] }>
+    groups: Array<number[] | { step_numbers?: number[]; steps?: number[] }>
   ): PlanStep[] {
     for (const group of groups) {
       const stepNumbers = Array.isArray(group)
         ? group
-        : (group?.step_numbers ?? []);
+        : (group?.step_numbers ?? group?.steps ?? []);
       const matching = ready.filter((s) => stepNumbers.includes(s.step_number));
       if (matching.length > 1) return matching;
     }
