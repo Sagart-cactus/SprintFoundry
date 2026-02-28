@@ -1,0 +1,440 @@
+{
+  "annotations": {"list": [{"builtIn":1,"datasource":{"type":"grafana","uid":"-- Grafana --"},"enable":true,"hide":true,"iconColor":"rgba(0, 211, 255, 1)","name":"Annotations & Alerts","type":"dashboard"}]},
+  "description": "SprintFoundry Operations — Monitor agent runs, costs, quality, and infrastructure at scale",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["sprintfoundry", "operations"],
+  "time": {"from": "now-24h", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "SprintFoundry — Operations",
+  "uid": "sprintfoundry-ops",
+  "version": 2,
+  "weekStart": "",
+  "templating": {
+    "list": [
+      {
+        "allValue": ".*",
+        "current": {"selected": true, "text": "All", "value": "$__all"},
+        "datasource": {"type": "prometheus", "uid": "sprintfoundry-prometheus"},
+        "definition": "label_values(sprintfoundry_runs_total, project_id)",
+        "hide": 0, "includeAll": true, "label": "Project", "multi": true,
+        "name": "project_id", "options": [],
+        "query": {"query": "label_values(sprintfoundry_runs_total, project_id)", "refId": "StandardVariableQuery"},
+        "refresh": 2, "regex": "", "sort": 1, "type": "query"
+      },
+      {
+        "allValue": ".*",
+        "current": {"selected": true, "text": "All", "value": "$__all"},
+        "datasource": {"type": "prometheus", "uid": "sprintfoundry-prometheus"},
+        "definition": "label_values(sprintfoundry_steps_total, agent)",
+        "hide": 0, "includeAll": true, "label": "Agent", "multi": true,
+        "name": "agent", "options": [],
+        "query": {"query": "label_values(sprintfoundry_steps_total, agent)", "refId": "StandardVariableQuery"},
+        "refresh": 2, "regex": "", "sort": 1, "type": "query"
+      }
+    ]
+  },
+  "panels": [
+
+    {"collapsed":false,"gridPos":{"h":1,"w":24,"x":0,"y":0},"id":1,"title":"🚀 Operations Overview","type":"row"},
+
+    {
+      "id": 2, "type": "stat", "title": "Total Runs",
+      "gridPos": {"h":4,"w":4,"x":0,"y":1},
+      "datasource": {"type":"prometheus","uid":"sprintfoundry-prometheus"},
+      "targets": [{"datasource":{"type":"prometheus","uid":"sprintfoundry-prometheus"},
+        "expr":"sum(sprintfoundry_runs_total{project_id=~\"$project_id\"}) or vector(0)",
+        "instant":true,"legendFormat":"__auto","refId":"A"}],
+      "options": {"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"orientation":"auto","textMode":"auto","wideLayout":true,"colorMode":"background","graphMode":"none","justifyMode":"auto"},
+      "fieldConfig": {"defaults":{"unit":"short","decimals":0,"color":{"mode":"fixed","fixedColor":"#5794F2"},"thresholds":{"mode":"absolute","steps":[{"color":"blue","value":null}]}},"overrides":[]}
+    },
+
+    {
+      "id": 3, "type": "stat", "title": "Active Runs",
+      "gridPos": {"h":4,"w":4,"x":4,"y":1},
+      "datasource": {"type":"prometheus","uid":"sprintfoundry-prometheus"},
+      "targets": [{"datasource":{"type":"prometheus","uid":"sprintfoundry-prometheus"},
+        "expr":"sum(sprintfoundry_active_runs) or vector(0)",
+        "instant":true,"legendFormat":"__auto","refId":"A"}],
+      "options": {"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"orientation":"auto","textMode":"auto","colorMode":"background","graphMode":"none","justifyMode":"auto"},
+      "fieldConfig": {"defaults":{"unit":"short","decimals":0,"color":{"mode":"thresholds"},"thresholds":{"mode":"absolute","steps":[{"color":"green","value":null},{"color":"orange","value":5},{"color":"red","value":10}]}},"overrides":[]}
+    },
+
+    {
+      "id": 4, "type": "stat", "title": "Run Success Rate",
+      "gridPos": {"h":4,"w":4,"x":8,"y":1},
+      "datasource": {"type":"prometheus","uid":"sprintfoundry-prometheus"},
+      "targets": [{"datasource":{"type":"prometheus","uid":"sprintfoundry-prometheus"},
+        "expr":"sum(sprintfoundry_runs_total{status=\"completed\",project_id=~\"$project_id\"}) / sum(sprintfoundry_runs_total{project_id=~\"$project_id\"}) * 100",
+        "instant":true,"legendFormat":"__auto","refId":"A"}],
+      "options": {"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"orientation":"auto","textMode":"auto","colorMode":"background","graphMode":"none","justifyMode":"auto"},
+      "fieldConfig": {"defaults":{"unit":"percent","decimals":1,"min":0,"max":100,"color":{"mode":"thresholds"},"thresholds":{"mode":"absolute","steps":[{"color":"red","value":null},{"color":"orange","value":60},{"color":"green","value":80}]}},"overrides":[]}
+    },
+
+    {
+      "id": 5, "type": "stat", "title": "Total Cost",
+      "gridPos": {"h":4,"w":4,"x":12,"y":1},
+      "datasource": {"type":"prometheus","uid":"sprintfoundry-prometheus"},
+      "targets": [{"datasource":{"type":"prometheus","uid":"sprintfoundry-prometheus"},
+        "expr":"sum(sprintfoundry_cost_usd_USD_total) or vector(0)",
+        "instant":true,"legendFormat":"__auto","refId":"A"}],
+      "options": {"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"orientation":"auto","textMode":"auto","colorMode":"background","graphMode":"none","justifyMode":"auto"},
+      "fieldConfig": {"defaults":{"unit":"currencyUSD","decimals":3,"color":{"mode":"thresholds"},"thresholds":{"mode":"absolute","steps":[{"color":"green","value":null},{"color":"orange","value":50},{"color":"red","value":200}]}},"overrides":[]}
+    },
+
+    {
+      "id": 6, "type": "stat", "title": "Total Tokens Used",
+      "gridPos": {"h":4,"w":4,"x":16,"y":1},
+      "datasource": {"type":"prometheus","uid":"sprintfoundry-prometheus"},
+      "targets": [{"datasource":{"type":"prometheus","uid":"sprintfoundry-prometheus"},
+        "expr":"sum(sprintfoundry_tokens_used_total) or vector(0)",
+        "instant":true,"legendFormat":"__auto","refId":"A"}],
+      "options": {"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"orientation":"auto","textMode":"auto","colorMode":"background","graphMode":"none","justifyMode":"auto"},
+      "fieldConfig": {"defaults":{"unit":"short","decimals":0,"color":{"mode":"fixed","fixedColor":"#B877D9"},"thresholds":{"mode":"absolute","steps":[{"color":"purple","value":null}]}},"overrides":[]}
+    },
+
+    {
+      "id": 7, "type": "stat", "title": "PRs Created",
+      "gridPos": {"h":4,"w":4,"x":20,"y":1},
+      "datasource": {"type":"prometheus","uid":"sprintfoundry-prometheus"},
+      "targets": [{"datasource":{"type":"prometheus","uid":"sprintfoundry-prometheus"},
+        "expr":"sum(sprintfoundry_pr_created_total{status=\"success\",project_id=~\"$project_id\"}) or vector(0)",
+        "instant":true,"legendFormat":"__auto","refId":"A"}],
+      "options": {"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"orientation":"auto","textMode":"auto","colorMode":"background","graphMode":"none","justifyMode":"auto"},
+      "fieldConfig": {"defaults":{"unit":"short","decimals":0,"color":{"mode":"fixed","fixedColor":"#73BF69"},"thresholds":{"mode":"absolute","steps":[{"color":"green","value":null}]}},"overrides":[]}
+    },
+
+    {
+      "id": 8, "type": "timeseries", "title": "Runs Over Time (cumulative by status)",
+      "gridPos": {"h":8,"w":16,"x":0,"y":5},
+      "datasource": {"type":"prometheus","uid":"sprintfoundry-prometheus"},
+      "targets": [
+        {"datasource":{"type":"prometheus","uid":"sprintfoundry-prometheus"},
+          "expr":"sum(sprintfoundry_runs_total{project_id=~\"$project_id\"}) by (status)",
+          "legendFormat":"{{status}}","refId":"A"}
+      ],
+      "options": {"tooltip":{"mode":"multi","sort":"desc"},"legend":{"displayMode":"table","placement":"bottom","calcs":["last"]}},
+      "fieldConfig": {
+        "defaults": {"unit":"short","custom":{"drawStyle":"line","lineWidth":2,"fillOpacity":20,"gradientMode":"opacity","stacking":{"mode":"normal","group":"A"},"spanNulls":true,"showPoints":"never"}},
+        "overrides": [
+          {"matcher":{"id":"byName","options":"completed"},"properties":[{"id":"color","value":{"mode":"fixed","fixedColor":"#73BF69"}}]},
+          {"matcher":{"id":"byName","options":"failed"},"properties":[{"id":"color","value":{"mode":"fixed","fixedColor":"#F2495C"}}]}
+        ]
+      }
+    },
+
+    {
+      "id": 9, "type": "piechart", "title": "Runs by Source",
+      "gridPos": {"h":8,"w":8,"x":16,"y":5},
+      "datasource": {"type":"prometheus","uid":"sprintfoundry-prometheus"},
+      "targets": [{"datasource":{"type":"prometheus","uid":"sprintfoundry-prometheus"},
+        "expr":"sum(sprintfoundry_runs_total{project_id=~\"$project_id\"}) by (source)",
+        "instant":true,"legendFormat":"{{source}}","refId":"A"}],
+      "options": {"pieType":"donut","tooltip":{"mode":"multi","sort":"desc"},"legend":{"displayMode":"table","placement":"right","values":["value","percent"]}},
+      "fieldConfig": {"defaults":{"unit":"short","color":{"mode":"palette-classic"}},"overrides":[]}
+    },
+
+    {
+      "id": 10, "type": "stat", "title": "P50 Run Duration",
+      "gridPos": {"h":4,"w":4,"x":0,"y":13},
+      "datasource": {"type":"prometheus","uid":"sprintfoundry-prometheus"},
+      "targets": [{"datasource":{"type":"prometheus","uid":"sprintfoundry-prometheus"},
+        "expr":"histogram_quantile(0.50, sum(sprintfoundry_run_duration_seconds_bucket{project_id=~\"$project_id\"}) by (le))",
+        "instant":true,"legendFormat":"__auto","refId":"A"}],
+      "options": {"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"orientation":"auto","textMode":"auto","colorMode":"background","graphMode":"none","justifyMode":"auto"},
+      "fieldConfig": {"defaults":{"unit":"s","decimals":1,"color":{"mode":"fixed","fixedColor":"#73BF69"}},"overrides":[]}
+    },
+
+    {
+      "id": 11, "type": "stat", "title": "P95 Run Duration",
+      "gridPos": {"h":4,"w":4,"x":4,"y":13},
+      "datasource": {"type":"prometheus","uid":"sprintfoundry-prometheus"},
+      "targets": [{"datasource":{"type":"prometheus","uid":"sprintfoundry-prometheus"},
+        "expr":"histogram_quantile(0.95, sum(sprintfoundry_run_duration_seconds_bucket{project_id=~\"$project_id\"}) by (le))",
+        "instant":true,"legendFormat":"__auto","refId":"A"}],
+      "options": {"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"orientation":"auto","textMode":"auto","colorMode":"background","graphMode":"none","justifyMode":"auto"},
+      "fieldConfig": {"defaults":{"unit":"s","decimals":1,"color":{"mode":"fixed","fixedColor":"#FF9830"}},"overrides":[]}
+    },
+
+    {
+      "id": 12, "type": "stat", "title": "P99 Run Duration",
+      "gridPos": {"h":4,"w":4,"x":8,"y":13},
+      "datasource": {"type":"prometheus","uid":"sprintfoundry-prometheus"},
+      "targets": [{"datasource":{"type":"prometheus","uid":"sprintfoundry-prometheus"},
+        "expr":"histogram_quantile(0.99, sum(sprintfoundry_run_duration_seconds_bucket{project_id=~\"$project_id\"}) by (le))",
+        "instant":true,"legendFormat":"__auto","refId":"A"}],
+      "options": {"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"orientation":"auto","textMode":"auto","colorMode":"background","graphMode":"none","justifyMode":"auto"},
+      "fieldConfig": {"defaults":{"unit":"s","decimals":1,"color":{"mode":"fixed","fixedColor":"#F2495C"}},"overrides":[]}
+    },
+
+    {
+      "id": 13, "type": "timeseries", "title": "Active Runs (Concurrency)",
+      "gridPos": {"h":8,"w":12,"x":12,"y":13},
+      "datasource": {"type":"prometheus","uid":"sprintfoundry-prometheus"},
+      "targets": [
+        {"datasource":{"type":"prometheus","uid":"sprintfoundry-prometheus"},"expr":"sum(sprintfoundry_active_runs) by (source)","legendFormat":"{{source}}","refId":"A"},
+        {"datasource":{"type":"prometheus","uid":"sprintfoundry-prometheus"},"expr":"sum(sprintfoundry_active_runs)","legendFormat":"Total","refId":"B"}
+      ],
+      "options": {"tooltip":{"mode":"multi","sort":"desc"},"legend":{"displayMode":"table","placement":"bottom","calcs":["max","mean"]}},
+      "fieldConfig": {"defaults":{"unit":"short","custom":{"drawStyle":"line","lineWidth":2,"fillOpacity":15,"spanNulls":true,"showPoints":"auto","pointSize":5}},"overrides":[{"matcher":{"id":"byName","options":"Total"},"properties":[{"id":"custom.lineWidth","value":3},{"id":"color","value":{"mode":"fixed","fixedColor":"#5794F2"}}]}]}
+    },
+
+    {
+      "id": 14, "type": "stat", "title": "Avg Cost / Run",
+      "gridPos": {"h":4,"w":4,"x":0,"y":17},
+      "datasource": {"type":"prometheus","uid":"sprintfoundry-prometheus"},
+      "targets": [{"datasource":{"type":"prometheus","uid":"sprintfoundry-prometheus"},
+        "expr":"sum(sprintfoundry_cost_usd_USD_total) / sum(sprintfoundry_runs_total{project_id=~\"$project_id\"})",
+        "instant":true,"legendFormat":"__auto","refId":"A"}],
+      "options": {"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"orientation":"auto","textMode":"auto","colorMode":"background","graphMode":"none","justifyMode":"auto"},
+      "fieldConfig": {"defaults":{"unit":"currencyUSD","decimals":3,"color":{"mode":"thresholds"},"thresholds":{"mode":"absolute","steps":[{"color":"green","value":null},{"color":"orange","value":1},{"color":"red","value":5}]}},"overrides":[]}
+    },
+
+    {
+      "id": 15, "type": "stat", "title": "Avg Tokens / Run",
+      "gridPos": {"h":4,"w":4,"x":4,"y":17},
+      "datasource": {"type":"prometheus","uid":"sprintfoundry-prometheus"},
+      "targets": [{"datasource":{"type":"prometheus","uid":"sprintfoundry-prometheus"},
+        "expr":"sum(sprintfoundry_tokens_used_total) / sum(sprintfoundry_runs_total{project_id=~\"$project_id\"})",
+        "instant":true,"legendFormat":"__auto","refId":"A"}],
+      "options": {"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"orientation":"auto","textMode":"auto","colorMode":"background","graphMode":"none","justifyMode":"auto"},
+      "fieldConfig": {"defaults":{"unit":"short","decimals":0,"color":{"mode":"fixed","fixedColor":"#B877D9"}},"overrides":[]}
+    },
+
+    {
+      "id": 16, "type": "stat", "title": "Total Agent Spawns",
+      "gridPos": {"h":4,"w":4,"x":8,"y":17},
+      "datasource": {"type":"prometheus","uid":"sprintfoundry-prometheus"},
+      "targets": [{"datasource":{"type":"prometheus","uid":"sprintfoundry-prometheus"},
+        "expr":"sum(sprintfoundry_agent_spawns_total) or vector(0)",
+        "instant":true,"legendFormat":"__auto","refId":"A"}],
+      "options": {"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"orientation":"auto","textMode":"auto","colorMode":"background","graphMode":"none","justifyMode":"auto"},
+      "fieldConfig": {"defaults":{"unit":"short","decimals":0,"color":{"mode":"fixed","fixedColor":"#5794F2"}},"overrides":[]}
+    },
+
+    {"collapsed":false,"gridPos":{"h":1,"w":24,"x":0,"y":21},"id":100,"title":"🤖 Agent Performance","type":"row"},
+
+    {
+      "id": 17, "type": "barchart", "title": "Step Duration — P95 by Agent",
+      "gridPos": {"h":9,"w":12,"x":0,"y":22},
+      "datasource": {"type":"prometheus","uid":"sprintfoundry-prometheus"},
+      "targets": [{"datasource":{"type":"prometheus","uid":"sprintfoundry-prometheus"},
+        "expr":"sort_desc(histogram_quantile(0.95, sum(sprintfoundry_step_duration_seconds_bucket{agent=~\"$agent\"}) by (le, agent)))",
+        "instant":true,"format":"table","legendFormat":"","refId":"A"}],
+      "transformations": [{"id":"organize","options":{"excludeByName":{"Time":true,"le":true},"renameByName":{"Value":"P95 Duration (s)","agent":"Agent"}}}],
+      "options": {"orientation":"horizontal","xField":"Agent","fillOpacity":80,"gradientMode":"opacity","tooltip":{"mode":"single"},"barWidth":0.6},
+      "fieldConfig": {"defaults":{"unit":"s","decimals":1,"color":{"mode":"continuous-BlYlRd"},"thresholds":{"mode":"absolute","steps":[{"color":"green","value":null},{"color":"orange","value":300},{"color":"red","value":600}]}},"overrides":[]}
+    },
+
+    {
+      "id": 18, "type": "barchart", "title": "Steps Executed by Agent",
+      "gridPos": {"h":9,"w":12,"x":12,"y":22},
+      "datasource": {"type":"prometheus","uid":"sprintfoundry-prometheus"},
+      "targets": [{"datasource":{"type":"prometheus","uid":"sprintfoundry-prometheus"},
+        "expr":"sort_desc(sum(sprintfoundry_steps_total{agent=~\"$agent\"}) by (agent))",
+        "instant":true,"format":"table","legendFormat":"","refId":"A"}],
+      "transformations": [{"id":"organize","options":{"excludeByName":{"Time":true},"renameByName":{"Value":"Steps","agent":"Agent"}}}],
+      "options": {"orientation":"horizontal","xField":"Agent","fillOpacity":80,"gradientMode":"none","tooltip":{"mode":"single"},"barWidth":0.6},
+      "fieldConfig": {"defaults":{"unit":"short","decimals":0,"color":{"mode":"fixed","fixedColor":"#5794F2"}},"overrides":[]}
+    },
+
+    {"collapsed":false,"gridPos":{"h":1,"w":24,"x":0,"y":31},"id":101,"title":"💰 Cost & Tokens","type":"row"},
+
+    {
+      "id": 19, "type": "barchart", "title": "Total Cost by Agent (USD)",
+      "gridPos": {"h":9,"w":8,"x":0,"y":32},
+      "datasource": {"type":"prometheus","uid":"sprintfoundry-prometheus"},
+      "targets": [{"datasource":{"type":"prometheus","uid":"sprintfoundry-prometheus"},
+        "expr":"sort_desc(sum(sprintfoundry_cost_usd_USD_total{agent=~\"$agent\"}) by (agent))",
+        "instant":true,"format":"table","legendFormat":"","refId":"A"}],
+      "transformations": [{"id":"organize","options":{"excludeByName":{"Time":true},"renameByName":{"Value":"Cost (USD)","agent":"Agent"}}}],
+      "options": {"orientation":"horizontal","xField":"Agent","fillOpacity":80,"gradientMode":"opacity","tooltip":{"mode":"single"},"barWidth":0.6},
+      "fieldConfig": {"defaults":{"unit":"currencyUSD","decimals":4,"color":{"mode":"continuous-GrYlRd"}},"overrides":[]}
+    },
+
+    {
+      "id": 20, "type": "barchart", "title": "Total Tokens by Agent",
+      "gridPos": {"h":9,"w":8,"x":8,"y":32},
+      "datasource": {"type":"prometheus","uid":"sprintfoundry-prometheus"},
+      "targets": [{"datasource":{"type":"prometheus","uid":"sprintfoundry-prometheus"},
+        "expr":"sort_desc(sum(sprintfoundry_tokens_used_total{agent=~\"$agent\"}) by (agent))",
+        "instant":true,"format":"table","legendFormat":"","refId":"A"}],
+      "transformations": [{"id":"organize","options":{"excludeByName":{"Time":true},"renameByName":{"Value":"Tokens","agent":"Agent"}}}],
+      "options": {"orientation":"horizontal","xField":"Agent","fillOpacity":80,"gradientMode":"opacity","tooltip":{"mode":"single"},"barWidth":0.6},
+      "fieldConfig": {"defaults":{"unit":"short","decimals":0,"color":{"mode":"fixed","fixedColor":"#B877D9"}},"overrides":[]}
+    },
+
+    {
+      "id": 21, "type": "barchart", "title": "Token Budget Utilization — P90 by Agent",
+      "description": "Ratio of tokens used vs budget. >1.0 means budget exceeded.",
+      "gridPos": {"h":9,"w":8,"x":16,"y":32},
+      "datasource": {"type":"prometheus","uid":"sprintfoundry-prometheus"},
+      "targets": [{"datasource":{"type":"prometheus","uid":"sprintfoundry-prometheus"},
+        "expr":"histogram_quantile(0.90, sum(sprintfoundry_token_budget_utilization_ratio_bucket{agent=~\"$agent\"}) by (le, agent))",
+        "instant":true,"format":"table","legendFormat":"","refId":"A"}],
+      "transformations": [{"id":"organize","options":{"excludeByName":{"Time":true,"le":true},"renameByName":{"Value":"Utilization (P90)","agent":"Agent"}}}],
+      "options": {"orientation":"horizontal","xField":"Agent","fillOpacity":80,"gradientMode":"opacity","tooltip":{"mode":"single"},"barWidth":0.6},
+      "fieldConfig": {"defaults":{"unit":"percentunit","decimals":2,"color":{"mode":"thresholds"},"thresholds":{"mode":"absolute","steps":[{"color":"green","value":null},{"color":"orange","value":0.75},{"color":"red","value":1.0}]}},"overrides":[]}
+    },
+
+    {
+      "id": 22, "type": "timeseries", "title": "Cost Accumulation by Agent (USD)",
+      "gridPos": {"h":8,"w":14,"x":0,"y":41},
+      "datasource": {"type":"prometheus","uid":"sprintfoundry-prometheus"},
+      "targets": [
+        {"datasource":{"type":"prometheus","uid":"sprintfoundry-prometheus"},"expr":"sum(sprintfoundry_cost_usd_USD_total{agent=~\"$agent\"}) by (agent)","legendFormat":"{{agent}}","refId":"A"}
+      ],
+      "options": {"tooltip":{"mode":"multi","sort":"desc"},"legend":{"displayMode":"table","placement":"right","calcs":["last","max"]}},
+      "fieldConfig": {"defaults":{"unit":"currencyUSD","custom":{"drawStyle":"line","lineWidth":2,"fillOpacity":15,"stacking":{"mode":"none"},"spanNulls":true,"showPoints":"never"},"color":{"mode":"palette-classic"}},"overrides":[]}
+    },
+
+    {
+      "id": 23, "type": "stat", "title": "Step Attempts",
+      "gridPos": {"h":4,"w":5,"x":14,"y":41},
+      "datasource": {"type":"prometheus","uid":"sprintfoundry-prometheus"},
+      "targets": [{"datasource":{"type":"prometheus","uid":"sprintfoundry-prometheus"},
+        "expr":"sum(sprintfoundry_step_attempts_total) or vector(0)",
+        "instant":true,"legendFormat":"__auto","refId":"A"}],
+      "options": {"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"orientation":"auto","textMode":"auto","colorMode":"background","graphMode":"none","justifyMode":"auto"},
+      "fieldConfig": {"defaults":{"unit":"short","decimals":0,"color":{"mode":"fixed","fixedColor":"#5794F2"}},"overrides":[]}
+    },
+
+    {
+      "id": 24, "type": "stat", "title": "Avg Steps / Run",
+      "gridPos": {"h":4,"w":5,"x":19,"y":41},
+      "datasource": {"type":"prometheus","uid":"sprintfoundry-prometheus"},
+      "targets": [{"datasource":{"type":"prometheus","uid":"sprintfoundry-prometheus"},
+        "expr":"histogram_quantile(0.50, sum(sprintfoundry_plan_steps_count_bucket{project_id=~\"$project_id\"}) by (le))",
+        "instant":true,"legendFormat":"__auto","refId":"A"}],
+      "options": {"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"orientation":"auto","textMode":"auto","colorMode":"background","graphMode":"none","justifyMode":"auto"},
+      "fieldConfig": {"defaults":{"unit":"short","decimals":1,"color":{"mode":"fixed","fixedColor":"#FF9830"}},"overrides":[]}
+    },
+
+    {
+      "id": 25, "type": "stat", "title": "Step Success Rate",
+      "gridPos": {"h":4,"w":5,"x":14,"y":45},
+      "datasource": {"type":"prometheus","uid":"sprintfoundry-prometheus"},
+      "targets": [{"datasource":{"type":"prometheus","uid":"sprintfoundry-prometheus"},
+        "expr":"sum(sprintfoundry_steps_total{status=\"completed\",agent=~\"$agent\"}) / sum(sprintfoundry_steps_total{agent=~\"$agent\"}) * 100",
+        "instant":true,"legendFormat":"__auto","refId":"A"}],
+      "options": {"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"orientation":"auto","textMode":"auto","colorMode":"background","graphMode":"none","justifyMode":"auto"},
+      "fieldConfig": {"defaults":{"unit":"percent","decimals":1,"min":0,"max":100,"color":{"mode":"thresholds"},"thresholds":{"mode":"absolute","steps":[{"color":"red","value":null},{"color":"orange","value":60},{"color":"green","value":80}]}},"overrides":[]}
+    },
+
+    {
+      "id": 26, "type": "stat", "title": "Avg Step Duration",
+      "gridPos": {"h":4,"w":5,"x":19,"y":45},
+      "datasource": {"type":"prometheus","uid":"sprintfoundry-prometheus"},
+      "targets": [{"datasource":{"type":"prometheus","uid":"sprintfoundry-prometheus"},
+        "expr":"sum(sprintfoundry_step_duration_seconds_sum{agent=~\"$agent\"}) / sum(sprintfoundry_step_duration_seconds_count{agent=~\"$agent\"})",
+        "instant":true,"legendFormat":"__auto","refId":"A"}],
+      "options": {"reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false},"orientation":"auto","textMode":"auto","colorMode":"background","graphMode":"none","justifyMode":"auto"},
+      "fieldConfig": {"defaults":{"unit":"s","decimals":1,"color":{"mode":"thresholds"},"thresholds":{"mode":"absolute","steps":[{"color":"green","value":null},{"color":"orange","value":300},{"color":"red","value":600}]}},"overrides":[]}
+    },
+
+    {"collapsed":false,"gridPos":{"h":1,"w":24,"x":0,"y":49},"id":102,"title":"🔁 Quality & Rework","type":"row"},
+
+    {
+      "id": 27, "type": "timeseries", "title": "Rework Cycles Over Time",
+      "description": "Fires when QA or code-review rejects output and triggers a rework loop",
+      "gridPos": {"h":8,"w":14,"x":0,"y":50},
+      "datasource": {"type":"prometheus","uid":"sprintfoundry-prometheus"},
+      "targets": [
+        {"datasource":{"type":"prometheus","uid":"sprintfoundry-prometheus"},
+          "expr":"sum(sprintfoundry_rework_cycles_total{project_id=~\"$project_id\"}) by (agent)","legendFormat":"{{agent}}","refId":"A"}
+      ],
+      "options": {"tooltip":{"mode":"multi","sort":"desc"},"legend":{"displayMode":"table","placement":"bottom","calcs":["last"]}},
+      "fieldConfig": {"defaults":{"unit":"short","custom":{"drawStyle":"line","lineWidth":2,"fillOpacity":20,"spanNulls":true},"color":{"mode":"palette-classic"}},"overrides":[]}
+    },
+
+    {
+      "id": 28, "type": "barchart", "title": "Rework Cycles by Agent",
+      "gridPos": {"h":8,"w":10,"x":14,"y":50},
+      "datasource": {"type":"prometheus","uid":"sprintfoundry-prometheus"},
+      "targets": [{"datasource":{"type":"prometheus","uid":"sprintfoundry-prometheus"},
+        "expr":"sort_desc(sum(sprintfoundry_rework_cycles_total{agent=~\"$agent\",project_id=~\"$project_id\"}) by (agent)) or vector(0)",
+        "instant":true,"format":"table","legendFormat":"","refId":"A"}],
+      "transformations": [{"id":"organize","options":{"excludeByName":{"Time":true},"renameByName":{"Value":"Rework Cycles","agent":"Agent"}}}],
+      "options": {"orientation":"horizontal","xField":"Agent","fillOpacity":80,"gradientMode":"none","tooltip":{"mode":"single"},"barWidth":0.6},
+      "fieldConfig": {"defaults":{"unit":"short","decimals":0,"color":{"mode":"thresholds"},"thresholds":{"mode":"absolute","steps":[{"color":"green","value":null},{"color":"orange","value":2},{"color":"red","value":5}]}},"overrides":[]}
+    },
+
+    {"collapsed":false,"gridPos":{"h":1,"w":24,"x":0,"y":58},"id":103,"title":"🛡️ Safety & Infrastructure","type":"row"},
+
+    {
+      "id": 29, "type": "timeseries", "title": "Guardrail Blocks Over Time",
+      "description": "Tool calls blocked by platform deny-list rules",
+      "gridPos": {"h":8,"w":10,"x":0,"y":59},
+      "datasource": {"type":"prometheus","uid":"sprintfoundry-prometheus"},
+      "targets": [
+        {"datasource":{"type":"prometheus","uid":"sprintfoundry-prometheus"},
+          "expr":"sum(sprintfoundry_guardrail_blocks_total{agent=~\"$agent\"}) by (agent)","legendFormat":"{{agent}}","refId":"A"}
+      ],
+      "options": {"tooltip":{"mode":"multi","sort":"desc"},"legend":{"displayMode":"table","placement":"bottom","calcs":["last"]}},
+      "fieldConfig": {"defaults":{"unit":"short","custom":{"drawStyle":"bars","lineWidth":1,"fillOpacity":70,"stacking":{"mode":"normal","group":"A"}},"color":{"mode":"palette-classic"}},"overrides":[]}
+    },
+
+    {
+      "id": 30, "type": "timeseries", "title": "Git Operations Duration (P95)",
+      "gridPos": {"h":8,"w":7,"x":10,"y":59},
+      "datasource": {"type":"prometheus","uid":"sprintfoundry-prometheus"},
+      "targets": [
+        {"datasource":{"type":"prometheus","uid":"sprintfoundry-prometheus"},
+          "expr":"histogram_quantile(0.95, sum(sprintfoundry_git_operation_duration_seconds_bucket) by (le, operation))","legendFormat":"{{operation}}","refId":"A"}
+      ],
+      "options": {"tooltip":{"mode":"multi","sort":"desc"},"legend":{"displayMode":"table","placement":"bottom","calcs":["last","max"]}},
+      "fieldConfig": {"defaults":{"unit":"s","custom":{"drawStyle":"line","lineWidth":2,"fillOpacity":10,"spanNulls":true},"color":{"mode":"palette-classic"}},"overrides":[]}
+    },
+
+    {
+      "id": 31, "type": "piechart", "title": "Human Gate Decisions",
+      "gridPos": {"h":8,"w":7,"x":17,"y":59},
+      "datasource": {"type":"prometheus","uid":"sprintfoundry-prometheus"},
+      "targets": [{"datasource":{"type":"prometheus","uid":"sprintfoundry-prometheus"},
+        "expr":"sum(sprintfoundry_human_gate_decisions_total{project_id=~\"$project_id\"}) by (decision)",
+        "instant":true,"legendFormat":"{{decision}}","refId":"A"}],
+      "options": {"pieType":"donut","tooltip":{"mode":"multi"},"legend":{"displayMode":"table","placement":"right","values":["value","percent"]}},
+      "fieldConfig": {
+        "defaults": {"unit":"short","color":{"mode":"palette-classic"}},
+        "overrides": [
+          {"matcher":{"id":"byName","options":"approved"},"properties":[{"id":"color","value":{"mode":"fixed","fixedColor":"#73BF69"}}]},
+          {"matcher":{"id":"byName","options":"rejected"},"properties":[{"id":"color","value":{"mode":"fixed","fixedColor":"#F2495C"}}]}
+        ]
+      }
+    },
+
+    {"collapsed":false,"gridPos":{"h":1,"w":24,"x":0,"y":67},"id":104,"title":"🔧 Agent Activity","type":"row"},
+
+    {
+      "id": 32, "type": "barchart", "title": "Step Attempts by Agent",
+      "description": "Total invocations including retries — higher than Steps Executed indicates rework",
+      "gridPos": {"h":9,"w":12,"x":0,"y":68},
+      "datasource": {"type":"prometheus","uid":"sprintfoundry-prometheus"},
+      "targets": [{"datasource":{"type":"prometheus","uid":"sprintfoundry-prometheus"},
+        "expr":"sort_desc(sum(sprintfoundry_step_attempts_total{agent=~\"$agent\"}) by (agent))",
+        "instant":true,"format":"table","legendFormat":"","refId":"A"}],
+      "transformations": [{"id":"organize","options":{"excludeByName":{"Time":true},"renameByName":{"Value":"Attempts","agent":"Agent"}}}],
+      "options": {"orientation":"horizontal","xField":"Agent","fillOpacity":80,"gradientMode":"opacity","tooltip":{"mode":"single"},"barWidth":0.6},
+      "fieldConfig": {"defaults":{"unit":"short","decimals":0,"color":{"mode":"continuous-blues"}},"overrides":[]}
+    },
+
+    {
+      "id": 33, "type": "timeseries", "title": "Token Consumption Over Time",
+      "description": "Cumulative tokens consumed per agent",
+      "gridPos": {"h":9,"w":12,"x":12,"y":68},
+      "datasource": {"type":"prometheus","uid":"sprintfoundry-prometheus"},
+      "targets": [
+        {"datasource":{"type":"prometheus","uid":"sprintfoundry-prometheus"},"expr":"sum(sprintfoundry_tokens_used_total{agent=~\"$agent\"}) by (agent)","legendFormat":"{{agent}}","refId":"A"}
+      ],
+      "options": {"tooltip":{"mode":"multi","sort":"desc"},"legend":{"displayMode":"table","placement":"right","calcs":["last"]}},
+      "fieldConfig": {"defaults":{"unit":"short","custom":{"drawStyle":"line","lineWidth":2,"fillOpacity":15,"stacking":{"mode":"none"},"spanNulls":true,"showPoints":"never"},"color":{"mode":"palette-classic"}},"overrides":[]}
+    }
+
+  ]
+}

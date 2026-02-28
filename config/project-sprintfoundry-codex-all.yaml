@@ -19,7 +19,7 @@ agents:
   - devops
 
 repo:
-  url: git@github.com:Sagart-cactus/SprintFoundry.git
+  url: git@github.com:Sagart-cactus/sprintfoundry-dryrun.git
   default_branch: main
 
 api_keys:
@@ -121,6 +121,12 @@ runtime_overrides:
     model_reasoning_effort: medium
     args:
       - --dangerously-bypass-approvals-and-sandbox
+  docs-auditor:
+    provider: codex
+    mode: local_process
+    model_reasoning_effort: medium
+    args:
+      - --dangerously-bypass-approvals-and-sandbox
 
 planner_runtime_override:
   provider: codex
@@ -147,6 +153,6 @@ integrations:
     config:
       token: ${GITHUB_TOKEN}
       owner: Sagart-cactus
-      repo: SprintFoundry
+      repo: sprintfoundry-dryrun
 
 rules: []
