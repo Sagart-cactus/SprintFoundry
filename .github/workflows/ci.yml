@@ -30,8 +30,13 @@ jobs:
         run: pnpm build
 
       - name: Test
+        env:
+          # Avoid Vitest worker OOMs on GitHub-hosted runners.
+          NODE_OPTIONS: --max-old-space-size=6144
         run: |
           pnpm vitest run \
+            --maxWorkers=1 \
+            --no-file-parallelism \
             --exclude "**/*.integration.test.ts" \
             --exclude "**/codex-sdk-poc*" \
             --exclude "**/codex-*-sdk*" \
