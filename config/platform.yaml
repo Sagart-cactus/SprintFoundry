@@ -134,6 +134,19 @@ workspace:
 # Global events directory for JSONL persistence
 events_dir: .sprintfoundry/events
 
+# ----- Telemetry / Metrics (optional) -----
+# Enable OpenTelemetry metrics from the orchestration service and from
+# Claude Code and Codex CLI agents.  All metrics are forwarded via OTLP
+# to any compatible collector (e.g. the bundled docker-compose.otel.yml).
+#
+# Activation: set SPRINTFOUNDRY_OTEL_ENABLED=1 in your environment.
+# The values below document the defaults; override via env vars.
+#
+# telemetry:
+#   otlp_endpoint: http://localhost:4318   # HTTP OTLP (port 4318) or gRPC (port 4317)
+#   otlp_protocol: http/protobuf           # http/protobuf | grpc
+#   export_interval_ms: 15000              # how often metrics are pushed to the collector
+
 # ----- Post-PR Lifecycle & Reactions -----
 # Controls automated responses to CI failures, review comments, and merge readiness.
 # Disabled by default — enable per project in project.yaml.

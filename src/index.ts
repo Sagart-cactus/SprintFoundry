@@ -27,6 +27,27 @@ import { githubSCMModule } from "./plugins/scm-github/index.js";
 // Migrate deprecated AGENTSDLC_* env vars to SPRINTFOUNDRY_*
 migrateEnvVars();
 
+// Initialize OpenTelemetry metrics SDK before anything else so that the global
+// MeterProvider is registered when MetricsService creates its instruments.
+// Only active when SPRINTFOUNDRY_OTEL_ENABLED=1.
+if (process.env.SPRINTFOUNDRY_OTEL_ENABLED === "1") {
+  const { MeterProvider, PeriodicExportingMetricReader } = await import("@opentelemetry/sdk-metrics");
+  const { OTLPMetricExporter } = await import("@opentelemetry/exporter-metrics-otlp-http");
+  const { metrics } = await import("@opentelemetry/api");
+
+  // Use HTTP OTLP (port 4318) by default — avoids native gRPC dependencies.
+  // Users can point this at any OTLP-compatible collector.
+  const endpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? "http://localhost:4318";
+  const exporter = new OTLPMetricExporter({ url: `${endpoint}/v1/metrics` });
+  const reader = new PeriodicExportingMetricReader({
+    exporter,
+    exportIntervalMillis: 15_000,
+  });
+  const provider = new MeterProvider({ readers: [reader] });
+  metrics.setGlobalMeterProvider(provider);
+  console.log(`[otel] Metrics enabled — exporting to ${endpoint}/v1/metrics every 15s`);
+}
+
 const program = new Command();
 
 function buildPluginRegistry(platform: PlatformConfig, project: ProjectConfig): PluginRegistry {

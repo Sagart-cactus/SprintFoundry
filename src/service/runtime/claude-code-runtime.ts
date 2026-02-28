@@ -49,6 +49,16 @@ export class ClaudeCodeRuntime implements AgentRuntime {
         CLAUDECODE: undefined, // unset to allow nested claude invocations
         ...(config.apiKey ? { ANTHROPIC_API_KEY: config.apiKey } : {}),
         ANTHROPIC_MODEL: config.modelConfig.model,
+        // Inject OTel telemetry env vars when enabled so Claude Code CLI
+        // forwards its own metrics (token usage, cost, session duration)
+        // to the shared OTLP collector.
+        ...(process.env.SPRINTFOUNDRY_OTEL_ENABLED === "1" ? {
+          CLAUDE_CODE_ENABLE_TELEMETRY: "1",
+          OTEL_EXPORTER_OTLP_ENDPOINT: process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? "http://localhost:4318",
+          OTEL_EXPORTER_OTLP_PROTOCOL: process.env.OTEL_EXPORTER_OTLP_PROTOCOL ?? "http/protobuf",
+          OTEL_METRICS_EXPORTER: "otlp",
+          OTEL_LOGS_EXPORTER: "otlp",
+        } : {}),
         ...(config.runtime.env ?? {}),
       },
       timeoutMs: config.timeoutMinutes * 60 * 1000,
@@ -85,6 +95,16 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       CLAUDECODE: undefined, // unset to allow nested claude invocations
       ...(config.apiKey ? { ANTHROPIC_API_KEY: config.apiKey } : {}),
       ANTHROPIC_MODEL: config.modelConfig.model,
+      // Inject OTel telemetry env vars when enabled so Claude Code CLI
+      // forwards its own metrics (token usage, cost, session duration)
+      // to the shared OTLP collector.
+      ...(process.env.SPRINTFOUNDRY_OTEL_ENABLED === "1" ? {
+        CLAUDE_CODE_ENABLE_TELEMETRY: "1",
+        OTEL_EXPORTER_OTLP_ENDPOINT: process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? "http://localhost:4318",
+        OTEL_EXPORTER_OTLP_PROTOCOL: process.env.OTEL_EXPORTER_OTLP_PROTOCOL ?? "http/protobuf",
+        OTEL_METRICS_EXPORTER: "otlp",
+        OTEL_LOGS_EXPORTER: "otlp",
+      } : {}),
       ...(config.runtime.env ?? {}),
     };
 
