@@ -34,10 +34,24 @@ jobs:
           # Avoid Vitest worker OOMs on GitHub-hosted runners.
           NODE_OPTIONS: --max-old-space-size=6144
         run: |
-          pnpm vitest run \
-            --maxWorkers=1 \
-            --no-file-parallelism \
-            --exclude "**/*.integration.test.ts" \
-            --exclude "**/codex-sdk-poc*" \
-            --exclude "**/codex-*-sdk*" \
-            --reporter=verbose
+          set -euo pipefail
+          test_files="$(
+            find tests -type f -name "*.test.ts" \
+              ! -name "*.integration.test.ts" \
+              ! -name "workspace-worktree.test.ts" \
+              ! -name "codex-sdk-poc*" \
+              ! -name "codex-*-sdk*" \
+              | sort
+          )"
+          test_count="$(printf '%s\n' "$test_files" | sed '/^$/d' | wc -l | tr -d '[:space:]')"
+          echo "Running ${test_count} test files with isolated Vitest processes..."
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            echo "==> ${file}"
+            pnpm vitest run \
+              --pool=forks \
+              --maxWorkers=1 \
+              --no-file-parallelism \
+              --reporter=dot \
+              "${file}"
+          done <<< "$test_files"
