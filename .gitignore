@@ -48,3 +48,4 @@ video/
 artifacts/
 AGENTS.md
 !docs/agents.md
+config/project-sprintfoundry-codex-all.yaml
