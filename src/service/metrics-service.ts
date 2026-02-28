@@ -8,7 +8,7 @@
 // ============================================================
 
 import { metrics, type Counter, type Histogram, type UpDownCounter, type Meter } from "@opentelemetry/api";
-import type { AgentType } from "../shared/types.js";
+import type { AgentType, RuntimeMode } from "../shared/types.js";
 
 const METER_NAME = "sprintfoundry";
 const METER_VERSION = "1.0.0";
@@ -188,16 +188,18 @@ export class MetricsService {
 
   // ---- Step / agent execution ----
 
-  recordStepStarted(attrs: { agent: AgentType; provider: string; mode: string }): void {
+  recordStepStarted(attrs: { run_id: string; step_id: string; agent: AgentType; provider: string; mode: RuntimeMode }): void {
     if (!this.enabled) return;
     this.stepAttemptsTotal.add(1, attrs);
     this.agentSpawnsTotal.add(1, attrs);
   }
 
   recordStepCompleted(attrs: {
+    run_id: string;
+    step_id: string;
     agent: AgentType;
     provider: string;
-    mode: string;
+    mode: RuntimeMode;
     status: string;
     durationMs: number;
     tokensUsed: number;
@@ -210,7 +212,7 @@ export class MetricsService {
     this.stepsTotal.add(1, labels);
     this.stepDurationSeconds.record(durationMs / 1000, labels);
 
-    const agentAttrs = { agent: attrs.agent, provider: attrs.provider, mode: attrs.mode };
+    const agentAttrs = { run_id: attrs.run_id, step_id: attrs.step_id, agent: attrs.agent, provider: attrs.provider, mode: attrs.mode };
     this.tokensUsedTotal.add(tokensUsed, agentAttrs);
     this.costUsdTotal.add(costUsd, agentAttrs);
 

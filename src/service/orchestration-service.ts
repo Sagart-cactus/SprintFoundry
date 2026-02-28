@@ -728,7 +728,7 @@ export class OrchestrationService {
       runtime_metadata: runtimeMetadata,
     });
     const stepStartMs = Date.now();
-    this.metricsService.recordStepStarted({ agent: step.agent, provider: runtime.provider, mode: runtime.mode });
+    this.metricsService.recordStepStarted({ run_id: run.run_id, step_id: String(step.step_number), agent: step.agent, provider: runtime.provider, mode: runtime.mode });
 
     const apiKey = this.resolveApiKey(modelConfig.provider, runtime);
 
@@ -918,6 +918,8 @@ export class OrchestrationService {
           runtime_metadata: runtimeMetadata,
         });
         this.metricsService.recordStepCompleted({
+          run_id: run.run_id,
+          step_id: String(step.step_number),
           agent: step.agent,
           provider: runtime.provider,
           mode: runtime.mode,
