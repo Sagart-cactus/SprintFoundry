@@ -52,6 +52,7 @@ import { SessionManager } from "./session-manager.js";
 import { LifecycleManager, defaultLifecycleConfig } from "./lifecycle-manager.js";
 import { NotificationRouter, defaultRoutingConfig } from "./notification-router.js";
 import { MetricsService } from "./metrics-service.js";
+import { trace } from "@opentelemetry/api";
 
 export class OrchestrationService {
   private validator: PlanValidator;
@@ -68,6 +69,7 @@ export class OrchestrationService {
   private notificationRouter: NotificationRouter | null = null;
   private registry: PluginRegistry | null;
   private metricsService: MetricsService;
+  private tracer = trace.getTracer("sprintfoundry", "1.0.0");
 
   constructor(
     private platformConfig: PlatformConfig,
@@ -667,6 +669,27 @@ export class OrchestrationService {
   // ---- Single Step Execution ----
 
   private async executeStep(
+    run: TaskRun,
+    step: PlanStep,
+    workspacePath: string,
+    reworkCounts: Map<number, number>,
+    parallelReworkSignals?: Array<{ step: PlanStep; agentResult: AgentResult; currentRework: number }>,
+    resumeReason?: string
+  ): Promise<"completed" | "failed" | "rework"> {
+    return this.tracer.startActiveSpan(
+      "agent.step",
+      { attributes: { run_id: run.run_id, step_id: String(step.step_number), "step.agent": step.agent } },
+      async (span) => {
+        try {
+          return await this.executeStepBody(run, step, workspacePath, reworkCounts, parallelReworkSignals, resumeReason);
+        } finally {
+          span.end();
+        }
+      }
+    );
+  }
+
+  private async executeStepBody(
     run: TaskRun,
     step: PlanStep,
     workspacePath: string,

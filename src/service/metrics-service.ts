@@ -7,7 +7,7 @@
 // Activate by setting SPRINTFOUNDRY_OTEL_ENABLED=1.
 // ============================================================
 
-import { metrics, type Counter, type Histogram, type UpDownCounter, type Meter } from "@opentelemetry/api";
+import { metrics, trace, type Counter, type Histogram, type UpDownCounter, type Meter } from "@opentelemetry/api";
 import type { AgentType, RuntimeMode } from "../shared/types.js";
 
 const METER_NAME = "sprintfoundry";
@@ -190,8 +190,10 @@ export class MetricsService {
 
   recordStepStarted(attrs: { run_id: string; step_id: string; agent: AgentType; provider: string; mode: RuntimeMode }): void {
     if (!this.enabled) return;
-    this.stepAttemptsTotal.add(1, attrs);
-    this.agentSpawnsTotal.add(1, attrs);
+    const { run_id, step_id, ...counterAttrs } = attrs;
+    trace.getActiveSpan()?.setAttributes({ run_id, step_id });
+    this.stepAttemptsTotal.add(1, counterAttrs);
+    this.agentSpawnsTotal.add(1, counterAttrs);
   }
 
   recordStepCompleted(attrs: {
@@ -208,11 +210,12 @@ export class MetricsService {
     cacheTokensSaved?: number;
   }): void {
     if (!this.enabled) return;
-    const { durationMs, tokensUsed, costUsd, tokenBudget, cacheTokensSaved, ...labels } = attrs;
+    const { run_id, step_id, durationMs, tokensUsed, costUsd, tokenBudget, cacheTokensSaved, ...labels } = attrs;
+    trace.getActiveSpan()?.setAttributes({ run_id, step_id });
     this.stepsTotal.add(1, labels);
     this.stepDurationSeconds.record(durationMs / 1000, labels);
 
-    const agentAttrs = { run_id: attrs.run_id, step_id: attrs.step_id, agent: attrs.agent, provider: attrs.provider, mode: attrs.mode };
+    const agentAttrs = { agent: attrs.agent, provider: attrs.provider, mode: attrs.mode };
     this.tokensUsedTotal.add(tokensUsed, agentAttrs);
     this.costUsdTotal.add(costUsd, agentAttrs);
 
