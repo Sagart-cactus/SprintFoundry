@@ -27,6 +27,7 @@ import type {
   RuntimeConfig,
   RuntimeMetadataEnvelope,
   ProjectStack,
+  TaskSource,
 } from "../shared/types.js";
 import { parse as parseYaml } from "yaml";
 import { PlanValidator } from "./plan-validator.js";
