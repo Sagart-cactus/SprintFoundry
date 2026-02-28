@@ -164,20 +164,29 @@ export class MetricsService {
 
   // ---- Run lifecycle ----
 
-  recordRunStarted(attrs: { project_id: string; source: string }): void {
+  recordRunStarted(attrs: { project_id: string; source: string; run_id: string }): void {
     if (!this.enabled) return;
-    this.activeRuns.add(1, attrs);
+    const { run_id, ...counterAttrs } = attrs;
+    trace.getActiveSpan()?.setAttributes({ project_id: attrs.project_id, source: attrs.source, run_id });
+    this.activeRuns.add(1, counterAttrs);
   }
 
   recordRunCompleted(attrs: {
     project_id: string;
     source: string;
+    run_id: string;
     status: "completed" | "failed";
     durationMs: number;
     planSteps?: number;
   }): void {
     if (!this.enabled) return;
-    const { durationMs, planSteps, ...labels } = attrs;
+    const { run_id, durationMs, planSteps, ...labels } = attrs;
+    trace.getActiveSpan()?.setAttributes({
+      run_id,
+      status: attrs.status,
+      duration_ms: durationMs,
+      plan_steps: planSteps ?? 0,
+    });
     this.activeRuns.add(-1, { project_id: attrs.project_id, source: attrs.source });
     this.runsTotal.add(1, labels);
     this.runDurationSeconds.record(durationMs / 1000, labels);
@@ -211,7 +220,15 @@ export class MetricsService {
   }): void {
     if (!this.enabled) return;
     const { run_id, step_id, durationMs, tokensUsed, costUsd, tokenBudget, cacheTokensSaved, ...labels } = attrs;
-    trace.getActiveSpan()?.setAttributes({ run_id, step_id });
+    trace.getActiveSpan()?.setAttributes({
+      run_id,
+      step_id,
+      tokens_used: tokensUsed,
+      cost_usd: costUsd,
+      cache_tokens_saved: cacheTokensSaved ?? 0,
+      duration_ms: durationMs,
+      status: attrs.status,
+    });
     this.stepsTotal.add(1, labels);
     this.stepDurationSeconds.record(durationMs / 1000, labels);
 

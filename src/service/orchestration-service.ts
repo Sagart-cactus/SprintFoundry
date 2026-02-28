@@ -52,7 +52,7 @@ import { SessionManager } from "./session-manager.js";
 import { LifecycleManager, defaultLifecycleConfig } from "./lifecycle-manager.js";
 import { NotificationRouter, defaultRoutingConfig } from "./notification-router.js";
 import { MetricsService } from "./metrics-service.js";
-import { trace } from "@opentelemetry/api";
+import { trace, type Span } from "@opentelemetry/api";
 
 export class OrchestrationService {
   private validator: PlanValidator;
@@ -205,11 +205,32 @@ export class OrchestrationService {
     promptText?: string,
     opts?: { dryRun?: boolean; agent?: string; agentFile?: string }
   ): Promise<TaskRun> {
+    return this.tracer.startActiveSpan(
+      "task.run",
+      { attributes: { project_id: this.projectConfig.project_id, source } },
+      async (span) => {
+        try {
+          return await this.handleTaskBody(ticketId, source, promptText, opts, span);
+        } finally {
+          span.end();
+        }
+      }
+    );
+  }
+
+  private async handleTaskBody(
+    ticketId: string,
+    source: "linear" | "github" | "jira" | "prompt",
+    promptText: string | undefined,
+    opts: { dryRun?: boolean; agent?: string; agentFile?: string } | undefined,
+    span: Span
+  ): Promise<TaskRun> {
     // 1. Create the run
     const run = this.createRun(ticketId);
+    span.setAttribute("run_id", run.run_id);
     const runStartMs = Date.now();
     await this.emitEvent(run.run_id, "task.created", { ticketId, source });
-    this.metricsService.recordRunStarted({ project_id: this.projectConfig.project_id, source });
+    this.metricsService.recordRunStarted({ project_id: this.projectConfig.project_id, source, run_id: run.run_id });
 
     try {
       // 2. Fetch ticket details (or create from prompt)
@@ -348,6 +369,7 @@ export class OrchestrationService {
 
       this.metricsService.recordRunCompleted({
         project_id: this.projectConfig.project_id,
+        run_id: run.run_id,
         source,
         status: (run.status as string) === "completed" ? "completed" : "failed",
         durationMs: Date.now() - runStartMs,
@@ -361,6 +383,7 @@ export class OrchestrationService {
       await this.emitEvent(run.run_id, "task.failed", { error: run.error });
       this.metricsService.recordRunCompleted({
         project_id: this.projectConfig.project_id,
+        run_id: run.run_id,
         source,
         status: "failed",
         durationMs: Date.now() - runStartMs,
