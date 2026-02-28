@@ -51,6 +51,8 @@ import type {
 import { SessionManager } from "./session-manager.js";
 import { LifecycleManager, defaultLifecycleConfig } from "./lifecycle-manager.js";
 import { NotificationRouter, defaultRoutingConfig } from "./notification-router.js";
+import { MetricsService } from "./metrics-service.js";
+import { trace, type Span } from "@opentelemetry/api";
 
 export class OrchestrationService {
   private validator: PlanValidator;
@@ -66,6 +68,8 @@ export class OrchestrationService {
   private lifecycleManager: LifecycleManager | null = null;
   private notificationRouter: NotificationRouter | null = null;
   private registry: PluginRegistry | null;
+  private metricsService: MetricsService;
+  private tracer = trace.getTracer("sprintfoundry", "1.0.0");
 
   constructor(
     private platformConfig: PlatformConfig,
@@ -73,6 +77,7 @@ export class OrchestrationService {
     registry?: PluginRegistry
   ) {
     this.registry = registry ?? null;
+    this.metricsService = new MetricsService(process.env.SPRINTFOUNDRY_OTEL_ENABLED === "1");
     this.validator = new PlanValidator(platformConfig, projectConfig);
     this.agentRunner = new AgentRunner(platformConfig, projectConfig);
     this.plannerRuntime = new PlannerFactory().create(platformConfig, projectConfig);
@@ -200,9 +205,32 @@ export class OrchestrationService {
     promptText?: string,
     opts?: { dryRun?: boolean; agent?: string; agentFile?: string }
   ): Promise<TaskRun> {
+    return this.tracer.startActiveSpan(
+      "task.run",
+      { attributes: { project_id: this.projectConfig.project_id, source } },
+      async (span) => {
+        try {
+          return await this.handleTaskBody(ticketId, source, promptText, opts, span);
+        } finally {
+          span.end();
+        }
+      }
+    );
+  }
+
+  private async handleTaskBody(
+    ticketId: string,
+    source: "linear" | "github" | "jira" | "prompt",
+    promptText: string | undefined,
+    opts: { dryRun?: boolean; agent?: string; agentFile?: string } | undefined,
+    span: Span
+  ): Promise<TaskRun> {
     // 1. Create the run
     const run = this.createRun(ticketId);
+    span.setAttribute("run_id", run.run_id);
+    const runStartMs = Date.now();
     await this.emitEvent(run.run_id, "task.created", { ticketId, source });
+    this.metricsService.recordRunStarted({ project_id: this.projectConfig.project_id, source, run_id: run.run_id });
 
     try {
       // 2. Fetch ticket details (or create from prompt)
@@ -312,15 +340,26 @@ export class OrchestrationService {
 
       // 7. If all passed, create PR and update ticket
       if ((run.status as string) === "completed") {
-        const prUrl = await this.createPullRequest(workspacePath, run);
-        run.pr_url = prUrl;
-        await this.emitEvent(run.run_id, "pr.created", { prUrl });
+        const gitStart = Date.now();
+        let prCreationStatus: "success" | "error" = "success";
+        try {
+          const prUrl = await this.createPullRequest(workspacePath, run);
+          run.pr_url = prUrl;
+          await this.emitEvent(run.run_id, "pr.created", { prUrl });
+          this.metricsService.recordGitOperation({ operation: "pr_create", status: "success", durationMs: Date.now() - gitStart });
+          this.metricsService.recordPrCreated({ project_id: this.projectConfig.project_id, status: "success" });
+        } catch (prErr) {
+          prCreationStatus = "error";
+          this.metricsService.recordGitOperation({ operation: "pr_create", status: "error", durationMs: Date.now() - gitStart });
+          this.metricsService.recordPrCreated({ project_id: this.projectConfig.project_id, status: "error" });
+          throw prErr;
+        }
 
-        await this.updateTicketStatus(ticket, "in_review", prUrl);
+        await this.updateTicketStatus(ticket, "in_review", run.pr_url!);
         await this.emitEvent(run.run_id, "ticket.updated", { status: "in_review" });
 
         await this.sendNotification(
-          `Task ${ticket.id} completed. PR: ${prUrl}`
+          `Task ${ticket.id} completed. PR: ${run.pr_url}`
         );
         this.persistSession(run, { workspace_path: workspacePath });
 
@@ -328,11 +367,28 @@ export class OrchestrationService {
         this.startLifecycleWatch(run, workspacePath);
       }
 
+      this.metricsService.recordRunCompleted({
+        project_id: this.projectConfig.project_id,
+        run_id: run.run_id,
+        source,
+        status: (run.status as string) === "completed" ? "completed" : "failed",
+        durationMs: Date.now() - runStartMs,
+        planSteps: run.validated_plan?.steps.length ?? run.plan?.steps.length,
+      });
+
       return run;
     } catch (error) {
       run.status = "failed";
       run.error = error instanceof Error ? error.message : String(error);
       await this.emitEvent(run.run_id, "task.failed", { error: run.error });
+      this.metricsService.recordRunCompleted({
+        project_id: this.projectConfig.project_id,
+        run_id: run.run_id,
+        source,
+        status: "failed",
+        durationMs: Date.now() - runStartMs,
+        planSteps: run.validated_plan?.steps.length ?? run.plan?.steps.length,
+      });
       await this.sendNotification(
         `Task ${run.ticket?.id ?? ticketId} failed: ${run.error}`
       );
@@ -643,6 +699,27 @@ export class OrchestrationService {
     parallelReworkSignals?: Array<{ step: PlanStep; agentResult: AgentResult; currentRework: number }>,
     resumeReason?: string
   ): Promise<"completed" | "failed" | "rework"> {
+    return this.tracer.startActiveSpan(
+      "agent.step",
+      { attributes: { run_id: run.run_id, step_id: String(step.step_number), "step.agent": step.agent } },
+      async (span) => {
+        try {
+          return await this.executeStepBody(run, step, workspacePath, reworkCounts, parallelReworkSignals, resumeReason);
+        } finally {
+          span.end();
+        }
+      }
+    );
+  }
+
+  private async executeStepBody(
+    run: TaskRun,
+    step: PlanStep,
+    workspacePath: string,
+    reworkCounts: Map<number, number>,
+    parallelReworkSignals?: Array<{ step: PlanStep; agentResult: AgentResult; currentRework: number }>,
+    resumeReason?: string
+  ): Promise<"completed" | "failed" | "rework"> {
     const budget = this.resolveBudget(run.ticket);
     const maxRework = budget.max_rework_cycles ?? this.platformConfig.defaults.max_rework_cycles;
     const currentRework = reworkCounts.get(step.step_number) ?? 0;
@@ -696,6 +773,8 @@ export class OrchestrationService {
       ...initialResumeTelemetry,
       runtime_metadata: runtimeMetadata,
     });
+    const stepStartMs = Date.now();
+    this.metricsService.recordStepStarted({ run_id: run.run_id, step_id: String(step.step_number), agent: step.agent, provider: runtime.provider, mode: runtime.mode });
 
     const apiKey = this.resolveApiKey(modelConfig.provider, runtime);
 
@@ -711,6 +790,7 @@ export class OrchestrationService {
         total_used: run.total_tokens_used,
         limit: budget.per_task_total_tokens,
       });
+      this.metricsService.recordTokenLimitExceeded({ agent: step.agent, provider: runtime.provider, reason: "per_task_total_tokens" });
       return "failed";
     }
 
@@ -723,6 +803,7 @@ export class OrchestrationService {
         cost_limit: budget.per_task_max_cost_usd,
         reason: "per_task_max_cost_usd exceeded",
       });
+      this.metricsService.recordTokenLimitExceeded({ agent: step.agent, provider: runtime.provider, reason: "per_task_max_cost_usd" });
       return "failed";
     }
 
@@ -774,6 +855,26 @@ export class OrchestrationService {
             agent: step.agent,
             ...activity.data,
           });
+          // Mirror selected activity events as metrics
+          switch (activity.type) {
+            case "agent_tool_call": {
+              const toolName = typeof activity.data.tool_name === "string" ? activity.data.tool_name : "unknown";
+              this.metricsService.recordToolCall({ agent: step.agent, tool_name: toolName });
+              break;
+            }
+            case "agent_file_edit": {
+              const filePath = typeof activity.data.path === "string" ? activity.data.path : "";
+              const ext = filePath.includes(".") ? filePath.split(".").pop() ?? "unknown" : "unknown";
+              this.metricsService.recordFileEdit({ agent: step.agent, extension: ext });
+              break;
+            }
+            case "agent_command_run":
+              this.metricsService.recordCommandRun({ agent: step.agent });
+              break;
+            case "agent_guardrail_block":
+              this.metricsService.recordGuardrailBlock({ agent: step.agent, provider: runtime.provider });
+              break;
+          }
         },
       });
 
@@ -862,6 +963,19 @@ export class OrchestrationService {
           ...(tokenSavings ? { token_savings: tokenSavings } : {}),
           runtime_metadata: runtimeMetadata,
         });
+        this.metricsService.recordStepCompleted({
+          run_id: run.run_id,
+          step_id: String(step.step_number),
+          agent: step.agent,
+          provider: runtime.provider,
+          mode: runtime.mode,
+          status: "completed",
+          durationMs: Date.now() - stepStartMs,
+          tokensUsed: result.tokens_used,
+          costUsd: result.cost_usd,
+          tokenBudget: budget.per_agent_tokens,
+          cacheTokensSaved: tokenSavings?.cache_read_tokens,
+        });
 
         // Run quality gate after developer-role steps
         const agentRole = this.platformConfig.agent_definitions.find(
@@ -882,6 +996,7 @@ export class OrchestrationService {
               reason: "quality_gate_failed",
               failures: gateResult.failures,
             });
+            this.metricsService.recordReworkTriggered({ project_id: this.projectConfig.project_id, agent: step.agent });
 
             if (currentRework >= maxRework) {
               stepExec.status = "failed";
@@ -932,6 +1047,7 @@ export class OrchestrationService {
           reason: result.agentResult.rework_reason,
           rework_count: currentRework + 1,
         });
+        this.metricsService.recordReworkTriggered({ project_id: this.projectConfig.project_id, agent: step.agent });
 
         // Gather previous rework results for this step
         const previousReworkResults = run.steps
@@ -1164,16 +1280,20 @@ export class OrchestrationService {
       `Human review requested for task ${run.ticket.id} after step ${afterStep}: ${reason}`
     );
 
+    const gateOpenMs = Date.now();
     const decision = await this.waitForReviewDecision(review, workspacePath);
+    const gateWaitMs = Date.now() - gateOpenMs;
 
     if (decision.status === "approved") {
       await this.emitEvent(run.run_id, "human_gate.approved", { review: decision });
+      this.metricsService.recordHumanGateDecision({ project_id: this.projectConfig.project_id, decision: "approved", waitMs: gateWaitMs });
       return true;
     } else {
       await this.emitEvent(run.run_id, "human_gate.rejected", {
         review: decision,
         feedback: decision.reviewer_feedback,
       });
+      this.metricsService.recordHumanGateDecision({ project_id: this.projectConfig.project_id, decision: "rejected", waitMs: gateWaitMs });
       return false;
     }
   }

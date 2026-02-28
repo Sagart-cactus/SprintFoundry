@@ -665,6 +665,16 @@ export class CodexRuntime implements AgentRuntime {
     if (config.codexHomeDir) {
       env.CODEX_HOME = config.codexHomeDir;
     }
+    // Inject OTel telemetry env vars when enabled so Codex CLI forwards its
+    // own traces and metrics (API requests, tool calls, stream events) to the
+    // shared OTLP collector.
+    if (process.env.SPRINTFOUNDRY_OTEL_ENABLED === "1") {
+      env.OTEL_EXPORTER_OTLP_ENDPOINT = process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? "http://localhost:4318";
+      env.OTEL_EXPORTER_OTLP_PROTOCOL = process.env.OTEL_EXPORTER_OTLP_PROTOCOL ?? "http/protobuf";
+      env.OTEL_METRICS_EXPORTER = "otlp";
+      env.OTEL_TRACES_EXPORTER = "otlp";
+      env.OTEL_LOGS_EXPORTER = "otlp";
+    }
     for (const [key, value] of Object.entries(config.runtime.env ?? {})) {
       env[key] = value;
     }

@@ -46,6 +46,9 @@
     "@anthropic-ai/sdk": "^0.78.0",
     "@inquirer/prompts": "^7.0.0",
     "@openai/codex-sdk": "^0.104.0",
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/exporter-metrics-otlp-http": "^0.57.0",
+    "@opentelemetry/sdk-metrics": "^1.30.0",
     "commander": "^13.1.0",
     "dockerode": "^4.0.4",
     "yaml": "^2.7.0"
