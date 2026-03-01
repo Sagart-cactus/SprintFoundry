@@ -842,6 +842,64 @@ function stepResultSummary(step) {
   return "";
 }
 
+function normalizeRuntimeSkills(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const names = Array.isArray(raw.names)
+    ? raw.names.map((name) => String(name)).filter(Boolean)
+    : [];
+  const warnings = Array.isArray(raw.warnings)
+    ? raw.warnings.map((warning) => String(warning)).filter(Boolean)
+    : [];
+  const hashes = {};
+  if (raw.hashes && typeof raw.hashes === "object") {
+    for (const [name, hash] of Object.entries(raw.hashes)) {
+      if (!name) continue;
+      hashes[String(name)] = String(hash ?? "");
+    }
+  }
+  return {
+    names,
+    warnings,
+    hashes,
+    provider: typeof raw.provider === "string" ? raw.provider : "",
+    skillsDir: typeof raw.skills_dir === "string" ? raw.skills_dir : "",
+  };
+}
+
+function runtimeSkillsFromStep(step) {
+  return normalizeRuntimeSkills(step?.runtime_skills);
+}
+
+function runtimeSkillsFromResult(result) {
+  const raw = result?.metadata?.runtime_metadata?.provider_metadata?.skills;
+  return normalizeRuntimeSkills(raw);
+}
+
+function renderRuntimeSkillsSection(runtimeSkills) {
+  if (!runtimeSkills) return "";
+  const names = runtimeSkills.names ?? [];
+  const warnings = runtimeSkills.warnings ?? [];
+  const hashes = runtimeSkills.hashes ?? {};
+  const hashRows = Object.entries(hashes).map(
+    ([name, hash]) =>
+      `<div class="result-key">${escapeHtml(name)}</div><div class="result-value meta-mono">${escapeHtml(String(hash))}</div>`
+  );
+  return `
+    <section class="drawer-section">
+      <h3>Runtime Skills (${escapeHtml(String(names.length))})</h3>
+      <div class="result-grid">
+        <div class="result-key">Runtime</div>
+        <div class="result-value">${escapeHtml(runtimeSkills.provider || "-")}</div>
+        <div class="result-key">Skills Dir</div>
+        <div class="result-value meta-mono">${escapeHtml(runtimeSkills.skillsDir || "-")}</div>
+      </div>
+      ${names.length ? `<div class="meta-chips">${names.map((name) => `<span class="meta-chip">${escapeHtml(name)}</span>`).join("")}</div>` : '<p class="empty">No skills</p>'}
+      ${warnings.length ? `<div class="feed-alert feed-alert--rework"><span class="feed-alert-icon">⚠</span><span>${escapeHtml(warnings.join(" | "))}</span></div>` : ""}
+      ${hashRows.length ? `<details class="drawer-section drawer-collapsible"><summary>Skill Hashes <span class="detail-count">${escapeHtml(String(hashRows.length))}</span></summary><div class="drawer-collapsible-body"><div class="result-grid">${hashRows.join("")}</div></div></details>` : ""}
+    </section>
+  `;
+}
+
 function closeDrawer() {
   state.drawer.open = false;
   state.drawer.step = null;
@@ -1028,6 +1086,7 @@ async function renderDrawer() {
   const artifactsCreated = Array.isArray(result.artifacts_created) ? result.artifacts_created : [];
   const artifactsModified = Array.isArray(result.artifacts_modified) ? result.artifacts_modified : [];
   const issues = Array.isArray(result.issues) ? result.issues : [];
+  const runtimeSkills = runtimeSkillsFromResult(result) || runtimeSkillsFromStep(step);
   detailDrawerBody.innerHTML = `
     <section class="drawer-section">
       <h3>Summary</h3>
@@ -1052,6 +1111,7 @@ async function renderDrawer() {
       <h3>Issues (${issues.length})</h3>
       ${issues.length ? `<ul class="result-list">${issues.map((issue) => `<li>${escapeHtml(String(issue))}</li>`).join("")}</ul>` : '<p class="empty">None</p>'}
     </section>
+    ${renderRuntimeSkillsSection(runtimeSkills)}
     <details class="drawer-section drawer-collapsible" data-detail-id="${escapeHtml(`drawer-meta-${stepNumber}`)}" ${state.expandedDrawerSections.has(`drawer-meta-${stepNumber}`) ? "open" : ""}>
       <summary>Metadata <span class="detail-count">${escapeHtml(String(Object.keys(result.metadata ?? {}).length))} fields</span></summary>
       <div class="drawer-collapsible-body">
@@ -1099,6 +1159,8 @@ function renderFeed(runData, events, stepMeta) {
       ).join("");
 
       const isRework = step.is_rework || step.step_number >= 900;
+      const runtimeSkills = runtimeSkillsFromStep(step);
+      const runtimeSkillCount = runtimeSkills?.names?.length ?? 0;
       return `
         <article class="feed-card ${escapeHtml(step.status || "pending")}${isRework ? " rework-step" : ""}" id="step-card-${escapeHtml(String(step.step_number))}" data-step="${escapeHtml(String(step.step_number))}">
           <header class="feed-card-header">
@@ -1109,6 +1171,7 @@ function renderFeed(runData, events, stepMeta) {
               ${model ? `<span class="header-pill model-chip">${escapeHtml(model)}</span>` : ""}
               ${ran != null ? `<span class="header-pill">${escapeHtml(fmtDuration(ran))}</span>` : ""}
               ${step.tokens ? `<span class="header-pill">${escapeHtml(humanTokens(step.tokens))} tokens</span>` : ""}
+              ${runtimeSkillCount ? `<span class="header-pill">${escapeHtml(String(runtimeSkillCount))} skills</span>` : ""}
               ${meta.reworkEvents.length ? `<span class="header-pill pill--rework">↺ ${escapeHtml(String(meta.reworkEvents.length))} rework</span>` : ""}
             </div>
           </header>

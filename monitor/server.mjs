@@ -236,6 +236,37 @@ function inferStatus(events) {
   return "unknown";
 }
 
+function extractRuntimeSkills(runtimeMetadata) {
+  if (!runtimeMetadata || typeof runtimeMetadata !== "object") return null;
+  const providerMeta = runtimeMetadata.provider_metadata;
+  if (!providerMeta || typeof providerMeta !== "object") return null;
+  const skills = providerMeta.skills;
+  if (!skills || typeof skills !== "object") return null;
+
+  const names = Array.isArray(skills.names)
+    ? skills.names.map((name) => String(name)).filter(Boolean)
+    : [];
+  const warnings = Array.isArray(skills.warnings)
+    ? skills.warnings.map((warning) => String(warning)).filter(Boolean)
+    : [];
+
+  const hashes = {};
+  if (skills.hashes && typeof skills.hashes === "object") {
+    for (const [key, value] of Object.entries(skills.hashes)) {
+      if (!key) continue;
+      hashes[String(key)] = String(value ?? "");
+    }
+  }
+
+  return {
+    names,
+    warnings,
+    hashes,
+    provider: typeof skills.provider === "string" ? skills.provider : "",
+    skills_dir: typeof skills.skills_dir === "string" ? skills.skills_dir : "",
+  };
+}
+
 function buildStepStatus(plan, events) {
   const byStep = new Map();
   for (const step of plan?.steps ?? []) {
@@ -247,6 +278,7 @@ function buildStepStatus(plan, events) {
       started_at: null,
       completed_at: null,
       tokens: null,
+      runtime_skills: null,
     });
   }
 
@@ -265,10 +297,15 @@ function buildStepStatus(plan, events) {
         started_at: null,
         completed_at: null,
         tokens: null,
+        runtime_skills: null,
         is_rework: stepNum >= 900,
       });
     }
     const st = byStep.get(stepNum);
+    const runtimeSkills = extractRuntimeSkills(data.runtime_metadata);
+    if (runtimeSkills) {
+      st.runtime_skills = runtimeSkills;
+    }
     if (evt.event_type === "step.started") {
       st.status = "running";
       st.started_at = evt.timestamp ?? null;

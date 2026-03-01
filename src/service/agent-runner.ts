@@ -52,6 +52,10 @@ export interface AgentRunConfig {
 interface WorkspacePrepResult {
   codexHomeDir?: string;
   codexSkillNames?: string[];
+  runtimeSkillProvider?: RuntimeConfig["provider"];
+  runtimeSkillsDir?: string;
+  skillWarnings?: string[];
+  skillHashes?: Record<string, string>;
 }
 
 export interface AgentRunResult {
@@ -130,6 +134,10 @@ export class AgentRunner {
       guardrails: this.resolveGuardrails(),
       onActivity: config.onRuntimeActivity,
     });
+
+    if ((prep.codexSkillNames?.length ?? 0) > 0 || (prep.skillWarnings?.length ?? 0) > 0) {
+      result.runtime_metadata = this.mergeSkillMetadata(result.runtime_metadata, prep);
+    }
 
     console.log(`[agent-runner] Runtime completed for ${config.agent}. Reading result...`);
 
@@ -224,27 +232,37 @@ export class AgentRunner {
     await fs.mkdir(path.join(workspacePath, "artifacts"), { recursive: true });
     await fs.mkdir(path.join(workspacePath, "artifacts", "handoff"), { recursive: true });
 
-    if (runtime.provider !== "codex") {
-      return {};
-    }
-
-    const resolved = this.codexSkillManager.resolveForAgent(config.agent);
+    const resolved = this.codexSkillManager.resolveForAgent(
+      config.agent,
+      runtime.provider
+    );
     if (!resolved.enabled) {
       return {};
+    }
+    for (const warning of resolved.warnings) {
+      console.warn(`[agent-runner] Skill guardrail warning: ${warning}`);
     }
 
     const staged = await this.codexSkillManager.stageSkills(
       workspacePath,
-      resolved.skillNames
+      resolved.skillNames,
+      runtime.provider
     );
+    for (const warning of staged.warnings) {
+      console.warn(`[agent-runner] Skill staging warning: ${warning}`);
+    }
 
     if (staged.skillNames.length > 0) {
       await this.appendCodexSkillsSection(primaryDestPath, staged.skillNames);
     }
 
     return {
-      codexHomeDir: staged.codexHomeDir,
+      codexHomeDir: runtime.provider === "codex" ? staged.codexHomeDir : undefined,
       codexSkillNames: staged.skillNames,
+      runtimeSkillProvider: staged.runtimeProvider,
+      runtimeSkillsDir: staged.skillsDir,
+      skillWarnings: [...resolved.warnings, ...staged.warnings],
+      skillHashes: staged.skillHashes,
     };
   }
 
@@ -257,13 +275,41 @@ export class AgentRunner {
       "",
       "## Runtime Skills",
       "",
-      "These Codex skills are available for this run:",
+      "These runtime skills are available for this run:",
       ...skillNames.map((name) => `- ${name}`),
       "",
       "Use these skills when relevant to the assigned task.",
       "",
     ].join("\n");
     await fs.writeFile(agentsPath, `${existing}${section}`, "utf-8");
+  }
+
+  private mergeSkillMetadata(
+    runtimeMetadata: RuntimeMetadataEnvelope | undefined,
+    prep: WorkspacePrepResult
+  ): RuntimeMetadataEnvelope {
+    const base: RuntimeMetadataEnvelope = runtimeMetadata ?? {
+      schema_version: 1,
+      runtime: {
+        provider: prep.runtimeSkillProvider ?? "codex",
+        mode: "local_process",
+        runtime_id: "",
+        step_attempt: 0,
+      },
+    };
+    return {
+      ...base,
+      provider_metadata: {
+        ...(base.provider_metadata ?? {}),
+        skills: {
+          names: prep.codexSkillNames ?? [],
+          provider: prep.runtimeSkillProvider ?? "codex",
+          skills_dir: prep.runtimeSkillsDir,
+          warnings: prep.skillWarnings ?? [],
+          hashes: prep.skillHashes ?? {},
+        },
+      },
+    };
   }
 
   private resolveGuardrails(): GuardrailConfig | undefined {

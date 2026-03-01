@@ -454,6 +454,12 @@ describe("AgentRunner", () => {
     expect(spawnOpts.env.CODEX_HOME).toBe("/tmp/codex-home-test");
     expect(result.tokens_used).toBe(321);
     expect(result.cost_usd).toBeCloseTo(0.000963, 8);
+    expect((result.runtime_metadata as any)?.provider_metadata?.skills?.names).toEqual([
+      "web-design-guidelines",
+    ]);
+    expect((result.runtime_metadata as any)?.provider_metadata?.skills?.provider).toBe(
+      "codex"
+    );
   });
 
   it("prepareWorkspace stages codex skills and appends AGENTS.md skill section", async () => {
