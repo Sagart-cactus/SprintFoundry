@@ -210,6 +210,34 @@ describe("CodexSkillManager", () => {
     );
   });
 
+  it("does not apply legacy codex skill mappings to claude runtime when skills_v2_enabled is on", () => {
+    const manager = new CodexSkillManager(
+      makePlatformConfig({
+        defaults: {
+          ...makePlatformConfig().defaults,
+          skills_v2_enabled: true,
+          skills_enabled: true,
+          codex_skills_enabled: true,
+          codex_skills_per_agent: {
+            developer: ["legacy-codex-only"],
+          },
+        },
+      }),
+      makeProjectConfig(),
+      process.cwd()
+    );
+
+    const codexResolved = manager.resolveForAgent("developer", "codex");
+    expect(codexResolved.skillNames).toEqual(["legacy-codex-only"]);
+
+    const claudeResolved = manager.resolveForAgent("developer", "claude-code");
+    expect(claudeResolved).toEqual({
+      enabled: true,
+      skillNames: [],
+      warnings: [],
+    });
+  });
+
   it("stages skills for claude runtime into workspace .claude/skills", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "claude-skills-test-"));
     const skillSource = path.join(tmpDir, "org-skills", "secure-api");
@@ -245,5 +273,42 @@ describe("CodexSkillManager", () => {
     await expect(
       fs.access(path.join(workspace, ".claude", "skills", "secure-api", "SKILL.md"))
     ).resolves.toBeUndefined();
+  });
+
+  it("keeps repo-native claude skill intact when source and target paths are identical", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "claude-inplace-skills-"));
+    const workspace = path.join(tmpDir, "workspace");
+    const repoSkillDir = path.join(workspace, ".claude", "skills", "secure-api");
+    await fs.mkdir(repoSkillDir, { recursive: true });
+    await fs.writeFile(path.join(repoSkillDir, "SKILL.md"), "# secure-api\n", "utf-8");
+
+    const manager = new CodexSkillManager(
+      makePlatformConfig({
+        defaults: {
+          ...makePlatformConfig().defaults,
+          skills_v2_enabled: true,
+          skills_enabled: true,
+          skill_assignments_per_agent: {
+            developer: ["secure-api"],
+          },
+        },
+      }),
+      makeProjectConfig(),
+      process.cwd()
+    );
+
+    const resolved = manager.resolveForAgent("developer", "claude-code");
+    expect(resolved).toEqual({
+      enabled: true,
+      skillNames: ["secure-api"],
+      warnings: [],
+    });
+
+    const staged = await manager.stageSkills(workspace, resolved.skillNames, "claude-code");
+    expect(staged.skillNames).toEqual(["secure-api"]);
+    expect(staged.skillHashes["secure-api"]).toBeDefined();
+    await expect(fs.readFile(path.join(repoSkillDir, "SKILL.md"), "utf-8")).resolves.toBe(
+      "# secure-api\n"
+    );
   });
 });

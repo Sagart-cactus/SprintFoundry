@@ -62,17 +62,23 @@ export class CodexSkillManager {
     const enabled =
       this.projectConfig.skills_enabled ??
       this.platformConfig.defaults.skills_enabled ??
-      this.projectConfig.codex_skills_enabled ??
-      this.platformConfig.defaults.codex_skills_enabled ??
+      (runtimeProvider === "codex"
+        ? (this.projectConfig.codex_skills_enabled ??
+          this.platformConfig.defaults.codex_skills_enabled)
+        : undefined) ??
       false;
     if (!enabled) return { enabled: false, skillNames: [], warnings: [] };
 
     const projectSkills =
       this.projectConfig.skill_assignments?.[agent] ??
-      this.projectConfig.codex_skills_overrides?.[agent];
+      (runtimeProvider === "codex"
+        ? this.projectConfig.codex_skills_overrides?.[agent]
+        : undefined);
     const defaultSkills =
       this.platformConfig.defaults.skill_assignments_per_agent?.[agent] ??
-      this.platformConfig.defaults.codex_skills_per_agent?.[agent];
+      (runtimeProvider === "codex"
+        ? this.platformConfig.defaults.codex_skills_per_agent?.[agent]
+        : undefined);
     const skillNames = this.dedupe(projectSkills ?? defaultSkills ?? []);
     const warnings = this.evaluateCountGuardrails(skillNames, runtimeProvider);
     return { enabled: true, skillNames, warnings };
@@ -280,11 +286,13 @@ export class CodexSkillManager {
     targetDir: string,
     skillName: string
   ): Promise<void> {
-    await fs.rm(targetDir, { recursive: true, force: true });
-
     if (def.path) {
       const sourceDir = this.resolvePath(def.path);
       await this.validateSkillDir(sourceDir, skillName);
+      if (path.resolve(sourceDir) === path.resolve(targetDir)) {
+        return;
+      }
+      await fs.rm(targetDir, { recursive: true, force: true });
       await fs.cp(sourceDir, targetDir, { recursive: true });
       return;
     }
@@ -300,6 +308,7 @@ export class CodexSkillManager {
       throw new Error(`Skill "${skillName}" files[] must include SKILL.md`);
     }
 
+    await fs.rm(targetDir, { recursive: true, force: true });
     await fs.mkdir(targetDir, { recursive: true });
     for (const configuredPath of def.files) {
       const sourcePath = this.resolvePath(configuredPath);
