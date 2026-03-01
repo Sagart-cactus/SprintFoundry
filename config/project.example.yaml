@@ -81,7 +81,24 @@ api_keys:
 # #   deny_paths:
 # #     - "src/secrets/**"
 #
-# # Codex skill overrides (workspace-scoped, no global install required)
+# # Runtime-agnostic skill configuration (works for codex + claude-code)
+# # skills_v2_enabled: true
+# # skills_enabled: true
+# # skill_catalog_overrides:
+# #   web-design-guidelines:
+# #     path: vendor/skills/web-design-guidelines
+# # skill_sources:
+# #   - type: folder
+# #     path: vendor/skills
+# #     recursive: false
+# # skill_assignments:
+# #   ui-ux: [web-design-guidelines]
+# # skill_guardrails:
+# #   warn_skills_per_agent: 4
+# #   max_skills_per_agent: 6
+# #   mode: warn
+#
+# # Backward-compatible legacy keys (codex-only path) still supported:
 # # codex_skills_enabled: true
 # # codex_skill_catalog_overrides:
 # #   web-design-guidelines:
