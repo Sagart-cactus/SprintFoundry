@@ -61,6 +61,22 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
+function compactUrlLabel(url, fallback = "") {
+  if (!url) return fallback || "-";
+  try {
+    const parsed = new URL(String(url));
+    const host = parsed.hostname.replace(/^www\./, "");
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    if (host === "github.com" && parts.length >= 2) {
+      return `${parts[0]}/${parts[1]}`;
+    }
+    const shortPath = parts.length ? `/${parts.slice(0, 2).join("/")}` : "";
+    return `${host}${shortPath}`;
+  } catch {
+    return fallback || String(url);
+  }
+}
+
 function parseJsonSafe(raw) {
   try {
     return JSON.parse(raw);
@@ -680,6 +696,19 @@ reviewPanel.addEventListener("toggle", (event) => {
 function renderSidebarMeta(runData) {
   const totalTokens = (runData.steps ?? []).reduce((sum, step) => sum + (Number(step.tokens) || 0), 0);
   const status = runData.status || "unknown";
+  const triggerSource = runData.trigger_source || null;
+  const ticketSource = runData.ticket_source || null;
+  const ticketId = runData.ticket_id || null;
+  const ticketUrl = runData.ticket_url || null;
+  const ticketRepoUrl = runData.ticket_repo_url || null;
+  const issueLabel = ticketId || compactUrlLabel(ticketUrl);
+  const repoLabel = compactUrlLabel(ticketRepoUrl, "Repository");
+  const issueLink = ticketUrl
+    ? `<a class="meta-link sidebar-meta-link" href="${escapeHtml(ticketUrl)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(ticketUrl)}">${escapeHtml(issueLabel)}</a>`
+    : escapeHtml(ticketId || "-");
+  const repoLink = ticketRepoUrl
+    ? `<a class="meta-link sidebar-meta-link" href="${escapeHtml(ticketRepoUrl)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(ticketRepoUrl)}">${escapeHtml(repoLabel)}</a>`
+    : "-";
 
   runTitle.textContent = `${runData.project_id}/${runData.run_id}`;
   runStatusBadge.className = `badge ${escapeHtml(status)}`;
@@ -706,6 +735,22 @@ function renderSidebarMeta(runData) {
       <div class="meta-item">
         <span class="meta-label">Project</span>
         <span class="meta-value">${escapeHtml(runData.project_id)}</span>
+      </div>
+      <div class="meta-item">
+        <span class="meta-label">Ticket Source</span>
+        <span class="meta-value">${escapeHtml(ticketSource || "-")}</span>
+      </div>
+      <div class="meta-item">
+        <span class="meta-label">Trigger</span>
+        <span class="meta-value">${escapeHtml(triggerSource || "manual")}</span>
+      </div>
+      <div class="meta-item">
+        <span class="meta-label">Issue</span>
+        <span class="meta-value">${issueLink}</span>
+      </div>
+      <div class="meta-item">
+        <span class="meta-label">Repository</span>
+        <span class="meta-value">${repoLink}</span>
       </div>
     </div>
   `;

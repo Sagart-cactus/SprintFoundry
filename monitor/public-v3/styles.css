@@ -214,6 +214,13 @@ button {
   background: #fff8ed;
 }
 
+.badge.webhook-trigger {
+  color: #065f46;
+  border-color: #86efac;
+  background: #ecfdf5;
+  text-transform: none;
+}
+
 .run-card h3 {
   margin: 0;
   font-size: 0.9375rem;
@@ -1197,13 +1204,14 @@ input[type="text"]:focus {
 /* Sidebar meta: clean key-value pairs */
 .meta-list {
   display: grid;
-  gap: 2px;
+  gap: 4px;
 }
 
 .meta-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  align-items: start;
+  column-gap: 10px;
   font-size: 0.8125rem;
   line-height: 1.4;
   padding: 4px 0;
@@ -1211,11 +1219,14 @@ input[type="text"]:focus {
 
 .meta-label {
   color: var(--muted);
+  white-space: nowrap;
 }
 
 .meta-value {
   font-weight: 500;
-  text-align: right;
+  min-width: 0;
+  text-align: left;
+  overflow-wrap: anywhere;
 }
 
 .meta-value.status-dot {
@@ -1810,6 +1821,15 @@ details.drawer-collapsible[open] > summary::before {
 
 .meta-link:hover {
   color: var(--info-text);
+}
+
+.sidebar-meta-link {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: top;
 }
 
 /* Responsive: stack sidebar below on small screens */

@@ -55,13 +55,20 @@ Start monitor server:
 npm run monitor
 # or
 MONITOR_PORT=4311 npm run monitor
+# split monitor/webhook ports
+MONITOR_PORT=4310 SPRINTFOUNDRY_WEBHOOK_PORT=4410 npm run monitor
 ```
 
 UI routes:
 
-- `http://127.0.0.1:4310/` (legacy)
-- `http://127.0.0.1:4310/v2`
+- `http://127.0.0.1:4310/`
 - `http://127.0.0.1:4310/v3`
+
+Webhook routes:
+
+- `POST http://127.0.0.1:4310/api/webhooks/github`
+- `POST http://127.0.0.1:4310/api/webhooks/linear`
+- in split mode (`SPRINTFOUNDRY_WEBHOOK_PORT` set): use webhook port instead of monitor port
 
 ## Tests
 

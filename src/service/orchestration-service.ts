@@ -156,6 +156,39 @@ export class OrchestrationService {
     return this.tickets.fetch(ticketId, source);
   }
 
+  private resolveTicketUrl(ticket: TicketDetails): string | null {
+    const raw = ticket?.raw;
+    if (!raw || typeof raw !== "object") return null;
+    const obj = raw as Record<string, unknown>;
+    const candidate = obj.html_url ?? obj.url ?? obj.webUrl ?? obj.permalink;
+    return typeof candidate === "string" && candidate.trim() ? candidate : null;
+  }
+
+  private resolveProjectRepoUrl(): string | null {
+    const input = String(this.projectConfig?.repo?.url ?? "").trim();
+    if (!input) return null;
+
+    const sshMatch = input.match(/^git@([^:]+):(.+?)(?:\.git)?$/i);
+    if (sshMatch) {
+      return `https://${sshMatch[1]}/${sshMatch[2]}`.replace(/\/+$/, "");
+    }
+
+    const sshUrlMatch = input.match(/^ssh:\/\/git@([^/]+)\/(.+?)(?:\.git)?$/i);
+    if (sshUrlMatch) {
+      return `https://${sshUrlMatch[1]}/${sshUrlMatch[2]}`.replace(/\/+$/, "");
+    }
+
+    try {
+      const parsed = new URL(input);
+      parsed.username = "";
+      parsed.password = "";
+      parsed.pathname = parsed.pathname.replace(/\.git$/i, "").replace(/\/+$/, "");
+      return parsed.toString().replace(/\/$/, "");
+    } catch {
+      return input;
+    }
+  }
+
   private async updateTicketStatus(
     ticket: TicketDetails,
     status: string,
@@ -227,9 +260,10 @@ export class OrchestrationService {
   ): Promise<TaskRun> {
     // 1. Create the run
     const run = this.createRun(ticketId);
+    const triggerSource = process.env.SPRINTFOUNDRY_TRIGGER_SOURCE ?? null;
     span.setAttribute("run_id", run.run_id);
     const runStartMs = Date.now();
-    await this.emitEvent(run.run_id, "task.created", { ticketId, source });
+    await this.emitEvent(run.run_id, "task.created", { ticketId, source, trigger_source: triggerSource });
     this.metricsService.recordRunStarted({ project_id: this.projectConfig.project_id, source, run_id: run.run_id });
 
     try {
@@ -239,7 +273,13 @@ export class OrchestrationService {
         : await this.fetchTicket(ticketId, source);
 
       run.ticket = ticket;
-      await this.emitEvent(run.run_id, "task.created", { ticket });
+      await this.emitEvent(run.run_id, "task.created", {
+        ticket,
+        source,
+        trigger_source: triggerSource,
+        ticket_url: this.resolveTicketUrl(ticket),
+        ticket_repo_url: this.resolveProjectRepoUrl(),
+      });
       this.persistSession(run);
 
       // 3. Prepare workspace (clone repo, create branch)

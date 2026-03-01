@@ -44,8 +44,9 @@ export class TicketFetcher {
     const query = `
       query {
         issue(id: "${ticketId}") {
-          id identifier title description
+          id identifier title description url
           priority priorityLabel
+          team { id key }
           labels { nodes { name } }
           comments { nodes { body } }
           creator { name }

@@ -1,19 +1,36 @@
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { promises as fs, watchFile, unwatchFile, statSync, openSync, readSync, closeSync } from "node:fs";
 import { execFile } from "node:child_process";
+import { parse as parseYaml } from "yaml";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const publicV3Dir = path.join(__dirname, "public-v3");
+const repoRoot = path.resolve(__dirname, "..");
 const runsRoot = process.env.SPRINTFOUNDRY_RUNS_ROOT ?? process.env.AGENTSDLC_RUNS_ROOT ?? path.join(os.tmpdir(), "sprintfoundry");
 const sessionsRoot = process.env.SPRINTFOUNDRY_SESSIONS_DIR ?? path.join(os.homedir(), ".sprintfoundry", "sessions");
+const configRoot = process.env.SPRINTFOUNDRY_CONFIG_DIR ?? path.join(repoRoot, "config");
+const autoexecuteDryRun = process.env.SPRINTFOUNDRY_AUTORUN_DRY_RUN === "1";
 
 const portArgIndex = process.argv.indexOf("--port");
 const portArg = portArgIndex !== -1 ? process.argv[portArgIndex + 1] : undefined;
 const port = Number(portArg ?? process.env.MONITOR_PORT ?? 4310);
+const webhookPortEnv = process.env.SPRINTFOUNDRY_WEBHOOK_PORT;
+const webhookPortCandidate = Number(webhookPortEnv ?? "");
+const webhookSplitEnabled = Number.isFinite(webhookPortCandidate) && webhookPortCandidate > 0 && webhookPortCandidate !== port;
+const webhookPort = webhookSplitEnabled ? webhookPortCandidate : port;
+
+let autoexecuteCache = { loadedAt: 0, projects: [] };
+let projectRepoUrlCache = { loadedAt: 0, byProjectId: new Map() };
+let workspaceRepoUrlCache = { loadedAt: 0, byWorkspacePath: new Map() };
+const autoexecuteQueue = [];
+const autoexecuteHistory = [];
+let autoexecuteRunning = false;
+const autoexecuteSeen = new Map();
 
 const LOG_KIND_TO_FILES = {
   planner_stdout: [".planner-runtime.stdout.log"],
@@ -113,6 +130,611 @@ function sendJson(res, status, body) {
 function sendText(res, status, body) {
   res.writeHead(status, { "Content-Type": "text/plain; charset=utf-8" });
   res.end(body);
+}
+
+function interpolateEnvVars(raw) {
+  return raw.replace(/\$\{(\w+)\}/g, (_, name) => process.env[name] ?? "");
+}
+
+async function loadYamlFile(filePath) {
+  const raw = await fs.readFile(filePath, "utf-8");
+  return parseYaml(interpolateEnvVars(raw));
+}
+
+function projectArgFromFileName(fileName) {
+  if (fileName === "project.yaml") return null;
+  const match = fileName.match(/^project-(.+)\.ya?ml$/);
+  if (!match) return null;
+  return match[1];
+}
+
+function normalizeRepoUrlForDisplay(rawUrl) {
+  const input = String(rawUrl ?? "").trim();
+  if (!input) return null;
+
+  const sshMatch = input.match(/^git@([^:]+):(.+?)(?:\.git)?$/i);
+  if (sshMatch) {
+    return `https://${sshMatch[1]}/${sshMatch[2]}`.replace(/\/+$/, "");
+  }
+
+  const sshUrlMatch = input.match(/^ssh:\/\/git@([^/]+)\/(.+?)(?:\.git)?$/i);
+  if (sshUrlMatch) {
+    return `https://${sshUrlMatch[1]}/${sshUrlMatch[2]}`.replace(/\/+$/, "");
+  }
+
+  try {
+    const parsed = new URL(input);
+    parsed.username = "";
+    parsed.password = "";
+    const cleanPath = parsed.pathname.replace(/\.git$/i, "").replace(/\/+$/, "");
+    parsed.pathname = cleanPath;
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    return input;
+  }
+}
+
+async function loadProjectRepoUrlMap() {
+  const now = Date.now();
+  if (now - projectRepoUrlCache.loadedAt < 15_000) {
+    return projectRepoUrlCache.byProjectId;
+  }
+
+  const entries = await fs.readdir(configRoot, { withFileTypes: true }).catch(() => []);
+  const projectFiles = entries
+    .filter((entry) => entry.isFile())
+    .map((entry) => entry.name)
+    .filter((name) => name === "project.yaml" || /^project-.+\.ya?ml$/.test(name))
+    .sort();
+
+  const byProjectId = new Map();
+  for (const fileName of projectFiles) {
+    const filePath = path.join(configRoot, fileName);
+    let project;
+    try {
+      project = await loadYamlFile(filePath);
+    } catch {
+      continue;
+    }
+    const projectId = String(project?.project_id ?? "").trim();
+    const repoUrlRaw = String(project?.repo?.url ?? "").trim();
+    const repoUrl = normalizeRepoUrlForDisplay(repoUrlRaw);
+    if (!projectId || !repoUrl) continue;
+    byProjectId.set(projectId, repoUrl);
+  }
+
+  projectRepoUrlCache = { loadedAt: now, byProjectId };
+  return byProjectId;
+}
+
+async function getProjectRepoUrl(projectId) {
+  const map = await loadProjectRepoUrlMap();
+  return map.get(projectId) ?? null;
+}
+
+async function getWorkspaceRepoUrl(runPath) {
+  const now = Date.now();
+  const cached = workspaceRepoUrlCache.byWorkspacePath.get(runPath);
+  if (cached && now - cached.loadedAt < 60_000) {
+    return cached.repoUrl;
+  }
+
+  const repoUrl = await new Promise((resolve) => {
+    execFile(
+      "git",
+      ["remote", "get-url", "origin"],
+      { cwd: runPath, timeout: 1500, maxBuffer: 64 * 1024 },
+      (err, stdout) => {
+        if (err) {
+          resolve(null);
+          return;
+        }
+        const normalized = normalizeRepoUrlForDisplay(String(stdout ?? "").trim());
+        resolve(normalized);
+      }
+    );
+  });
+
+  workspaceRepoUrlCache.byWorkspacePath.set(runPath, { loadedAt: now, repoUrl });
+  return repoUrl;
+}
+
+function normalizeGitHubAutoexecuteConfig(raw) {
+  const github = raw?.autoexecute?.github ?? {};
+  const topEnabled = raw?.autoexecute?.enabled;
+  const enabled = (github.enabled ?? topEnabled) === true;
+  const allowedEvents = Array.isArray(github.allowed_events) && github.allowed_events.length
+    ? github.allowed_events.map((v) => String(v))
+    : ["issues.opened", "issues.labeled", "issue_comment.created"];
+  return {
+    enabled,
+    webhookSecret: String(github.webhook_secret ?? "").trim(),
+    allowedEvents: new Set(allowedEvents),
+    labelTrigger: String(github.label_trigger ?? "sf:auto-run"),
+    commandTrigger: String(github.command_trigger ?? "/sf-run"),
+    requireCommand: github.require_command === true,
+    dedupeWindowMinutes: Number(github.dedupe_window_minutes ?? 30),
+  };
+}
+
+function normalizeLinearAutoexecuteConfig(raw) {
+  const linear = raw?.autoexecute?.linear ?? {};
+  const topEnabled = raw?.autoexecute?.enabled;
+  const enabled = (linear.enabled ?? topEnabled) === true;
+  const allowedEvents = Array.isArray(linear.allowed_events) && linear.allowed_events.length
+    ? linear.allowed_events.map((v) => String(v))
+    : ["Issue.create"];
+  return {
+    enabled,
+    webhookSecret: String(linear.webhook_secret ?? "").trim(),
+    allowedEvents: new Set(allowedEvents),
+    commandTrigger: String(linear.command_trigger ?? "/sf-run"),
+    requireCommand: linear.require_command === true,
+    dedupeWindowMinutes: Number(linear.dedupe_window_minutes ?? 30),
+    maxTimestampAgeSeconds: Number(linear.max_timestamp_age_seconds ?? 120),
+  };
+}
+
+async function loadAutoexecuteProjects() {
+  const now = Date.now();
+  if (now - autoexecuteCache.loadedAt < 15_000) {
+    return autoexecuteCache.projects;
+  }
+
+  const entries = await fs.readdir(configRoot, { withFileTypes: true }).catch(() => []);
+  const projectFiles = entries
+    .filter((entry) => entry.isFile())
+    .map((entry) => entry.name)
+    .filter((name) => name === "project.yaml" || /^project-.+\.ya?ml$/.test(name))
+    .sort();
+
+  const projects = [];
+  for (const fileName of projectFiles) {
+    const filePath = path.join(configRoot, fileName);
+    let project;
+    try {
+      project = await loadYamlFile(filePath);
+    } catch {
+      continue;
+    }
+
+    const ticketSource = project?.integrations?.ticket_source;
+    const sourceType = String(ticketSource?.type ?? "");
+    if (sourceType === "github") {
+      const owner = String(ticketSource?.config?.owner ?? "").trim();
+      const repo = String(ticketSource?.config?.repo ?? "").trim();
+      if (!owner || !repo) continue;
+
+      const autoCfg = normalizeGitHubAutoexecuteConfig(project);
+      if (!autoCfg.enabled) continue;
+
+      projects.push({
+        fileName,
+        projectId: String(project.project_id ?? ""),
+        projectArg: projectArgFromFileName(fileName),
+        provider: "github",
+        owner: owner.toLowerCase(),
+        repo: repo.toLowerCase(),
+        autoCfg,
+      });
+      continue;
+    }
+
+    if (sourceType === "linear") {
+      const autoCfg = normalizeLinearAutoexecuteConfig(project);
+      if (!autoCfg.enabled) continue;
+
+      const teamId = String(ticketSource?.config?.team_id ?? "").trim().toLowerCase();
+      const teamKey = String(ticketSource?.config?.team_key ?? "").trim().toLowerCase();
+      projects.push({
+        fileName,
+        projectId: String(project.project_id ?? ""),
+        projectArg: projectArgFromFileName(fileName),
+        provider: "linear",
+        teamId,
+        teamKey,
+        autoCfg,
+      });
+    }
+  }
+
+  autoexecuteCache = { loadedAt: now, projects };
+  return projects;
+}
+
+function findAutoexecuteProject(owner, repo, projects) {
+  const ownerNorm = String(owner ?? "").toLowerCase();
+  const repoNorm = String(repo ?? "").toLowerCase();
+  return projects.find(
+    (project) => project.provider === "github" && project.owner === ownerNorm && project.repo === repoNorm
+  ) ?? null;
+}
+
+function findLinearAutoexecuteProject(payload, projects) {
+  const linearProjects = projects.filter((project) => project.provider === "linear");
+  if (linearProjects.length === 0) return null;
+
+  const data = payload?.data ?? {};
+  const identifier = String(data?.identifier ?? data?.issue?.identifier ?? "");
+  const identifierPrefix = identifier.includes("-")
+    ? identifier.split("-")[0].toLowerCase()
+    : "";
+  const candidates = new Set([
+    String(data?.teamId ?? "").toLowerCase(),
+    String(data?.team?.id ?? "").toLowerCase(),
+    String(data?.team?.key ?? "").toLowerCase(),
+    identifierPrefix,
+  ].filter(Boolean));
+
+  const matches = linearProjects.filter((project) => {
+    if (!project.teamId && !project.teamKey) return true;
+    if (project.teamId && candidates.has(project.teamId)) return true;
+    if (project.teamKey && candidates.has(project.teamKey)) return true;
+    return false;
+  });
+
+  return matches[0] ?? null;
+}
+
+function verifyGitHubSignature(rawBody, signatureHeader, secret) {
+  if (!secret) return false;
+  if (!signatureHeader || !signatureHeader.startsWith("sha256=")) return false;
+  const expected = `sha256=${crypto.createHmac("sha256", secret).update(rawBody).digest("hex")}`;
+  const expectedBuf = Buffer.from(expected, "utf-8");
+  const providedBuf = Buffer.from(signatureHeader, "utf-8");
+  if (expectedBuf.length !== providedBuf.length) return false;
+  return crypto.timingSafeEqual(expectedBuf, providedBuf);
+}
+
+function verifyLinearSignature(rawBody, signatureHeader, secret) {
+  if (!secret) return false;
+  const provided = String(signatureHeader ?? "").trim();
+  if (!provided) return false;
+  const expected = crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
+  const expectedBuf = Buffer.from(expected, "utf-8");
+  const providedBuf = Buffer.from(provided, "utf-8");
+  if (expectedBuf.length !== providedBuf.length) return false;
+  return crypto.timingSafeEqual(expectedBuf, providedBuf);
+}
+
+function extractGitHubTrigger(payload, event, action, config) {
+  const issue = payload?.issue;
+  if (!issue || typeof issue !== "object") return { allowed: false, reason: "missing_issue" };
+  if (issue.pull_request) return { allowed: false, reason: "pull_request_issue_ignored" };
+
+  const normalizedEvent = `${event}.${action}`;
+  if (!config.allowedEvents.has(normalizedEvent)) {
+    return { allowed: false, reason: `event_not_allowed:${normalizedEvent}` };
+  }
+
+  if (event === "issues" && action === "opened") {
+    if (config.requireCommand) {
+      return { allowed: false, reason: "command_required" };
+    }
+    return { allowed: true, ticketId: String(issue.number) };
+  }
+
+  if (event === "issues" && action === "labeled") {
+    const labelName = String(payload?.label?.name ?? "");
+    if (!labelName || labelName !== config.labelTrigger) {
+      return { allowed: false, reason: "label_trigger_not_matched" };
+    }
+    return { allowed: true, ticketId: String(issue.number) };
+  }
+
+  if (event === "issue_comment" && action === "created") {
+    const body = String(payload?.comment?.body ?? "");
+    if (!body.includes(config.commandTrigger)) {
+      return { allowed: false, reason: "command_not_found" };
+    }
+    return { allowed: true, ticketId: String(issue.number) };
+  }
+
+  return { allowed: false, reason: "unsupported_action" };
+}
+
+function extractLinearTrigger(payload, config) {
+  const type = String(payload?.type ?? "");
+  const action = String(payload?.action ?? "");
+  const normalizedEvent = `${type}.${action}`;
+  if (!config.allowedEvents.has(normalizedEvent)) {
+    return { allowed: false, reason: `event_not_allowed:${normalizedEvent}` };
+  }
+
+  const data = payload?.data ?? {};
+  const issueIdentifier = String(data?.identifier ?? data?.issue?.identifier ?? "");
+  const issueIdFallback = String(data?.id ?? data?.issueId ?? data?.issue?.id ?? "");
+  const ticketId = issueIdentifier || issueIdFallback;
+  if (!ticketId) return { allowed: false, reason: "missing_ticket_identifier" };
+
+  if (type === "Comment" && action === "create") {
+    const body = String(data?.body ?? "");
+    if (!body.includes(config.commandTrigger)) {
+      return { allowed: false, reason: "command_not_found" };
+    }
+    return { allowed: true, ticketId };
+  }
+
+  if (config.requireCommand) {
+    return { allowed: false, reason: "command_required" };
+  }
+
+  return { allowed: true, ticketId };
+}
+
+function shouldDedupeRun(dedupeKey, dedupeWindowMinutes) {
+  const now = Date.now();
+  const windowMs = Math.max(1, dedupeWindowMinutes) * 60_000;
+  const prev = autoexecuteSeen.get(dedupeKey);
+  if (prev && now - prev < windowMs) return true;
+  autoexecuteSeen.set(dedupeKey, now);
+
+  for (const [key, seenAt] of autoexecuteSeen.entries()) {
+    if (now - seenAt > windowMs * 2) {
+      autoexecuteSeen.delete(key);
+    }
+  }
+  return false;
+}
+
+function enqueueAutoexecuteTask(task) {
+  autoexecuteQueue.push(task);
+  void processAutoexecuteQueue();
+}
+
+async function executeAutoexecuteTask(task) {
+  const args = ["dev", "--", "run", "--source", task.source, "--ticket", task.ticketId, "--config", configRoot];
+  if (task.projectArg) {
+    args.push("--project", task.projectArg);
+  }
+
+  if (autoexecuteDryRun) {
+    autoexecuteHistory.push({
+      ts: new Date().toISOString(),
+      status: "dry_run",
+      task,
+      command: `pnpm ${args.join(" ")}`,
+    });
+    return;
+  }
+
+  await new Promise((resolve, reject) => {
+    const childEnv = {
+      ...process.env,
+      SPRINTFOUNDRY_TRIGGER_SOURCE: task.source === "linear" ? "linear_webhook" : "github_webhook",
+    };
+    execFile("pnpm", args, { cwd: repoRoot, env: childEnv, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
+      autoexecuteHistory.push({
+        ts: new Date().toISOString(),
+        status: err ? "failed" : "completed",
+        task,
+        stdout: String(stdout ?? "").slice(-4000),
+        stderr: String(stderr ?? "").slice(-4000),
+      });
+      if (err) {
+        reject(err);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+async function processAutoexecuteQueue() {
+  if (autoexecuteRunning) return;
+  autoexecuteRunning = true;
+  try {
+    while (autoexecuteQueue.length > 0) {
+      const task = autoexecuteQueue.shift();
+      if (!task) continue;
+      try {
+        await executeAutoexecuteTask(task);
+      } catch (err) {
+        autoexecuteHistory.push({
+          ts: new Date().toISOString(),
+          status: "failed",
+          task,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  } finally {
+    autoexecuteRunning = false;
+  }
+}
+
+async function handleGitHubWebhookRequest(req, res) {
+  const rawBody = await readBody(req);
+  const signature = String(req.headers["x-hub-signature-256"] ?? "");
+  const delivery = String(req.headers["x-github-delivery"] ?? "");
+  const event = String(req.headers["x-github-event"] ?? "");
+
+  let payload;
+  try {
+    payload = JSON.parse(rawBody);
+  } catch {
+    sendJson(res, 400, { error: "Invalid JSON body" });
+    return;
+  }
+
+  const owner = payload?.repository?.owner?.login;
+  const repo = payload?.repository?.name;
+  if (!owner || !repo) {
+    sendJson(res, 400, { error: "Missing repository owner/name in payload" });
+    return;
+  }
+
+  const projects = await loadAutoexecuteProjects();
+  const matched = findAutoexecuteProject(owner, repo, projects);
+  if (!matched) {
+    sendJson(res, 202, {
+      accepted: false,
+      ignored: true,
+      reason: "no_matching_project",
+      owner: String(owner),
+      repo: String(repo),
+    });
+    return;
+  }
+
+  if (!matched.autoCfg.webhookSecret) {
+    sendJson(res, 403, {
+      accepted: false,
+      error: "Webhook secret not configured for matched project",
+      project_id: matched.projectId,
+    });
+    return;
+  }
+
+  if (!verifyGitHubSignature(rawBody, signature, matched.autoCfg.webhookSecret)) {
+    sendJson(res, 401, { accepted: false, error: "Invalid webhook signature" });
+    return;
+  }
+
+  const action = String(payload?.action ?? "");
+  const trigger = extractGitHubTrigger(payload, event, action, matched.autoCfg);
+  if (!trigger.allowed) {
+    sendJson(res, 202, {
+      accepted: false,
+      ignored: true,
+      reason: trigger.reason,
+      project_id: matched.projectId,
+      event,
+      action,
+    });
+    return;
+  }
+
+  const dedupeKey = delivery
+    ? `${matched.projectId}:${delivery}`
+    : `${matched.projectId}:${event}:${action}:${trigger.ticketId}:${payload?.issue?.updated_at ?? payload?.comment?.updated_at ?? ""}`;
+  if (shouldDedupeRun(dedupeKey, matched.autoCfg.dedupeWindowMinutes)) {
+    sendJson(res, 202, {
+      accepted: false,
+      ignored: true,
+      reason: "duplicate_event",
+      project_id: matched.projectId,
+      ticket_id: trigger.ticketId,
+    });
+    return;
+  }
+
+  enqueueAutoexecuteTask({
+    projectId: matched.projectId,
+    projectArg: matched.projectArg,
+    ticketId: trigger.ticketId,
+    source: "github",
+    owner: matched.owner,
+    repo: matched.repo,
+    event,
+    action,
+    delivery,
+  });
+
+  sendJson(res, 202, {
+    accepted: true,
+    queued: true,
+    queue_depth: autoexecuteQueue.length,
+    project_id: matched.projectId,
+    ticket_id: trigger.ticketId,
+    dry_run: autoexecuteDryRun,
+  });
+}
+
+async function handleLinearWebhookRequest(req, res) {
+  const rawBody = await readBody(req);
+  const signature = String(req.headers["linear-signature"] ?? "");
+
+  let payload;
+  try {
+    payload = JSON.parse(rawBody);
+  } catch {
+    sendJson(res, 400, { error: "Invalid JSON body" });
+    return;
+  }
+
+  const projects = await loadAutoexecuteProjects();
+  const matched = findLinearAutoexecuteProject(payload, projects);
+  if (!matched) {
+    sendJson(res, 202, {
+      accepted: false,
+      ignored: true,
+      reason: "no_matching_project",
+      type: String(payload?.type ?? ""),
+      action: String(payload?.action ?? ""),
+    });
+    return;
+  }
+
+  if (!matched.autoCfg.webhookSecret) {
+    sendJson(res, 403, {
+      accepted: false,
+      error: "Webhook secret not configured for matched project",
+      project_id: matched.projectId,
+    });
+    return;
+  }
+
+  if (!verifyLinearSignature(rawBody, signature, matched.autoCfg.webhookSecret)) {
+    sendJson(res, 401, { accepted: false, error: "Invalid webhook signature" });
+    return;
+  }
+
+  const webhookTimestamp = Number(payload?.webhookTimestamp ?? NaN);
+  if (Number.isFinite(webhookTimestamp) && matched.autoCfg.maxTimestampAgeSeconds > 0) {
+    const ageSeconds = Math.abs(Date.now() - webhookTimestamp) / 1000;
+    if (ageSeconds > matched.autoCfg.maxTimestampAgeSeconds) {
+      sendJson(res, 401, { accepted: false, error: "Webhook timestamp outside accepted window" });
+      return;
+    }
+  }
+
+  const trigger = extractLinearTrigger(payload, matched.autoCfg);
+  if (!trigger.allowed) {
+    sendJson(res, 202, {
+      accepted: false,
+      ignored: true,
+      reason: trigger.reason,
+      project_id: matched.projectId,
+      type: String(payload?.type ?? ""),
+      action: String(payload?.action ?? ""),
+    });
+    return;
+  }
+
+  const delivery = String(payload?.webhookId ?? "");
+  const dedupeKey = delivery
+    ? `${matched.projectId}:${delivery}`
+    : `${matched.projectId}:${payload?.type ?? ""}:${payload?.action ?? ""}:${trigger.ticketId}:${payload?.createdAt ?? ""}`;
+  if (shouldDedupeRun(dedupeKey, matched.autoCfg.dedupeWindowMinutes)) {
+    sendJson(res, 202, {
+      accepted: false,
+      ignored: true,
+      reason: "duplicate_event",
+      project_id: matched.projectId,
+      ticket_id: trigger.ticketId,
+    });
+    return;
+  }
+
+  enqueueAutoexecuteTask({
+    projectId: matched.projectId,
+    projectArg: matched.projectArg,
+    ticketId: trigger.ticketId,
+    source: "linear",
+    type: String(payload?.type ?? ""),
+    action: String(payload?.action ?? ""),
+    delivery,
+  });
+
+  sendJson(res, 202, {
+    accepted: true,
+    queued: true,
+    queue_depth: autoexecuteQueue.length,
+    project_id: matched.projectId,
+    ticket_id: trigger.ticketId,
+    dry_run: autoexecuteDryRun,
+  });
 }
 
 function parseJsonLines(raw) {
@@ -322,6 +944,84 @@ function buildStepStatus(plan, events) {
   return Array.from(byStep.values()).sort((a, b) => a.step_number - b.step_number);
 }
 
+function extractTicketUrl(ticket) {
+  if (!ticket || typeof ticket !== "object") return null;
+  const raw = ticket.raw;
+  if (!raw || typeof raw !== "object") return null;
+  const htmlUrl = raw.html_url;
+  const url = raw.url;
+  if (typeof htmlUrl === "string" && htmlUrl.trim()) return htmlUrl;
+  if (typeof url === "string" && url.trim()) return url;
+  return null;
+}
+
+function extractRepoUrl(ticket) {
+  if (!ticket || typeof ticket !== "object") return null;
+  const raw = ticket.raw;
+  if (!raw || typeof raw !== "object") return null;
+
+  const repositoryApiUrl = raw.repository_url;
+  if (typeof repositoryApiUrl === "string") {
+    const m = repositoryApiUrl.match(/^https:\/\/api\.github\.com\/repos\/([^/]+\/[^/]+)$/);
+    if (m) return `https://github.com/${m[1]}`;
+  }
+
+  const htmlUrl = raw.html_url;
+  if (typeof htmlUrl === "string") {
+    try {
+      const u = new URL(htmlUrl);
+      const parts = u.pathname.split("/").filter(Boolean);
+      if (u.hostname === "github.com" && parts.length >= 2) {
+        return `${u.protocol}//${u.hostname}/${parts[0]}/${parts[1]}`;
+      }
+    } catch {
+      // ignore invalid URL
+    }
+  }
+
+  return null;
+}
+
+function extractRunSourceMetadata(events, session = null, projectRepoUrl = null) {
+  const taskCreatedEvents = events.filter((evt) => evt?.event_type === "task.created");
+  const initialCreated = taskCreatedEvents.find((evt) => typeof evt?.data?.source === "string") ?? null;
+  const ticketCreated = taskCreatedEvents.find((evt) => evt?.data?.ticket && typeof evt.data.ticket === "object") ?? null;
+  const ticket = ticketCreated?.data?.ticket ?? null;
+  const explicitTicketUrl = ticketCreated?.data?.ticket_url;
+  const explicitTicketRepoUrl = ticketCreated?.data?.ticket_repo_url;
+  const ticketUrl = (typeof explicitTicketUrl === "string" && explicitTicketUrl.trim())
+    ? explicitTicketUrl
+    : extractTicketUrl(ticket);
+  const ticketRepoUrl = (
+    typeof explicitTicketRepoUrl === "string" && explicitTicketRepoUrl.trim()
+      ? explicitTicketRepoUrl
+      : (projectRepoUrl || extractRepoUrl(ticket))
+  );
+
+  const triggerSource = (
+    ticketCreated?.data?.trigger_source ??
+    initialCreated?.data?.trigger_source ??
+    null
+  );
+
+  const ticketSource = (
+    ticket?.source ??
+    ticketCreated?.data?.source ??
+    initialCreated?.data?.source ??
+    session?.ticket_source ??
+    null
+  );
+
+  return {
+    ticket_source: typeof ticketSource === "string" ? ticketSource : null,
+    ticket_id: typeof ticket?.id === "string" ? ticket.id : (session?.ticket_id ?? null),
+    ticket_title: typeof ticket?.title === "string" ? ticket.title : (session?.ticket_title ?? null),
+    ticket_url: typeof ticketUrl === "string" && ticketUrl.trim() ? ticketUrl : null,
+    ticket_repo_url: typeof ticketRepoUrl === "string" && ticketRepoUrl.trim() ? ticketRepoUrl : null,
+    trigger_source: typeof triggerSource === "string" && triggerSource.trim() ? triggerSource : null,
+  };
+}
+
 async function loadRunSummary(projectId, runId, runPath, session = null) {
   const events = await readEvents(runPath);
   const planEvent = events.find((e) => e.event_type === "task.plan_generated");
@@ -329,6 +1029,9 @@ async function loadRunSummary(projectId, runId, runPath, session = null) {
   const steps = buildStepStatus(plan, events);
   const last = events.at(-1);
   const hasEvents = events.length > 0;
+  const projectRepoUrl = await getProjectRepoUrl(projectId);
+  const sourceMeta = extractRunSourceMetadata(events, session, projectRepoUrl);
+  const fallbackRepoUrl = sourceMeta.ticket_repo_url ?? await getWorkspaceRepoUrl(runPath);
   return {
     project_id: projectId,
     run_id: runId,
@@ -342,6 +1045,8 @@ async function loadRunSummary(projectId, runId, runPath, session = null) {
       ? Date.parse(last.timestamp)
       : (session?.updated_at ? Date.parse(session.updated_at) : null),
     workspace_path: runPath,
+    ...sourceMeta,
+    ticket_repo_url: fallbackRepoUrl,
   };
 }
 
@@ -902,6 +1607,34 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (pathname === "/api/webhooks/github" && req.method === "POST") {
+      if (webhookSplitEnabled) {
+        sendJson(res, 404, { error: "Webhook endpoints are hosted on dedicated webhook port" });
+        return;
+      }
+      await handleGitHubWebhookRequest(req, res);
+      return;
+    }
+
+    if (pathname === "/api/webhooks/linear" && req.method === "POST") {
+      if (webhookSplitEnabled) {
+        sendJson(res, 404, { error: "Webhook endpoints are hosted on dedicated webhook port" });
+        return;
+      }
+      await handleLinearWebhookRequest(req, res);
+      return;
+    }
+
+    if (pathname === "/api/autoexecute/queue") {
+      sendJson(res, 200, {
+        queue_depth: autoexecuteQueue.length,
+        running: autoexecuteRunning,
+        dry_run: autoexecuteDryRun,
+        history: autoexecuteHistory.slice(-20),
+      });
+      return;
+    }
+
     // Default route: serve the v3 UI from /
     await serveStatic(res, pathname, publicV3Dir);
   } catch (err) {
@@ -916,8 +1649,44 @@ server.on("error", (err) => {
   process.exitCode = 1;
 });
 
+const webhookServer = webhookSplitEnabled
+  ? http.createServer(async (req, res) => {
+      const reqUrl = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+      const pathname = reqUrl.pathname;
+      try {
+        if (pathname === "/api/webhooks/github" && req.method === "POST") {
+          await handleGitHubWebhookRequest(req, res);
+          return;
+        }
+        if (pathname === "/api/webhooks/linear" && req.method === "POST") {
+          await handleLinearWebhookRequest(req, res);
+          return;
+        }
+        sendText(res, 404, "Not found");
+      } catch (err) {
+        sendJson(res, 500, {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    })
+  : null;
+
+if (webhookServer) {
+  webhookServer.on("error", (err) => {
+    console.error(`[monitor] Webhook server error: ${err.message}`);
+    process.exitCode = 1;
+  });
+}
+
 server.listen(port, "127.0.0.1", () => {
   const actualPort = server.address()?.port ?? port;
   console.log(`[monitor] Run Monitor listening at http://127.0.0.1:${actualPort}`);
   console.log(`[monitor] Watching runs under: ${runsRoot}`);
 });
+
+if (webhookServer) {
+  webhookServer.listen(webhookPort, "127.0.0.1", () => {
+    const actualWebhookPort = webhookServer.address()?.port ?? webhookPort;
+    console.log(`[monitor] Webhook server listening at http://127.0.0.1:${actualWebhookPort}`);
+  });
+}
