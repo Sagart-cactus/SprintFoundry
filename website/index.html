@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>SprintFoundry — AI Agents That Ship Your Code</title>
-  <meta name="description" content="SprintFoundry orchestrates specialized AI agents to take tickets from Linear, GitHub, or Jira and deliver tested, reviewed pull requests — automatically." />
+  <meta name="description" content="SprintFoundry orchestrates specialized AI agents to turn tickets into tested pull requests, with live monitor visibility, runtime skill metadata, and OpenTelemetry + Grafana observability." />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 44' fill='none'%3E%3Cpath d='M5 16 L13 22 L5 28' stroke='%2394a3b8' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M17 12 L27 22 L17 32' stroke='%2364748b' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M29 8 L43 22 L29 36' stroke='%23f97316' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -549,6 +549,59 @@
     }
     .arch-points li strong { color: var(--text); font-weight: 500; }
 
+    /* ─── WHAT'S NEW ─────────────────────────────────────────────────────── */
+    #whats-new { padding: 120px 0; background: var(--bg); }
+    .release-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+      margin-top: 44px;
+    }
+    .release-card {
+      background: var(--bg1);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 26px 24px;
+      transition: border-color 0.25s, transform 0.25s;
+    }
+    .release-card:hover {
+      border-color: var(--border-hot);
+      transform: translateY(-2px);
+    }
+    .release-kicker {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--forge);
+      margin-bottom: 12px;
+    }
+    .release-title {
+      font-size: 17px;
+      font-weight: 600;
+      margin-bottom: 10px;
+    }
+    .release-desc {
+      font-size: 14px;
+      color: var(--muted);
+      line-height: 1.65;
+    }
+    .release-links {
+      margin-top: 28px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px;
+    }
+    .release-links a {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--forge);
+      border-bottom: 1px solid rgba(255, 77, 0, 0.35);
+      min-height: 44px;
+      display: inline-flex;
+      align-items: center;
+    }
+
     /* ─── FEATURES ───────────────────────────────────────────────────────── */
     #features { padding: 120px 0; background: var(--bg1); }
     .features-grid {
@@ -622,6 +675,104 @@
     .runtime-points li:last-child { border-bottom: none; }
     .runtime-points li::before { content: '→'; color: var(--forge); flex-shrink: 0; margin-top: 1px; }
     .runtime-points li strong { color: var(--text); font-weight: 500; }
+
+    /* ─── OBSERVABILITY ──────────────────────────────────────────────────── */
+    #observability { padding: 120px 0; }
+    .obs-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+      gap: 26px;
+      align-items: start;
+    }
+    .obs-header {
+      margin-bottom: 0;
+    }
+    .obs-monitor {
+      grid-column: 1;
+      grid-row: 2;
+    }
+    .obs-pipeline {
+      grid-column: 2;
+      grid-row: 1 / span 2;
+    }
+    .obs-panel {
+      background: var(--bg1);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 26px 24px;
+    }
+    .obs-title {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 12px;
+    }
+    .obs-list {
+      list-style: none;
+      display: grid;
+      gap: 8px;
+      margin: 0;
+      padding: 0;
+    }
+    .obs-list li {
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 10px 12px;
+      font-size: 13px;
+      color: var(--muted);
+      background: rgba(255, 255, 255, 0.01);
+      line-height: 1.55;
+    }
+    .obs-list strong { color: var(--text); font-weight: 500; }
+    .obs-shell {
+      background: #0e1218;
+      border: 1px solid rgba(74, 158, 255, 0.28);
+      border-radius: 6px;
+      padding: 18px 16px;
+      margin-top: 18px;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.02);
+    }
+    .obs-cmd {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: #9ad1ff;
+      line-height: 1.8;
+      word-break: break-word;
+    }
+    .obs-chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 14px;
+    }
+    .obs-chip {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: #8fd6b7;
+      border: 1px solid rgba(143, 214, 183, 0.3);
+      background: rgba(143, 214, 183, 0.06);
+      border-radius: 3px;
+      padding: 4px 8px;
+    }
+    .obs-shot {
+      margin-top: 16px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      aspect-ratio: 16 / 9;
+      background:
+        linear-gradient(180deg, rgba(6, 10, 16, 0.28), rgba(6, 10, 16, 0.52)),
+        radial-gradient(ellipse at top right, rgba(74, 158, 255, 0.22), transparent 60%),
+        url("./assets/grafana-otel-trimmed.png");
+      background-size: cover, auto, cover;
+      background-position: center, center, center top;
+      background-repeat: no-repeat;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.03);
+    }
+    .obs-shot-caption {
+      margin-top: 8px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--muted);
+    }
 
     /* ─── CODE BLOCK ─────────────────────────────────────────────────────── */
     #quickstart { padding: 120px 0; }
@@ -740,6 +891,13 @@
       .arch-grid { grid-template-columns: 1fr; }
       .runtime-grid { grid-template-columns: 1fr; }
       .runtime-matrix { grid-template-columns: 1fr; }
+      .release-grid { grid-template-columns: 1fr; }
+      .obs-layout { grid-template-columns: 1fr; }
+      .obs-monitor,
+      .obs-pipeline {
+        grid-column: auto;
+        grid-row: auto;
+      }
       .features-grid { grid-template-columns: 1fr; }
       .qs-grid { grid-template-columns: minmax(0, 1fr); }
       .footer-inner { flex-direction: column; gap: 24px; text-align: center; }
@@ -784,8 +942,9 @@
       </a>
       <ul class="nav-links">
         <li><a href="#how">How it works</a></li>
-        <li><a href="#agents">Agents</a></li>
+        <li><a href="#whats-new">What's new</a></li>
         <li><a href="#runtime">Runtimes</a></li>
+        <li><a href="#observability">Observability</a></li>
         <li><a href="#features">Features</a></li>
         <li><a href="#quickstart">Quickstart</a></li>
       </ul>
@@ -799,8 +958,9 @@
   <div class="nav-mobile" id="navMobile" hidden>
     <ul class="nav-mobile-links">
       <li><a href="#how">How it works</a></li>
-      <li><a href="#agents">Agents</a></li>
+      <li><a href="#whats-new">What's new</a></li>
       <li><a href="#runtime">Runtimes</a></li>
+      <li><a href="#observability">Observability</a></li>
       <li><a href="#features">Features</a></li>
       <li><a href="#quickstart">Quickstart</a></li>
       <li><a href="https://github.com/Sagart-cactus/SprintFoundry">GitHub</a></li>
@@ -816,7 +976,7 @@
         <div class="hero-content">
           <div class="hero-eyebrow">
             <div class="eyebrow-dot"></div>
-            <span class="eyebrow-text">Now in early access</span>
+            <span class="eyebrow-text">v0.5.0 shipped</span>
           </div>
           <h1 class="hero-headline">
             TICKET<br>IN.<br>
@@ -824,7 +984,7 @@
             OUT.
           </h1>
           <p class="hero-sub">
-            SprintFoundry orchestrates <strong>10 built-in agents</strong> (plus custom ones) to turn backlog tickets into tested, reviewed pull requests with full logs and artifacts.
+            SprintFoundry orchestrates <strong>10 built-in agents</strong> (plus custom ones) to turn backlog tickets into tested, reviewed pull requests with streaming tool activity, runtime skill metadata, and OTel-ready telemetry.
           </p>
           <div class="hero-actions">
             <a href="#quickstart" class="btn btn-primary">Start building →</a>
@@ -852,10 +1012,10 @@
             <div class="monitor-widget">
               <!-- Topbar -->
               <div class="mon-topbar">
-                <div>
-                  <div class="mon-title">Run Monitor</div>
-                  <div class="mon-subtitle">AI run execution dashboard</div>
-                </div>
+                  <div>
+                    <div class="mon-title">Run Monitor</div>
+                    <div class="mon-subtitle">Live runs + runtime skill telemetry</div>
+                  </div>
                 <span class="mon-badge executing">3 active</span>
               </div>
               <!-- Board -->
@@ -881,7 +1041,8 @@
                     <span class="mon-chip">qa</span>
                     <span class="mon-chip">security</span>
                   </div>
-                  <div class="mon-card-meta" style="margin-top:5px" id="monAgent1">Active: developer · claude-sonnet-4-5 · 00:04:12</div>
+                  <div class="mon-card-meta" style="margin-top:5px">Runtime skills: secure-api, code-quality, architecture-alignment · hashes tracked</div>
+                  <div class="mon-card-meta" style="margin-top:5px" id="monAgent1">Active: developer · codex/gpt-5.3-codex · skills:3 · 00:04:12</div>
                 </div>
 
                 <div class="mon-run-card">
@@ -960,7 +1121,7 @@
               </div>
               <!-- Statusbar -->
               <div class="mon-statusbar">
-                <span id="monStatus">5 runs · 3 active · 2 completed</span>
+                <span id="monStatus">5 runs · 3 active · OTel enabled</span>
                 <span id="monRefresh">refreshed just now</span>
               </div>
             </div>
@@ -998,6 +1159,39 @@
       </div>
     </div>
   </div>
+
+  <!-- ─── WHAT'S NEW ─────────────────────────────────────────────────────── -->
+  <section id="whats-new">
+    <div class="container">
+      <div class="section-header reveal">
+        <span class="section-label">Latest release</span>
+        <h2 class="section-title">WHAT'S NEW SINCE V0.4</h2>
+        <p class="section-sub">SprintFoundry has shipped significant platform updates after the last website refresh. Here are the highest-impact additions now live.</p>
+      </div>
+      <div class="release-grid">
+        <article class="release-card reveal">
+          <div class="release-kicker">v0.5.0</div>
+          <h3 class="release-title">Hybrid Skills for Claude + Codex</h3>
+          <p class="release-desc">Runtime-agnostic skill assignments now stage repo-native skills for both runtimes, with per-skill hashes and warnings surfaced in monitor metadata.</p>
+        </article>
+        <article class="release-card reveal reveal-delay-1">
+          <div class="release-kicker">v0.5.0</div>
+          <h3 class="release-title">OpenTelemetry + Grafana Stack</h3>
+          <p class="release-desc">Service-level orchestration metrics and runtime pass-through telemetry can now flow into OTLP collectors, Prometheus, and the bundled Grafana dashboard.</p>
+        </article>
+        <article class="release-card reveal reveal-delay-2">
+          <div class="release-kicker">v0.4+</div>
+          <h3 class="release-title">Operator Workflow Upgrades</h3>
+          <p class="release-desc">`doctor` preflight checks, custom agent creation, and direct single-agent execution make setup and targeted runs much faster for real teams.</p>
+        </article>
+      </div>
+      <div class="release-links reveal reveal-delay-3">
+        <a href="https://github.com/Sagart-cactus/SprintFoundry/releases">Release notes ↗</a>
+        <a href="https://github.com/Sagart-cactus/SprintFoundry/blob/main/docs/metrics.md">Metrics docs ↗</a>
+        <a href="https://github.com/Sagart-cactus/SprintFoundry/blob/main/docs/skills-hybrid-execution-plan.md">Skills rollout docs ↗</a>
+      </div>
+    </div>
+  </section>
 
   <!-- ─── HOW IT WORKS ──────────────────────────────────────────────────── -->
   <section id="how">
@@ -1170,6 +1364,7 @@
           <ul class="runtime-points">
             <li><div><strong>Per-agent runtime overrides.</strong> Mix `claude-code` and `codex` in one run graph, including planner override.</div></li>
             <li><div><strong>Model pinning per role.</strong> Set exact model IDs with `model_overrides` for each agent.</div></li>
+            <li><div><strong>Runtime skill metadata in monitor.</strong> Inspect staged skill names, warnings, and hashes per step for Claude and Codex.</div></li>
             <li><div><strong>BYOK + session auth.</strong> Use `SPRINTFOUNDRY_*` keys or logged-in local sessions where supported.</div></li>
           </ul>
         </div>
@@ -1210,6 +1405,47 @@
             </div>
           </div>
         </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── OBSERVABILITY ─────────────────────────────────────────────────── -->
+  <section id="observability">
+    <div class="container">
+      <div class="obs-layout">
+        <div class="section-header reveal obs-header">
+          <span class="section-label">Observability</span>
+          <h2 class="section-title">SEE COST, TOKENS, TOOLS, AND SKILLS</h2>
+          <p class="section-sub">Monitor UI gives run-level context while OpenTelemetry pipelines expose service and runtime telemetry for production operations.</p>
+        </div>
+        <article class="obs-panel reveal obs-pipeline">
+          <h3 class="obs-title">OpenTelemetry pipeline</h3>
+          <div class="obs-shell">
+            <div class="obs-cmd">docker compose -f docker-compose.otel.yml up -d</div>
+            <div class="obs-cmd">SPRINTFOUNDRY_OTEL_ENABLED=1</div>
+          </div>
+          <div class="obs-chip-row">
+            <span class="obs-chip">runs_total</span>
+            <span class="obs-chip">step_duration_seconds</span>
+            <span class="obs-chip">tokens_used_total</span>
+            <span class="obs-chip">cost_usd_total</span>
+            <span class="obs-chip">agent_tool_calls_total</span>
+          </div>
+          <div class="obs-shot" role="img" aria-label="Trimmed Grafana operations dashboard screenshot"></div>
+          <p class="obs-shot-caption">Grafana operations dashboard (trimmed capture).</p>
+          <div class="release-links" style="margin-top:16px">
+            <a href="https://github.com/Sagart-cactus/SprintFoundry/blob/main/docs/metrics.md">Setup guide ↗</a>
+            <a href="https://github.com/Sagart-cactus/SprintFoundry/blob/main/config/grafana/provisioning/dashboards/sprintfoundry.json">Grafana dashboard JSON ↗</a>
+          </div>
+        </article>
+        <article class="obs-panel reveal reveal-delay-1 obs-monitor">
+          <h3 class="obs-title">Monitor-first troubleshooting</h3>
+          <ul class="obs-list">
+            <li><strong>Live stream events:</strong> step transitions, tool calls, file edits, command runs.</li>
+            <li><strong>Per-step metadata:</strong> runtime provider/mode, tokens, cost, and runtime skill details (names, warnings, hashes).</li>
+            <li><strong>Review and audit paths:</strong> resolve human gates and inspect artifacts through monitor APIs.</li>
+          </ul>
+        </article>
       </div>
     </div>
   </section>
@@ -1332,7 +1568,7 @@
         <div class="feature-card reveal reveal-delay-3">
           <div class="feature-icon"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg></div>
           <div class="feature-title">Plugin + Skill System</div>
-          <p class="feature-desc">Attach Claude plugins and Codex skills per-agent for quality, testing, architecture, and UI workflows.</p>
+          <p class="feature-desc">Use runtime-agnostic skill assignments with repo-native discovery for Codex and Claude, plus warnings/hashes surfaced in monitor for auditability.</p>
           <span class="feature-tag">Extensible</span>
         </div>
         <div class="feature-card reveal reveal-delay-4">
@@ -1363,7 +1599,7 @@
               <div class="qs-num">1</div>
               <div>
                 <div class="qs-step-title">Install SprintFoundry</div>
-                <p class="qs-step-desc">Install via Homebrew/npm, then scaffold config with <code style="font-family:var(--font-mono);font-size:12px;color:var(--forge)">project create</code>.</p>
+                <p class="qs-step-desc">Install via Homebrew/npm, then scaffold config with <code style="font-family:var(--font-mono);font-size:12px;color:var(--forge)">project create</code> and run <code style="font-family:var(--font-mono);font-size:12px;color:var(--forge)">doctor</code>.</p>
               </div>
             </li>
             <li class="qs-step">
@@ -1400,13 +1636,18 @@
               <span class="code-filename">terminal</span>
               <button class="code-copy" onclick="copyCode(this)">copy</button>
             </div>
-            <pre class="code-body"><span class="code-comment"># Install</span>
+            <pre class="code-body"><span class="code-comment"># Install (Homebrew recommended)</span>
+<span class="code-cmd">brew</span> tap <span class="code-str">Sagart-cactus/tap</span>
+<span class="code-cmd">brew</span> install <span class="code-str">sprintfoundry</span>
+
+<span class="code-comment"># Or install with npm</span>
 <span class="code-cmd">npm</span> install <span class="code-flag">-g</span> sprintfoundry
 
 <span class="code-comment"># Create project config interactively</span>
 <span class="code-cmd">sprintfoundry</span> project create
 
-<span class="code-comment"># Validate config</span>
+<span class="code-comment"># Run preflight checks, then validate config</span>
+<span class="code-cmd">sprintfoundry</span> doctor <span class="code-flag">--project</span> <span class="code-str">my-saas-app</span>
 <span class="code-cmd">sprintfoundry</span> validate <span class="code-flag">--project</span> <span class="code-str">my-saas-app</span>
 
 <span class="code-comment"># Run on a Linear ticket</span>
@@ -1424,6 +1665,13 @@
 <span class="code-comment"># Optional: plan-only dry run</span>
 <span class="code-cmd">sprintfoundry</span> run <span class="code-flag">--project</span> <span class="code-str">my-saas-app</span> \
   <span class="code-flag">--source</span> linear <span class="code-flag">--ticket</span> <span class="code-str">LIN-423</span> <span class="code-flag">--dry-run</span>
+
+<span class="code-comment"># Run a single agent (skip full SDLC)</span>
+<span class="code-cmd">sprintfoundry</span> run <span class="code-flag">--project</span> <span class="code-str">my-saas-app</span> \
+  <span class="code-flag">--source</span> prompt <span class="code-flag">--prompt</span> <span class="code-str">"Review auth logic"</span> <span class="code-flag">--agent</span> <span class="code-str">security</span>
+
+<span class="code-comment"># Add a custom agent definition</span>
+<span class="code-cmd">sprintfoundry</span> agent create
 
 <span class="code-comment"># Monitor runs and logs</span>
 <span class="code-cmd">sprintfoundry</span> monitor <span class="code-flag">--port</span> <span class="code-str">4310</span>
@@ -1454,8 +1702,8 @@
           <a href="https://github.com/Sagart-cactus/SprintFoundry" class="btn btn-primary" style="font-size: 14px; padding: 16px 36px;">
             Get started free →
           </a>
-          <a href="https://github.com/Sagart-cactus/SprintFoundry" class="btn btn-ghost" style="font-size: 14px; padding: 16px 36px;">
-            View on GitHub
+          <a href="https://github.com/Sagart-cactus/SprintFoundry/releases" class="btn btn-ghost" style="font-size: 14px; padding: 16px 36px;">
+            Read release notes
           </a>
         </div>
         <p class="cta-note">Open source · Self-hosted · BYOK · No vendor lock-in</p>
@@ -1477,11 +1725,12 @@
         </div>
         <ul class="footer-links">
           <li><a href="#how">How it works</a></li>
-          <li><a href="#agents">Agents</a></li>
-          <li><a href="#quickstart">Docs</a></li>
+          <li><a href="#features">Features</a></li>
+          <li><a href="https://github.com/Sagart-cactus/SprintFoundry/blob/main/docs/README.md">Docs</a></li>
+          <li><a href="https://github.com/Sagart-cactus/SprintFoundry/releases">Releases</a></li>
           <li><a href="https://github.com/Sagart-cactus/SprintFoundry">GitHub</a></li>
         </ul>
-        <div class="footer-legal">© 2025 SprintFoundry. Apache 2.0 License.</div>
+        <div class="footer-legal">© 2026 SprintFoundry. Apache 2.0 License.</div>
       </div>
     </div>
   </footer>
@@ -1505,7 +1754,7 @@
       const m = String(Math.floor(runSec / 60)).padStart(2, '0');
       const s = String(runSec % 60).padStart(2, '0');
       const el = document.getElementById('monAgent1');
-      if (el) el.textContent = `Active: developer · claude-sonnet-4-5 · 00:${m}:${s}`;
+      if (el) el.textContent = `Active: developer · codex/gpt-5.3-codex · skills:3 · 00:${m}:${s}`;
       // Slowly advance the progress bar
       const bar = document.getElementById('monBar1');
       if (bar) {
@@ -1521,7 +1770,7 @@
           <span class="mon-chip done">developer</span>
           <span class="mon-chip running">qa</span>
           <span class="mon-chip">security</span>`;
-        if (el) el.textContent = 'Active: qa · claude-haiku-4-5 · 00:00:03';
+        if (el) el.textContent = 'Active: qa · claude/local_sdk · skills:2 · 00:00:03';
         const bar2 = document.getElementById('monBar1');
         if (bar2) bar2.style.width = '75%';
         runSec = 0;
