@@ -162,8 +162,37 @@ export interface GuardrailConfig {
   allow_paths?: string[];
 }
 
-export interface CodexSkillDefinition {
-  path: string; // repo-relative or absolute path to skill directory containing SKILL.md
+export interface SkillDefinition {
+  // Directory containing SKILL.md (repo-relative or absolute path)
+  path?: string;
+  // Explicit list of files to stage as a skill bundle
+  files?: string[];
+  // Optional runtime filter for this skill definition
+  runtime?: RuntimeProvider | "all";
+}
+
+export type CodexSkillDefinition = SkillDefinition;
+
+export type SkillSource =
+  | {
+      type: "folder";
+      path: string;
+      recursive?: boolean;
+      naming?: "folder_name";
+      runtime?: RuntimeProvider | "all";
+    }
+  | {
+      type: "files";
+      name: string;
+      files: string[];
+      runtime?: RuntimeProvider | "all";
+    };
+
+export interface SkillGuardrails {
+  warn_skills_per_agent?: number;
+  max_skills_per_agent?: number;
+  max_total_skill_chars_per_agent?: number;
+  mode?: "warn" | "error";
 }
 
 export interface PlatformConfig {
@@ -176,6 +205,12 @@ export interface PlatformConfig {
     container_resources?: ContainerResources;
     runtime_per_agent?: Record<string, RuntimeConfig>;
     planner_runtime?: RuntimeConfig;
+    skills_v2_enabled?: boolean;
+    skills_enabled?: boolean;
+    skill_catalog?: Record<string, SkillDefinition>;
+    skill_assignments_per_agent?: Record<string, string[]>;
+    skill_sources?: SkillSource[];
+    skill_guardrails?: SkillGuardrails;
     codex_skills_enabled?: boolean;
     codex_skill_catalog?: Record<string, CodexSkillDefinition>;
     codex_skills_per_agent?: Record<string, string[]>;
@@ -209,6 +244,12 @@ export interface ProjectConfig {
     strategy?: "tmpdir" | "worktree";
     base_repo_dir?: string;
   };
+  skills_v2_enabled?: boolean;
+  skills_enabled?: boolean;
+  skill_catalog_overrides?: Record<string, SkillDefinition>;
+  skill_assignments?: Record<string, string[]>;
+  skill_sources?: SkillSource[];
+  skill_guardrails?: SkillGuardrails;
   codex_skills_enabled?: boolean;
   codex_skill_catalog_overrides?: Record<string, CodexSkillDefinition>;
   codex_skills_overrides?: Record<string, string[]>;

@@ -56,6 +56,64 @@ beforeAll(async () => {
     "utf-8"
   );
 
+  // Run with runtime skills metadata embedded in step events
+  const skillsRunDir = path.join(tmpRunsRoot, "skills-project", "run-skills");
+  mkdirSync(skillsRunDir, { recursive: true });
+  writeFileSync(
+    path.join(skillsRunDir, ".events.jsonl"),
+    [
+      JSON.stringify({ event_type: "task.created", timestamp: "2026-03-01T00:00:00Z", data: {} }),
+      JSON.stringify({
+        event_type: "task.plan_generated",
+        timestamp: "2026-03-01T00:00:10Z",
+        data: {
+          plan: {
+            steps: [{ step_number: 1, agent: "developer", task: "Implement feature" }],
+          },
+        },
+      }),
+      JSON.stringify({
+        event_type: "step.started",
+        timestamp: "2026-03-01T00:01:00Z",
+        data: {
+          step: 1,
+          agent: "developer",
+          runtime_metadata: {
+            provider_metadata: {
+              skills: {
+                names: ["secure-api", "code-quality"],
+                warnings: ["Skill count 2 exceeds recommended threshold 1 for codex"],
+                hashes: { "secure-api": "a1b2c3d4" },
+                provider: "codex",
+                skills_dir: ".codex-home/skills",
+              },
+            },
+          },
+        },
+      }),
+      JSON.stringify({
+        event_type: "step.completed",
+        timestamp: "2026-03-01T00:02:00Z",
+        data: {
+          step: 1,
+          tokens: 123,
+          runtime_metadata: {
+            provider_metadata: {
+              skills: {
+                names: ["secure-api", "code-quality"],
+                warnings: [],
+                hashes: { "secure-api": "a1b2c3d4", "code-quality": "ddee1122" },
+                provider: "codex",
+                skills_dir: ".codex-home/skills",
+              },
+            },
+          },
+        },
+      }),
+    ].join("\n") + "\n",
+    "utf-8"
+  );
+
   // Session-backed run with workspace path outside runsRoot
   const externalWorkspace = path.join(tmpWorkspacesRoot, "run-session-only");
   mkdirSync(externalWorkspace, { recursive: true });
@@ -224,6 +282,21 @@ describe("GET /api/run", () => {
     const data = JSON.parse(body);
     expect(data.run_id).toBe("run-session-only");
     expect(data.project_id).toBe("session-only-project");
+  });
+
+  it("includes runtime skill summary on step objects when runtime metadata is present", async () => {
+    const { status, body } = await get(`${BASE}/api/run?project=skills-project&run=run-skills`);
+    expect(status).toBe(200);
+    const data = JSON.parse(body);
+    const step = data.steps?.find((s: any) => s.step_number === 1);
+    expect(step).toBeDefined();
+    expect(step.runtime_skills).toBeDefined();
+    expect(step.runtime_skills.names).toEqual(["secure-api", "code-quality"]);
+    expect(step.runtime_skills.provider).toBe("codex");
+    expect(step.runtime_skills.hashes).toMatchObject({
+      "secure-api": "a1b2c3d4",
+      "code-quality": "ddee1122",
+    });
   });
 });
 
