@@ -32,6 +32,14 @@ const autoexecuteHistory = [];
 let autoexecuteRunning = false;
 const autoexecuteSeen = new Map();
 
+function isProjectConfigFileName(name) {
+  if (!/\.ya?ml$/i.test(name)) return false;
+  const lower = name.toLowerCase();
+  if (lower === "platform.yaml" || lower === "platform.yml") return false;
+  if (lower === "project.example.yaml" || lower === "project.example.yml") return false;
+  return true;
+}
+
 const LOG_KIND_TO_FILES = {
   planner_stdout: [".planner-runtime.stdout.log"],
   planner_stderr: [".planner-runtime.stderr.log"],
@@ -184,7 +192,7 @@ async function loadProjectRepoUrlMap() {
   const projectFiles = entries
     .filter((entry) => entry.isFile())
     .map((entry) => entry.name)
-    .filter((name) => name === "project.yaml" || /^project-.+\.ya?ml$/.test(name))
+    .filter((name) => isProjectConfigFileName(name))
     .sort();
 
   const byProjectId = new Map();
@@ -285,7 +293,7 @@ async function loadAutoexecuteProjects() {
   const projectFiles = entries
     .filter((entry) => entry.isFile())
     .map((entry) => entry.name)
-    .filter((name) => name === "project.yaml" || /^project-.+\.ya?ml$/.test(name))
+    .filter((name) => isProjectConfigFileName(name))
     .sort();
 
   const projects = [];
@@ -466,11 +474,11 @@ function shouldDedupeRun(dedupeKey, dedupeWindowMinutes) {
   const now = Date.now();
   const windowMs = Math.max(1, dedupeWindowMinutes) * 60_000;
   const prev = autoexecuteSeen.get(dedupeKey);
-  if (prev && now - prev < windowMs) return true;
-  autoexecuteSeen.set(dedupeKey, now);
+  if (prev && now - prev.seenAt < windowMs) return true;
+  autoexecuteSeen.set(dedupeKey, { seenAt: now, windowMs });
 
-  for (const [key, seenAt] of autoexecuteSeen.entries()) {
-    if (now - seenAt > windowMs * 2) {
+  for (const [key, seen] of autoexecuteSeen.entries()) {
+    if (now - seen.seenAt > seen.windowMs * 2) {
       autoexecuteSeen.delete(key);
     }
   }

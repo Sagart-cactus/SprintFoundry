@@ -190,6 +190,41 @@ beforeAll(async () => {
     "utf-8"
   );
 
+  writeFileSync(
+    path.join(tmpConfigRoot, "named-github.yaml"),
+    [
+      "project_id: monitor-named-github-project",
+      "name: Monitor Named GitHub Project",
+      "repo:",
+      "  url: git@github.com:acme/monitor-named.git",
+      "  default_branch: main",
+      "api_keys:",
+      "  anthropic: test",
+      "branch_strategy:",
+      "  prefix: feat/",
+      "  include_ticket_id: true",
+      "  naming: kebab-case",
+      "integrations:",
+      "  ticket_source:",
+      "    type: github",
+      "    config:",
+      "      token: test",
+      "      owner: acme",
+      "      repo: monitor-named",
+      "rules: []",
+      "autoexecute:",
+      "  enabled: true",
+      "  github:",
+      "    enabled: true",
+      "    webhook_secret: named-secret",
+      "    allowed_events:",
+      "      - issues.opened",
+      "    dedupe_window_minutes: 30",
+      "",
+    ].join("\n"),
+    "utf-8"
+  );
+
   // Regular run under runsRoot
   const regularRunDir = path.join(tmpRunsRoot, "regular-project", "run-regular");
   mkdirSync(regularRunDir, { recursive: true });
@@ -646,6 +681,25 @@ describe("POST /api/webhooks/github", () => {
     const data = JSON.parse(second.body);
     expect(data.ignored).toBe(true);
     expect(data.reason).toBe("duplicate_event");
+  });
+
+  it("loads autoexecute config from <name>.yaml project files", async () => {
+    const payload = JSON.stringify({
+      action: "opened",
+      issue: { number: 111, updated_at: "2026-03-01T10:30:00Z" },
+      repository: { name: "monitor-named", owner: { login: "acme" } },
+    });
+    const signature = githubSignature(payload, "named-secret");
+    const { status, body } = await post(`${BASE}/api/webhooks/github`, payload, {
+      "x-github-event": "issues",
+      "x-github-delivery": "delivery-named-yaml-1",
+      "x-hub-signature-256": signature,
+    });
+    expect(status).toBe(202);
+    const data = JSON.parse(body);
+    expect(data.accepted).toBe(true);
+    expect(data.project_id).toBe("monitor-named-github-project");
+    expect(data.ticket_id).toBe("111");
   });
 });
 
