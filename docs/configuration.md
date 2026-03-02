@@ -419,6 +419,7 @@ Supported types: `slack`, `email`, `webhook`
 | `SPRINTFOUNDRY_USE_CONTAINERS` | Set to `true` to force container runtime mode |
 | `SPRINTFOUNDRY_RUNS_ROOT` | Override run workspace root directory |
 | `MONITOR_PORT` | Monitor server port (default: 4310) |
+| `SPRINTFOUNDRY_WEBHOOK_PORT` | Dedicated webhook server port. If set and different from `MONITOR_PORT`, webhook routes are served on this port only. |
 | `SPRINTFOUNDRY_ENABLE_CODEX_HOME_AUTH_FALLBACK` | Set to `1` to enable Codex 401 retry without CODEX_HOME |
 
 ---

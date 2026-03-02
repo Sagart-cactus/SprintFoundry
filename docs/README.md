@@ -10,6 +10,7 @@ Multi-agent orchestration platform for AI-powered software development. Takes ti
 | [agents.md](./agents.md) | All agent types, roles, capabilities, plugins, and output artifacts |
 | [architecture.md](./architecture.md) | System design, two-layer model, filesystem message bus |
 | [monitor.md](./monitor.md) | Run monitor — setup, data sources, API |
+| [webhook-integrations-security.md](./webhook-integrations-security.md) | Secure GitHub + Linear webhook autoexecute setup (including split-port deployment) |
 | [operations.md](./operations.md) | Running tasks, human gates, rework cycles |
 | [decisions.md](./decisions.md) | Architecture decision records |
 

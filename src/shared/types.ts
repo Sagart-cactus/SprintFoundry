@@ -254,6 +254,7 @@ export interface ProjectConfig {
   codex_skill_catalog_overrides?: Record<string, CodexSkillDefinition>;
   codex_skills_overrides?: Record<string, string[]>;
   guardrails?: GuardrailConfig;
+  autoexecute?: AutoexecuteConfig;
 }
 
 export interface ModelConfig {
@@ -304,6 +305,32 @@ export interface IntegrationConfig {
     type: "slack" | "email" | "webhook";
     config: Record<string, string>;
   };
+}
+
+export interface GitHubAutoexecuteConfig {
+  enabled?: boolean;
+  webhook_secret?: string;
+  allowed_events?: string[];
+  label_trigger?: string;
+  command_trigger?: string;
+  require_command?: boolean;
+  dedupe_window_minutes?: number;
+}
+
+export interface LinearAutoexecuteConfig {
+  enabled?: boolean;
+  webhook_secret?: string;
+  allowed_events?: string[];
+  command_trigger?: string;
+  require_command?: boolean;
+  dedupe_window_minutes?: number;
+  max_timestamp_age_seconds?: number;
+}
+
+export interface AutoexecuteConfig {
+  enabled?: boolean;
+  github?: GitHubAutoexecuteConfig;
+  linear?: LinearAutoexecuteConfig;
 }
 
 // ----- Rules -----

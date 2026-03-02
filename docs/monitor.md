@@ -12,6 +12,8 @@ Provides a lightweight read-only dashboard over run workspaces by reading event/
 npm run monitor
 # optional
 MONITOR_PORT=4311 npm run monitor
+# optional split-port mode (monitor + dedicated webhook ingress)
+MONITOR_PORT=4310 SPRINTFOUNDRY_WEBHOOK_PORT=4410 npm run monitor
 ```
 
 ## Data Source
@@ -41,6 +43,12 @@ Project/run folders are discovered under that root.
   - text logs by kind
 - `GET /api/files?project=<id>&run=<id>&root=<path>`
   - recursive file listing under run workspace
+- `POST /api/webhooks/github`
+  - GitHub autoexecute ingress (when enabled)
+- `POST /api/webhooks/linear`
+  - Linear autoexecute ingress (when enabled)
+
+When `SPRINTFOUNDRY_WEBHOOK_PORT` is set to a different port from `MONITOR_PORT`, webhook routes move to the dedicated webhook server and return `404` on monitor port.
 
 Log `kind` values:
 

@@ -147,6 +147,34 @@ integrations:
       webhook_url: ${SLACK_WEBHOOK_URL}
       channel: "#dev-agents"
 
+# ----- GitHub Autoexecute (optional) -----
+# Enables monitor webhook endpoint /api/webhooks/github to auto-start runs.
+# Autoexecute currently supports GitHub issue triggers.
+#
+# autoexecute:
+#   enabled: true
+#   github:
+#     enabled: true
+#     webhook_secret: ${SPRINTFOUNDRY_GITHUB_WEBHOOK_SECRET}
+#     allowed_events:
+#       - issues.opened
+#       - issues.labeled
+#       - issue_comment.created
+#     label_trigger: sf:auto-run
+#     command_trigger: /sf-run
+#     require_command: false
+#     dedupe_window_minutes: 30
+#   linear:
+#     enabled: true
+#     webhook_secret: ${SPRINTFOUNDRY_LINEAR_WEBHOOK_SECRET}
+#     allowed_events:
+#       - Issue.create
+#     # Optional for Comment.create trigger flow:
+#     command_trigger: /sf-run
+#     require_command: false
+#     dedupe_window_minutes: 30
+#     max_timestamp_age_seconds: 120
+
 # ----- Project-Specific Rules -----
 rules:
   - id: security-on-payments

@@ -173,7 +173,10 @@ function matchesSearch(run, query) {
   return (
     (run.run_id || "").toLowerCase().includes(q) ||
     (run.project_id || "").toLowerCase().includes(q) ||
-    (run.classification || "").toLowerCase().includes(q)
+    (run.classification || "").toLowerCase().includes(q) ||
+    (run.ticket_id || "").toLowerCase().includes(q) ||
+    (run.ticket_title || "").toLowerCase().includes(q) ||
+    (run.ticket_source || "").toLowerCase().includes(q)
   );
 }
 
@@ -206,10 +209,14 @@ function renderLane(container, runs) {
       if (stale) cardClasses.push("stale");
 
       const pills = renderStepPills(run);
+      const triggerSource = String(run.trigger_source || "");
+      const webhookTriggered = triggerSource.endsWith("_webhook");
+      const sourceLabel = run.ticket_source ? String(run.ticket_source).toUpperCase() : "";
       return `
         <a class="${cardClasses.join(" ")}" href="/v3/run?project=${encodeURIComponent(run.project_id)}&run=${encodeURIComponent(run.run_id)}">
           <div class="card-head">
             <span class="badge ${escapeHtml(status)}">${escapeHtml(prettyStatus(run.status))}</span>
+            ${webhookTriggered ? '<span class="badge webhook-trigger">Webhook</span>' : ""}
             ${stale ? '<span class="badge stale-badge">Stale</span>' : ""}
             <span class="updated">${escapeHtml(fmtRelative(run.last_event_ts))}</span>
           </div>
@@ -217,6 +224,8 @@ function renderLane(container, runs) {
           <div class="chip-row">
             <span class="chip">${escapeHtml(run.project_id)}</span>
             <span class="chip">${escapeHtml(run.classification || "unclassified")}</span>
+            ${sourceLabel ? `<span class="chip">${escapeHtml(sourceLabel)}</span>` : ""}
+            ${run.ticket_id ? `<span class="chip">${escapeHtml(run.ticket_id)}</span>` : ""}
           </div>
           <div class="progress"><span style="width:${progress.pct}%"></span></div>
           ${pills ? `<div class="step-pills">${pills}</div>` : ""}
