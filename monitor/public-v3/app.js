@@ -1,4 +1,5 @@
 const projectFilter = document.getElementById("project-filter");
+const resumeFilter = document.getElementById("resume-filter");
 const searchInput = document.getElementById("search-input");
 const refreshBtn = document.getElementById("refresh-btn");
 const activeLane = document.getElementById("active-lane");
@@ -6,14 +7,157 @@ const failedLane = document.getElementById("failed-lane");
 const completedLane = document.getElementById("completed-lane");
 const statusLine = document.getElementById("status-line");
 const lastRefreshed = document.getElementById("last-refreshed");
+const resumePromptBackdrop = document.getElementById("resume-prompt-backdrop");
+const resumePromptModal = document.getElementById("resume-prompt-modal");
+const resumePromptTitle = document.getElementById("resume-prompt-title");
+const resumePromptHint = document.getElementById("resume-prompt-hint");
+const resumePromptInput = document.getElementById("resume-prompt-input");
+const resumePromptForm = document.getElementById("resume-prompt-form");
+const resumePromptCancel = document.getElementById("resume-prompt-cancel");
+const boardPrefsStorageKey = "sf_monitor_v3_board_prefs";
+
+function loadBoardPrefs() {
+  const defaults = {
+    selectedProject: "all",
+    resumeFilter: "all",
+    searchQuery: "",
+    showHidden: false,
+  };
+
+  try {
+    const raw = sessionStorage.getItem(boardPrefsStorageKey);
+    if (!raw) return defaults;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return defaults;
+    return {
+      selectedProject:
+        typeof parsed.selectedProject === "string" && parsed.selectedProject
+          ? parsed.selectedProject
+          : defaults.selectedProject,
+      resumeFilter:
+        parsed.resumeFilter === "all" || parsed.resumeFilter === "resumed" || parsed.resumeFilter === "fresh"
+          ? parsed.resumeFilter
+          : defaults.resumeFilter,
+      searchQuery:
+        typeof parsed.searchQuery === "string" ? parsed.searchQuery : defaults.searchQuery,
+      showHidden:
+        typeof parsed.showHidden === "boolean" ? parsed.showHidden : defaults.showHidden,
+    };
+  } catch {
+    return defaults;
+  }
+}
+
+const initialPrefs = loadBoardPrefs();
 
 const state = {
   runs: [],
-  selectedProject: "all",
-  searchQuery: "",
+  selectedProject: initialPrefs.selectedProject,
+  resumeFilter: initialPrefs.resumeFilter,
+  searchQuery: initialPrefs.searchQuery,
   collapsedLanes: JSON.parse(sessionStorage.getItem("collapsedLanes") || "{}"),
-  showHidden: false,
+  showHidden: initialPrefs.showHidden,
 };
+
+const authStorageKey = "sf_monitor_api_token";
+let resumePromptResolver = null;
+
+function persistBoardPrefs() {
+  const prefs = {
+    selectedProject: state.selectedProject,
+    resumeFilter: state.resumeFilter,
+    searchQuery: state.searchQuery,
+    showHidden: state.showHidden,
+  };
+  sessionStorage.setItem(boardPrefsStorageKey, JSON.stringify(prefs));
+}
+
+function initAuthToken() {
+  const params = new URLSearchParams(window.location.search);
+  const tokenFromQuery = params.get("token") || params.get("access_token");
+  if (tokenFromQuery) {
+    localStorage.setItem(authStorageKey, tokenFromQuery);
+    params.delete("token");
+    params.delete("access_token");
+    const nextQuery = params.toString();
+    const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}${window.location.hash ?? ""}`;
+    window.history.replaceState({}, "", nextUrl);
+    return tokenFromQuery;
+  }
+  return localStorage.getItem(authStorageKey) || "";
+}
+
+const monitorApiToken = initAuthToken();
+
+function authHeaders() {
+  if (!monitorApiToken) return {};
+  return { Authorization: `Bearer ${monitorApiToken}` };
+}
+
+function withAuthUrl(input) {
+  if (!monitorApiToken) return input;
+  const url = new URL(input, window.location.origin);
+  url.searchParams.set("access_token", monitorApiToken);
+  if (url.origin === window.location.origin) {
+    return `${url.pathname}${url.search}${url.hash}`;
+  }
+  return url.toString();
+}
+
+function hasResumePromptDialog() {
+  return Boolean(
+    resumePromptBackdrop &&
+    resumePromptModal &&
+    resumePromptTitle &&
+    resumePromptHint &&
+    resumePromptInput &&
+    resumePromptForm &&
+    resumePromptCancel
+  );
+}
+
+function closeResumePromptDialog(value = null) {
+  if (!hasResumePromptDialog()) return false;
+  if (!resumePromptResolver) return false;
+  const resolve = resumePromptResolver;
+  resumePromptResolver = null;
+  resumePromptModal.classList.remove("open");
+  resumePromptModal.hidden = true;
+  resumePromptBackdrop.hidden = true;
+  resumePromptInput.value = "";
+  resolve(value);
+  return true;
+}
+
+function openResumePromptDialog(runId, stepNumber = null) {
+  if (!hasResumePromptDialog()) {
+    return Promise.resolve("");
+  }
+
+  if (resumePromptResolver) {
+    closeResumePromptDialog(null);
+  }
+
+  const stepLabel = Number.isInteger(stepNumber) && stepNumber > 0
+    ? `step ${stepNumber}`
+    : "latest failed step";
+
+  resumePromptTitle.textContent = Number.isInteger(stepNumber) && stepNumber > 0
+    ? `Resume from Step ${stepNumber}`
+    : "Resume Run";
+  resumePromptHint.textContent = `Run ${runId} · ${stepLabel}`;
+  resumePromptInput.value = "";
+  resumePromptBackdrop.hidden = false;
+  resumePromptModal.hidden = false;
+  requestAnimationFrame(() => {
+    resumePromptModal.classList.add("open");
+    resumePromptInput.focus();
+  });
+
+  return new Promise((resolve) => {
+    resumePromptResolver = resolve;
+  });
+}
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -180,6 +324,32 @@ function matchesSearch(run, query) {
   );
 }
 
+function isResumedRun(run) {
+  if (run?.resumed === true) return true;
+  const count = Number(run?.resumed_count ?? 0);
+  return Number.isFinite(count) && count > 0;
+}
+
+function canResumeRun(run) {
+  const status = String(run?.status ?? "").toLowerCase();
+  return status === "failed" || status === "cancelled";
+}
+
+function failedStepNumber(run) {
+  const failed = (run.steps ?? []).find((step) => step.status === "failed");
+  return typeof failed?.step_number === "number" ? failed.step_number : null;
+}
+
+function applyResumeFilter(runs) {
+  if (state.resumeFilter === "resumed") {
+    return runs.filter((run) => isResumedRun(run));
+  }
+  if (state.resumeFilter === "fresh") {
+    return runs.filter((run) => !isResumedRun(run));
+  }
+  return runs;
+}
+
 function sortByRecency(runs) {
   return [...runs].sort((a, b) => (Number(b.last_event_ts) || 0) - (Number(a.last_event_ts) || 0));
 }
@@ -192,6 +362,12 @@ function renderFilter() {
 
   if (!projects.includes(state.selectedProject)) state.selectedProject = "all";
   projectFilter.value = state.selectedProject;
+  if (resumeFilter) {
+    resumeFilter.value = state.resumeFilter;
+  }
+  if (searchInput.value !== state.searchQuery) {
+    searchInput.value = state.searchQuery;
+  }
 }
 
 function renderLane(container, runs) {
@@ -207,30 +383,51 @@ function renderLane(container, runs) {
       const progress = computeProgress(run);
       const cardClasses = ["run-card", escapeHtml(status)];
       if (stale) cardClasses.push("stale");
+      const resumed = isResumedRun(run);
+      const resumeCount = Number(run.resumed_count ?? 0);
+      const failedStep = failedStepNumber(run);
 
       const pills = renderStepPills(run);
       const triggerSource = String(run.trigger_source || "");
       const webhookTriggered = triggerSource.endsWith("_webhook");
       const sourceLabel = run.ticket_source ? String(run.ticket_source).toUpperCase() : "";
+      const runUrl = new URL("/v3/run", window.location.origin);
+      runUrl.searchParams.set("project", run.project_id);
+      runUrl.searchParams.set("run", run.run_id);
+      if (monitorApiToken) {
+        runUrl.searchParams.set("token", monitorApiToken);
+      }
       return `
-        <a class="${cardClasses.join(" ")}" href="/v3/run?project=${encodeURIComponent(run.project_id)}&run=${encodeURIComponent(run.run_id)}">
-          <div class="card-head">
-            <span class="badge ${escapeHtml(status)}">${escapeHtml(prettyStatus(run.status))}</span>
-            ${webhookTriggered ? '<span class="badge webhook-trigger">Webhook</span>' : ""}
-            ${stale ? '<span class="badge stale-badge">Stale</span>' : ""}
-            <span class="updated">${escapeHtml(fmtRelative(run.last_event_ts))}</span>
-          </div>
-          <h3 title="${escapeHtml(run.run_id)}">${escapeHtml(run.run_id)}</h3>
-          <div class="chip-row">
-            <span class="chip">${escapeHtml(run.project_id)}</span>
-            <span class="chip">${escapeHtml(run.classification || "unclassified")}</span>
-            ${sourceLabel ? `<span class="chip">${escapeHtml(sourceLabel)}</span>` : ""}
-            ${run.ticket_id ? `<span class="chip">${escapeHtml(run.ticket_id)}</span>` : ""}
-          </div>
-          <div class="progress"><span style="width:${progress.pct}%"></span></div>
-          ${pills ? `<div class="step-pills">${pills}</div>` : ""}
-          <p class="active-agent">${escapeHtml(activeAgent(run))}</p>
-        </a>
+        <div class="run-card-wrap">
+          <a class="${cardClasses.join(" ")}" href="${escapeHtml(`${runUrl.pathname}${runUrl.search}`)}">
+            <div class="card-head">
+              <span class="badge ${escapeHtml(status)}">${escapeHtml(prettyStatus(run.status))}</span>
+              ${webhookTriggered ? '<span class="badge webhook-trigger">Webhook</span>' : ""}
+              ${resumed ? `<span class="badge resumed">Resumed${resumeCount > 1 ? ` x${escapeHtml(String(resumeCount))}` : ""}</span>` : ""}
+              ${stale ? '<span class="badge stale-badge">Stale</span>' : ""}
+              <span class="updated">${escapeHtml(fmtRelative(run.last_event_ts))}</span>
+            </div>
+            <h3 title="${escapeHtml(run.run_id)}">${escapeHtml(run.run_id)}</h3>
+            <div class="chip-row">
+              <span class="chip">${escapeHtml(run.project_id)}</span>
+              <span class="chip">${escapeHtml(run.classification || "unclassified")}</span>
+              ${sourceLabel ? `<span class="chip">${escapeHtml(sourceLabel)}</span>` : ""}
+              ${run.ticket_id ? `<span class="chip">${escapeHtml(run.ticket_id)}</span>` : ""}
+            </div>
+            <div class="progress"><span style="width:${progress.pct}%"></span></div>
+            ${pills ? `<div class="step-pills">${pills}</div>` : ""}
+            <p class="active-agent">${escapeHtml(activeAgent(run))}</p>
+          </a>
+          ${canResumeRun(run)
+            ? `<button
+                type="button"
+                class="run-resume-btn"
+                data-project="${escapeHtml(run.project_id)}"
+                data-run="${escapeHtml(run.run_id)}"
+                ${failedStep != null ? `data-step="${escapeHtml(String(failedStep))}"` : ""}
+              >Resume</button>`
+            : ""}
+        </div>
       `;
     })
     .join("");
@@ -275,6 +472,7 @@ function renderLaneSection(laneId, container, allRuns, label) {
         : `Show ${hiddenCount} hidden empty runs`;
       toggle.addEventListener("click", () => {
         state.showHidden = !state.showHidden;
+        persistBoardPrefs();
         render();
       });
       section.appendChild(toggle);
@@ -282,10 +480,39 @@ function renderLaneSection(laneId, container, allRuns, label) {
   }
 }
 
+async function postResumeFromBoard(projectId, runId, stepNumber = null) {
+  const prompt = await openResumePromptDialog(runId, stepNumber);
+  if (prompt === null) return false;
+
+  const payload = { project: projectId, run: runId };
+  if (Number.isInteger(stepNumber) && stepNumber > 0) {
+    payload.step = stepNumber;
+  }
+  const trimmedPrompt = String(prompt).trim();
+  if (trimmedPrompt) {
+    payload.prompt = trimmedPrompt;
+  }
+
+  const resp = await fetch(withAuthUrl("/api/run/resume"), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders(),
+    },
+    body: JSON.stringify(payload),
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    throw new Error(data?.error || `Resume failed (${resp.status})`);
+  }
+  return true;
+}
+
 function render() {
   renderFilter();
   let runs = state.selectedProject === "all" ? state.runs : state.runs.filter((r) => r.project_id === state.selectedProject);
   runs = runs.filter((r) => matchesSearch(r, state.searchQuery));
+  runs = applyResumeFilter(runs);
 
   // Clean up any existing hidden toggles
   document.querySelectorAll(".hidden-toggle").forEach((el) => el.remove());
@@ -296,6 +523,7 @@ function render() {
 
   const visibleCount = runs.filter((r) => laneOf(r.status) !== "active" || !isEmptyRun(r) || state.showHidden).length;
   statusLine.textContent = `Showing ${visibleCount} run${visibleCount === 1 ? "" : "s"}`;
+  persistBoardPrefs();
 }
 
 function stampRefresh() {
@@ -303,7 +531,7 @@ function stampRefresh() {
 }
 
 async function fetchRuns() {
-  const response = await fetch("/api/runs");
+  const response = await fetch(withAuthUrl("/api/runs"), { headers: authHeaders() });
   if (!response.ok) throw new Error(await response.text());
   const payload = await response.json();
   state.runs = Array.isArray(payload.runs) ? payload.runs : [];
@@ -315,14 +543,82 @@ async function fetchRuns() {
 
 projectFilter.addEventListener("change", () => {
   state.selectedProject = projectFilter.value;
+  persistBoardPrefs();
   render();
 });
+
+if (resumeFilter) {
+  resumeFilter.addEventListener("change", () => {
+    state.resumeFilter = resumeFilter.value;
+    persistBoardPrefs();
+    render();
+  });
+}
+
+document.addEventListener("click", (event) => {
+  if (!(event.target instanceof Element)) return;
+  const btn = event.target.closest(".run-resume-btn");
+  if (!btn) return;
+  event.preventDefault();
+  event.stopPropagation();
+
+  const projectId = btn.dataset.project;
+  const runId = btn.dataset.run;
+  const rawStep = Number(btn.dataset.step);
+  const stepNumber = Number.isInteger(rawStep) && rawStep > 0 ? rawStep : null;
+  if (!projectId || !runId) return;
+
+  btn.disabled = true;
+  const originalText = btn.textContent;
+  btn.textContent = "Resuming...";
+  statusLine.textContent = `Resuming ${runId}...`;
+  void postResumeFromBoard(projectId, runId, stepNumber)
+    .then(async (queued) => {
+      if (!queued) {
+        statusLine.textContent = "Resume canceled";
+        return;
+      }
+      statusLine.textContent = `Resume queued for ${runId}`;
+      await fetchRuns();
+    })
+    .catch((error) => {
+      statusLine.textContent = `Resume failed: ${error instanceof Error ? error.message : String(error)}`;
+      alert(statusLine.textContent);
+    })
+    .finally(() => {
+      btn.disabled = false;
+      btn.textContent = originalText;
+    });
+});
+
+if (hasResumePromptDialog()) {
+  resumePromptCancel.addEventListener("click", () => {
+    closeResumePromptDialog(null);
+  });
+
+  resumePromptBackdrop.addEventListener("click", () => {
+    closeResumePromptDialog(null);
+  });
+
+  resumePromptForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    closeResumePromptDialog(resumePromptInput.value);
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && resumePromptResolver) {
+      event.preventDefault();
+      closeResumePromptDialog(null);
+    }
+  });
+}
 
 let searchTimeout;
 searchInput.addEventListener("input", () => {
   clearTimeout(searchTimeout);
   searchTimeout = setTimeout(() => {
     state.searchQuery = searchInput.value.trim();
+    persistBoardPrefs();
     render();
   }, 200);
 });
@@ -388,7 +684,7 @@ function connectSSE() {
   }
 
   updateSSEIndicator("connecting");
-  sseSource = new EventSource("/api/events/stream");
+  sseSource = new EventSource(withAuthUrl("/api/events/stream"));
 
   sseSource.addEventListener("connected", () => {
     sseConnected = true;

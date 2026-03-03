@@ -1,5 +1,6 @@
 const runTitle = document.getElementById("run-title");
 const runStatusBadge = document.getElementById("run-status-badge");
+const resumeRunBtn = document.getElementById("resume-run-btn");
 const refreshBtn = document.getElementById("refresh-btn");
 const reviewPanel = document.getElementById("review-panel");
 const sidebarMeta = document.getElementById("sidebar-meta");
@@ -14,10 +15,34 @@ const detailDrawerTitle = document.getElementById("detail-drawer-title");
 const detailDrawerKicker = document.getElementById("detail-drawer-kicker");
 const detailDrawerBody = document.getElementById("detail-drawer-body");
 const detailDrawerClose = document.getElementById("detail-drawer-close");
+const resumePromptBackdrop = document.getElementById("resume-prompt-backdrop");
+const resumePromptModal = document.getElementById("resume-prompt-modal");
+const resumePromptTitle = document.getElementById("resume-prompt-title");
+const resumePromptHint = document.getElementById("resume-prompt-hint");
+const resumePromptInput = document.getElementById("resume-prompt-input");
+const resumePromptForm = document.getElementById("resume-prompt-form");
+const resumePromptCancel = document.getElementById("resume-prompt-cancel");
 
 const query = new URLSearchParams(window.location.search);
 const project = query.get("project") ?? "";
 const run = query.get("run") ?? "";
+const authStorageKey = "sf_monitor_api_token";
+
+function initAuthToken() {
+  const tokenFromQuery = query.get("token") || query.get("access_token");
+  if (tokenFromQuery) {
+    localStorage.setItem(authStorageKey, tokenFromQuery);
+    query.delete("token");
+    query.delete("access_token");
+    const nextQuery = query.toString();
+    const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}${window.location.hash ?? ""}`;
+    window.history.replaceState({}, "", nextUrl);
+    return tokenFromQuery;
+  }
+  return localStorage.getItem(authStorageKey) || "";
+}
+
+const monitorApiToken = initAuthToken();
 
 const state = {
   selectedStep: null,
@@ -49,6 +74,7 @@ const state = {
     mode: "output", // output | result
   },
 };
+let resumePromptResolver = null;
 
 // ── Helpers (unchanged) ──
 
@@ -176,17 +202,94 @@ function relative(ts) {
 }
 
 function fetchJson(url) {
-  return fetch(url).then(async (res) => {
+  const target = withAuthUrl(url);
+  return fetch(target, { headers: authHeaders() }).then(async (res) => {
     if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
     return res.json();
   });
 }
 
 function fetchText(url) {
-  return fetch(url).then(async (res) => {
+  const target = withAuthUrl(url);
+  return fetch(target, { headers: authHeaders() }).then(async (res) => {
     if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
     return res.text();
   });
+}
+
+function authHeaders() {
+  if (!monitorApiToken) return {};
+  return { Authorization: `Bearer ${monitorApiToken}` };
+}
+
+function withAuthUrl(input) {
+  if (!monitorApiToken) return input;
+  const url = new URL(input, window.location.origin);
+  url.searchParams.set("access_token", monitorApiToken);
+  if (url.origin === window.location.origin) {
+    return `${url.pathname}${url.search}${url.hash}`;
+  }
+  return url.toString();
+}
+
+function hasResumePromptDialog() {
+  return Boolean(
+    resumePromptBackdrop &&
+    resumePromptModal &&
+    resumePromptTitle &&
+    resumePromptHint &&
+    resumePromptInput &&
+    resumePromptForm &&
+    resumePromptCancel
+  );
+}
+
+function closeResumePromptDialog(value = null) {
+  if (!hasResumePromptDialog()) return false;
+  if (!resumePromptResolver) return false;
+  const resolve = resumePromptResolver;
+  resumePromptResolver = null;
+  resumePromptModal.classList.remove("open");
+  resumePromptModal.hidden = true;
+  resumePromptBackdrop.hidden = true;
+  resumePromptInput.value = "";
+  resolve(value);
+  return true;
+}
+
+function openResumePromptDialog(stepNumber = null) {
+  if (!hasResumePromptDialog()) {
+    return Promise.resolve("");
+  }
+
+  if (resumePromptResolver) {
+    closeResumePromptDialog(null);
+  }
+
+  const stepLabel = Number.isInteger(stepNumber) && stepNumber > 0
+    ? `step ${stepNumber}`
+    : "latest failed step";
+
+  resumePromptTitle.textContent = Number.isInteger(stepNumber) && stepNumber > 0
+    ? `Resume from Step ${stepNumber}`
+    : "Resume Run";
+  resumePromptHint.textContent = `Run ${run} · ${stepLabel}`;
+  resumePromptInput.value = "";
+  resumePromptBackdrop.hidden = false;
+  resumePromptModal.hidden = false;
+  requestAnimationFrame(() => {
+    resumePromptModal.classList.add("open");
+    resumePromptInput.focus();
+  });
+
+  return new Promise((resolve) => {
+    resumePromptResolver = resolve;
+  });
+}
+
+function isRunResumable(status) {
+  const normalized = String(status ?? "").toLowerCase();
+  return normalized === "failed" || normalized === "cancelled";
 }
 
 function getStepNumber(item) {
@@ -646,9 +749,12 @@ async function submitReviewDecision(reviewId, decision) {
   const btn = reviewPanel.querySelector(`button[data-review-id="${CSS.escape(reviewId)}"][data-decision="${CSS.escape(decision)}"]`);
   if (btn) { btn.disabled = true; btn.textContent = "Submitting..."; }
   try {
-    const resp = await fetch("/api/review/decide", {
+    const resp = await fetch(withAuthUrl("/api/review/decide"), {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeaders(),
+      },
       body: JSON.stringify({ project, run, review_id: reviewId, decision, feedback }),
     });
     if (!resp.ok) {
@@ -662,6 +768,34 @@ async function submitReviewDecision(reviewId, decision) {
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = decision === "approved" ? "Approve" : "Reject"; }
   }
+}
+
+async function queueRunResume(stepNumber = null) {
+  const prompt = await openResumePromptDialog(stepNumber);
+  if (prompt === null) return false;
+
+  const payload = { project, run };
+  if (Number.isInteger(stepNumber) && stepNumber > 0) {
+    payload.step = stepNumber;
+  }
+  const trimmedPrompt = String(prompt).trim();
+  if (trimmedPrompt) {
+    payload.prompt = trimmedPrompt;
+  }
+
+  const resp = await fetch(withAuthUrl("/api/run/resume"), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders(),
+    },
+    body: JSON.stringify(payload),
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    throw new Error(data?.error || `Resume failed (${resp.status})`);
+  }
+  return true;
 }
 
 reviewPanel.addEventListener("click", (event) => {
@@ -696,6 +830,8 @@ reviewPanel.addEventListener("toggle", (event) => {
 function renderSidebarMeta(runData) {
   const totalTokens = (runData.steps ?? []).reduce((sum, step) => sum + (Number(step.tokens) || 0), 0);
   const status = runData.status || "unknown";
+  const resumable = isRunResumable(status);
+  const resumed = runData.resumed === true || Number(runData.resumed_count ?? 0) > 0;
   const triggerSource = runData.trigger_source || null;
   const ticketSource = runData.ticket_source || null;
   const ticketId = runData.ticket_id || null;
@@ -713,12 +849,21 @@ function renderSidebarMeta(runData) {
   runTitle.textContent = `${runData.project_id}/${runData.run_id}`;
   runStatusBadge.className = `badge ${escapeHtml(status)}`;
   runStatusBadge.textContent = status.replace(/_/g, " ");
+  if (resumeRunBtn) {
+    resumeRunBtn.hidden = !resumable;
+    resumeRunBtn.disabled = false;
+    resumeRunBtn.textContent = "Resume Run";
+  }
 
   sidebarMeta.innerHTML = `
     <div class="meta-list">
       <div class="meta-item">
         <span class="meta-label">Status</span>
         <span class="meta-value status-dot ${escapeHtml(status)}">${escapeHtml(status.replace(/_/g, " "))}</span>
+      </div>
+      <div class="meta-item">
+        <span class="meta-label">Resumed</span>
+        <span class="meta-value">${resumed ? `Yes${runData.resume_step ? ` (step ${escapeHtml(String(runData.resume_step))})` : ""}` : "No"}</span>
       </div>
       <div class="meta-item">
         <span class="meta-label">Tokens</span>
@@ -1204,6 +1349,8 @@ function renderFeed(runData, events, stepMeta) {
       ).join("");
 
       const isRework = step.is_rework || step.step_number >= 900;
+      const stepResumed = step.resumed === true;
+      const resumableRun = isRunResumable(runData.status);
       const runtimeSkills = runtimeSkillsFromStep(step);
       const runtimeSkillCount = runtimeSkills?.names?.length ?? 0;
       return `
@@ -1217,6 +1364,7 @@ function renderFeed(runData, events, stepMeta) {
               ${ran != null ? `<span class="header-pill">${escapeHtml(fmtDuration(ran))}</span>` : ""}
               ${step.tokens ? `<span class="header-pill">${escapeHtml(humanTokens(step.tokens))} tokens</span>` : ""}
               ${runtimeSkillCount ? `<span class="header-pill">${escapeHtml(String(runtimeSkillCount))} skills</span>` : ""}
+              ${stepResumed ? `<span class="header-pill pill--resumed">${step.resume_with_prompt ? "Resumed + prompt" : "Resumed"}</span>` : ""}
               ${meta.reworkEvents.length ? `<span class="header-pill pill--rework">↺ ${escapeHtml(String(meta.reworkEvents.length))} rework</span>` : ""}
             </div>
           </header>
@@ -1244,6 +1392,12 @@ function renderFeed(runData, events, stepMeta) {
                 <button class="feed-action-btn feed-action-btn--files" type="button" data-drawer-action="files" data-step="${escapeHtml(String(step.step_number))}">
                   Files Modified
                 </button>
+                ${resumableRun && step.status === "failed"
+                  ? `<button class="feed-action-btn feed-action-btn--resume" type="button" data-resume-step="${escapeHtml(String(step.step_number))}">
+                      Resume From Step ${escapeHtml(String(step.step_number))}
+                    </button>`
+                  : ""
+                }
               </div>
             `
           }
@@ -1406,6 +1560,32 @@ sidebarSteps.addEventListener("click", (event) => {
 });
 
 runFeed.addEventListener("click", (event) => {
+  if (!(event.target instanceof Element)) return;
+  const resumeBtn = event.target.closest("[data-resume-step]");
+  if (resumeBtn) {
+    const stepNumber = Number(resumeBtn.dataset.resumeStep);
+    if (!Number.isFinite(stepNumber)) return;
+    resumeBtn.disabled = true;
+    const originalText = resumeBtn.textContent;
+    resumeBtn.textContent = "Resuming...";
+    statusLine.textContent = `Resuming run from step ${stepNumber}...`;
+    void queueRunResume(stepNumber)
+      .then(async (queued) => {
+        if (!queued) return;
+        statusLine.textContent = `Resume queued from step ${stepNumber}`;
+        await refresh();
+      })
+      .catch((error) => {
+        statusLine.textContent = `Resume failed: ${error instanceof Error ? error.message : String(error)}`;
+        alert(statusLine.textContent);
+      })
+      .finally(() => {
+        resumeBtn.disabled = false;
+        resumeBtn.textContent = originalText;
+      });
+    return;
+  }
+
   const actionBtn = event.target.closest("[data-drawer-action]");
   if (!actionBtn) return;
   const mode = actionBtn.dataset.drawerAction;
@@ -1488,12 +1668,58 @@ detailDrawer.addEventListener("toggle", (event) => {
 detailDrawerBackdrop.addEventListener("click", closeDrawer);
 detailDrawerClose.addEventListener("click", closeDrawer);
 window.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && state.drawer.open) {
+  if (event.key !== "Escape") return;
+  if (closeResumePromptDialog(null)) {
+    event.preventDefault();
+    return;
+  }
+  if (state.drawer.open) {
+    event.preventDefault();
     closeDrawer();
   }
 });
 
 refreshBtn.addEventListener("click", refresh);
+
+if (hasResumePromptDialog()) {
+  resumePromptCancel.addEventListener("click", () => {
+    closeResumePromptDialog(null);
+  });
+
+  resumePromptBackdrop.addEventListener("click", () => {
+    closeResumePromptDialog(null);
+  });
+
+  resumePromptForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    closeResumePromptDialog(resumePromptInput.value);
+  });
+}
+
+if (resumeRunBtn) {
+  resumeRunBtn.addEventListener("click", () => {
+    const runData = state.runData;
+    if (!runData || !isRunResumable(runData.status)) return;
+    resumeRunBtn.disabled = true;
+    const originalText = resumeRunBtn.textContent;
+    resumeRunBtn.textContent = "Resuming...";
+    statusLine.textContent = `Resuming ${runData.run_id}...`;
+    void queueRunResume()
+      .then(async (queued) => {
+        if (!queued) return;
+        statusLine.textContent = `Resume queued for ${runData.run_id}`;
+        await refresh();
+      })
+      .catch((error) => {
+        statusLine.textContent = `Resume failed: ${error instanceof Error ? error.message : String(error)}`;
+        alert(statusLine.textContent);
+      })
+      .finally(() => {
+        resumeRunBtn.disabled = false;
+        resumeRunBtn.textContent = originalText;
+      });
+  });
+}
 
 setInterval(() => {
   void refresh();

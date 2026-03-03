@@ -28,6 +28,14 @@
           <span>Project</span>
           <select id="project-filter" aria-label="Filter by project"></select>
         </label>
+        <label class="control">
+          <span>Resume</span>
+          <select id="resume-filter" aria-label="Filter by resume state">
+            <option value="all">All runs</option>
+            <option value="resumed">Resumed</option>
+            <option value="fresh">Non-resumed</option>
+          </select>
+        </label>
         <button id="refresh-btn" type="button">Refresh</button>
       </div>
     </header>
@@ -46,6 +54,27 @@
         <div id="completed-lane" class="lane-grid"></div>
       </section>
     </main>
+
+    <div class="resume-prompt-backdrop" id="resume-prompt-backdrop" hidden></div>
+    <section
+      class="resume-prompt-modal"
+      id="resume-prompt-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="resume-prompt-title"
+      hidden
+    >
+      <form class="resume-prompt-card" id="resume-prompt-form">
+        <h2 id="resume-prompt-title">Resume Run</h2>
+        <p class="resume-prompt-hint" id="resume-prompt-hint"></p>
+        <label class="resume-prompt-label" for="resume-prompt-input">Additional prompt (optional)</label>
+        <textarea id="resume-prompt-input" rows="4" placeholder="Provide extra context for this resume..."></textarea>
+        <div class="resume-prompt-actions">
+          <button type="button" id="resume-prompt-cancel">Cancel</button>
+          <button type="submit" class="resume-prompt-submit">Resume</button>
+        </div>
+      </form>
+    </section>
 
     <footer class="statusbar">
       <span id="status-line">Loading runs...</span>

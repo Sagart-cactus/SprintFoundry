@@ -420,6 +420,12 @@ Supported types: `slack`, `email`, `webhook`
 | `SPRINTFOUNDRY_RUNS_ROOT` | Override run workspace root directory |
 | `MONITOR_PORT` | Monitor server port (default: 4310) |
 | `SPRINTFOUNDRY_WEBHOOK_PORT` | Dedicated webhook server port. If set and different from `MONITOR_PORT`, webhook routes are served on this port only. |
+| `SPRINTFOUNDRY_MONITOR_AUTH_REQUIRED` | Require auth for monitor API routes (`1` by default, set `0` to disable) |
+| `SPRINTFOUNDRY_MONITOR_API_TOKEN` | Bearer token for read monitor API routes |
+| `SPRINTFOUNDRY_MONITOR_WRITE_TOKEN` | Optional bearer token required for mutating monitor APIs (for example review decisions) |
+| `SPRINTFOUNDRY_MONITOR_API_MAX_BODY_BYTES` | Max body size for monitor API POSTs (default 262144) |
+| `SPRINTFOUNDRY_MONITOR_WEBHOOK_MAX_BODY_BYTES` | Max body size for webhook payloads (default 1048576) |
+| `SPRINTFOUNDRY_MONITOR_BODY_TIMEOUT_MS` | Request body read timeout in milliseconds (default 10000) |
 | `SPRINTFOUNDRY_ENABLE_CODEX_HOME_AUTH_FALLBACK` | Set to `1` to enable Codex 401 retry without CODEX_HOME |
 
 ---
