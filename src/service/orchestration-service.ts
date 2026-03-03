@@ -349,6 +349,22 @@ export class OrchestrationService {
     if (!run) {
       throw new Error(`Run state not found for run: ${runId}. Expected ${path.join(workspacePath, RUN_STATE_DIR, RUN_STATE_FILE)}`);
     }
+
+    // Session status is authoritative for terminal cancel/fail actions such as `sprintfoundry cancel`.
+    if (
+      (session.status === "failed" || session.status === "cancelled") &&
+      run.status !== "failed" &&
+      run.status !== "cancelled"
+    ) {
+      run.status = session.status;
+      if (session.completed_at && !run.completed_at) {
+        run.completed_at = new Date(session.completed_at);
+      }
+      if (session.error && !run.error) {
+        run.error = session.error;
+      }
+    }
+
     if (run.status !== "failed" && run.status !== "cancelled") {
       throw new Error(`Run ${runId} status is '${run.status}'. Only failed/cancelled runs can be resumed.`);
     }

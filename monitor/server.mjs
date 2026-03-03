@@ -1964,15 +1964,20 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
+      let canonicalRunId = canonicalizeRunId(runId) || runId;
       // Validate the run exists before spawning the command.
       try {
-        await resolveRunPath(project, runId);
+        const runPath = await resolveRunPath(project, runId);
+        const summary = await loadRunSummary(project, runId, runPath);
+        if (typeof summary?.run_id === "string" && summary.run_id.trim()) {
+          canonicalRunId = summary.run_id.trim();
+        }
       } catch {
         sendJson(res, 404, { error: "Run not found" });
         return;
       }
       const projectArg = await getProjectArgForProjectId(project);
-      const args = ["dev", "--", "resume", runId, "--config", configRoot];
+      const args = ["dev", "--", "resume", canonicalRunId, "--config", configRoot];
       if (projectArg) {
         args.push("--project", projectArg);
       }
@@ -2005,7 +2010,7 @@ const server = http.createServer(async (req, res) => {
         pid,
         command: `pnpm ${args.join(" ")}`,
         project,
-        run: runId,
+        run: canonicalRunId,
         ...(step != null ? { step } : {}),
         ...(prompt ? { prompt_provided: true } : {}),
       });

@@ -820,6 +820,25 @@ describe("GET /api/run", () => {
   });
 });
 
+describe("POST /api/run/resume", () => {
+  it("canonicalizes run-run aliases before enqueueing resume", async () => {
+    const payload = JSON.stringify({
+      project: "aliased-project",
+      run: "run-run-alias-123",
+    });
+    const { status, body } = await post(
+      `${BASE}/api/run/resume`,
+      payload,
+      {},
+      { authToken: MONITOR_WRITE_TOKEN }
+    );
+    expect(status).toBe(202);
+    const data = JSON.parse(body);
+    expect(data.run).toBe("run-alias-123");
+    expect(String(data.command)).toContain("resume run-alias-123");
+  });
+});
+
 describe("GET /api/events", () => {
   it("returns 400 when project/run params are missing", async () => {
     const { status, body } = await get(`${BASE}/api/events`);
