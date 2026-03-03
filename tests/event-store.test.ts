@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import * as fs from "fs/promises";
 import * as path from "path";
 import * as os from "os";
@@ -89,6 +89,43 @@ describe("EventStore", () => {
     );
     const parsed = JSON.parse(content.trim());
     expect(parsed.event_id).toBe(event.event_id);
+  });
+
+  it("posts to sink after successful JSONL write", async () => {
+    const workspaceDir = path.join(tmpDir, "workspace-sink");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const sinkClient = {
+      postEvent: vi.fn().mockResolvedValue(undefined),
+    };
+    const store = new EventStore(undefined, sinkClient);
+    await store.initialize(workspaceDir);
+
+    const event = makeEvent();
+    await store.store(event);
+
+    expect(sinkClient.postEvent).toHaveBeenCalledTimes(1);
+    expect(sinkClient.postEvent).toHaveBeenCalledWith(event);
+    const content = await fs.readFile(path.join(workspaceDir, ".events.jsonl"), "utf-8");
+    expect(content.trim().length).toBeGreaterThan(0);
+  });
+
+  it("warns when sink posting fails without failing store()", async () => {
+    const workspaceDir = path.join(tmpDir, "workspace-sink-failure");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const sinkClient = {
+      postEvent: vi.fn().mockRejectedValue(new Error("sink down")),
+    };
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const store = new EventStore(undefined, sinkClient);
+    await store.initialize(workspaceDir);
+
+    const event = makeEvent();
+    await expect(store.store(event)).resolves.toBeUndefined();
+    expect(sinkClient.postEvent).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const content = await fs.readFile(path.join(workspaceDir, ".events.jsonl"), "utf-8");
+    expect(content.trim().length).toBeGreaterThan(0);
+    warnSpy.mockRestore();
   });
 
   it("loadFromFile parses JSONL correctly", async () => {

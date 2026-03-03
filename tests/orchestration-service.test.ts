@@ -7,6 +7,9 @@ import { makeTicket } from "./fixtures/tickets.js";
 import { makePlan, makeStep, makeDevQaPlan } from "./fixtures/plans.js";
 import { makeResult, makeFailedResult, makeReworkResult } from "./fixtures/results.js";
 
+const eventStoreCtor = vi.fn();
+const eventSinkCtor = vi.fn();
+
 // Mock all sub-services using class syntax so they work with `new`
 // Mock PlannerFactory — returns a mock planner with generatePlan/planRework
 vi.mock("../src/service/runtime/planner-factory.js", () => ({
@@ -72,7 +75,18 @@ vi.mock("../src/service/event-store.js", () => ({
     getAll = vi.fn().mockResolvedValue([]);
     getByRunId = vi.fn().mockResolvedValue([]);
     getByType = vi.fn().mockResolvedValue([]);
-    constructor(..._args: any[]) {}
+    constructor(...args: any[]) {
+      eventStoreCtor(...args);
+    }
+  },
+}));
+
+vi.mock("../src/service/event-sink-client.js", () => ({
+  EventSinkClient: class {
+    postEvent = vi.fn();
+    constructor(url: string) {
+      eventSinkCtor(url);
+    }
   },
 }));
 
@@ -98,6 +112,7 @@ describe("OrchestrationService", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    delete process.env.SPRINTFOUNDRY_EVENT_SINK_URL;
 
     service = new OrchestrationService(
       makePlatformConfig(),
@@ -110,6 +125,22 @@ describe("OrchestrationService", () => {
     mockTicketFetcher = (service as any).tickets;
     mockGitManager = (service as any).git;
     mockSessionStore = (service as any).sessions;
+  });
+
+  it("constructs EventStore without sink client when sink env is unset", () => {
+    expect(eventSinkCtor).not.toHaveBeenCalled();
+    expect(eventStoreCtor).toHaveBeenCalledTimes(1);
+    expect(eventStoreCtor.mock.calls[0][0]).toBe(makePlatformConfig().events_dir);
+    expect(eventStoreCtor.mock.calls[0][1]).toBeUndefined();
+  });
+
+  it("constructs EventStore with sink client when sink env is set", () => {
+    process.env.SPRINTFOUNDRY_EVENT_SINK_URL = "https://sink.example/events";
+    new OrchestrationService(makePlatformConfig(), makeProjectConfig());
+
+    expect(eventSinkCtor).toHaveBeenCalledWith("https://sink.example/events");
+    expect(eventStoreCtor).toHaveBeenCalledTimes(2);
+    expect(eventStoreCtor.mock.calls[1][1]).toBeDefined();
   });
 
   it("handleTask with source=prompt creates ticket from prompt text", async () => {

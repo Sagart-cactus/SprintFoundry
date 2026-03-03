@@ -33,6 +33,7 @@ import { parse as parseYaml } from "yaml";
 import { PlanValidator } from "./plan-validator.js";
 import { AgentRunner } from "./agent-runner.js";
 import { EventStore } from "./event-store.js";
+import { EventSinkClient } from "./event-sink-client.js";
 import { WorkspaceManager } from "./workspace-manager.js";
 import { TicketFetcher } from "./ticket-fetcher.js";
 import { GitManager } from "./git-manager.js";
@@ -81,7 +82,9 @@ export class OrchestrationService {
     this.validator = new PlanValidator(platformConfig, projectConfig);
     this.agentRunner = new AgentRunner(platformConfig, projectConfig);
     this.plannerRuntime = new PlannerFactory().create(platformConfig, projectConfig);
-    this.events = new EventStore(platformConfig.events_dir);
+    const eventSinkUrl = process.env.SPRINTFOUNDRY_EVENT_SINK_URL?.trim();
+    const eventSinkClient = eventSinkUrl ? new EventSinkClient(eventSinkUrl) : undefined;
+    this.events = new EventStore(platformConfig.events_dir, eventSinkClient);
     this.workspace = new WorkspaceManager(projectConfig);
     this.tickets = new TicketFetcher(projectConfig.integrations);
     this.git = new GitManager(projectConfig.repo, projectConfig.branch_strategy);
