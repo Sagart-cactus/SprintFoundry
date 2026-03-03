@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EventSinkClient, createEventSinkClient } from "../src/service/event-sink-client.js";
-import type { IntegrationConfig, TaskEvent } from "../src/shared/types.js";
+import type {
+  IntegrationConfig,
+  RunSessionMetadata,
+  TaskEvent,
+} from "../src/shared/types.js";
 
 const baseEvent: TaskEvent = {
   event_id: "evt-1",
@@ -8,6 +12,27 @@ const baseEvent: TaskEvent = {
   event_type: "task.created",
   timestamp: new Date("2026-01-01T00:00:00.000Z"),
   data: { ticketId: "SF-123" },
+};
+
+const baseRun: RunSessionMetadata = {
+  run_id: "run-1",
+  project_id: "proj-1",
+  ticket_id: "SF-123",
+  ticket_source: "github",
+  ticket_title: "Test run",
+  status: "executing",
+  current_step: 1,
+  total_steps: 3,
+  plan_classification: "new_feature",
+  workspace_path: "/tmp/ws",
+  branch: "feat/test",
+  pr_url: null,
+  total_tokens: 123,
+  total_cost_usd: 0.5,
+  created_at: "2026-01-01T00:00:00.000Z",
+  updated_at: "2026-01-01T00:00:00.000Z",
+  completed_at: null,
+  error: null,
 };
 
 afterEach(() => {
@@ -60,6 +85,32 @@ describe("EventSinkClient", () => {
 
     client.emit(baseEvent);
     await Promise.resolve();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("upserts runs to /v1/runs/upsert", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 200 }));
+    const client = new EventSinkClient("https://sink.example/events", fetchMock);
+
+    await client.upsertRun(baseRun);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://sink.example/v1/runs/upsert",
+      expect.objectContaining({
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(baseRun),
+      }),
+    );
+  });
+
+  it("upsertRun is a no-op when event sink URL is unset", async () => {
+    const fetchMock = vi.fn<typeof fetch>();
+    const client = new EventSinkClient(undefined, fetchMock);
+
+    await client.upsertRun(baseRun);
 
     expect(fetchMock).not.toHaveBeenCalled();
   });

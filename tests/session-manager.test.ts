@@ -1,9 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "fs/promises";
 import * as path from "path";
 import * as os from "os";
 import { SessionManager } from "../src/service/session-manager.js";
 import type { TaskRun, RunSessionMetadata } from "../src/shared/types.js";
+import type { EventSinkClient } from "../src/service/event-sink-client.js";
 
 // ---------- Helpers ----------
 
@@ -70,6 +71,58 @@ describe("SessionManager", () => {
     expect(session!.branch).toBe("feat/test");
     expect(session!.total_tokens).toBe(0);
     expect(session!.total_cost_usd).toBe(0);
+  });
+
+  it("writes local JSON before calling sink upsert when configured", async () => {
+    const sinkClient: Pick<EventSinkClient, "upsertRun"> = {
+      upsertRun: vi.fn(async (session) => {
+        const filePath = path.join(testDir, `${session.run_id}.json`);
+        const raw = await fs.readFile(filePath, "utf-8");
+        const parsed = JSON.parse(raw) as RunSessionMetadata;
+        expect(parsed.run_id).toBe(session.run_id);
+      }),
+    };
+    const mgr = new SessionManager(testDir, sinkClient);
+    const run = makeRun({ run_id: "run-with-sink" });
+
+    await mgr.persist(run);
+
+    expect(sinkClient.upsertRun).toHaveBeenCalledTimes(1);
+    expect(sinkClient.upsertRun).toHaveBeenCalledWith(
+      expect.objectContaining({ run_id: "run-with-sink" })
+    );
+  });
+
+  it("persists locally when sink is not configured", async () => {
+    const mgr = new SessionManager(testDir);
+    const run = makeRun({ run_id: "run-no-sink" });
+
+    await mgr.persist(run);
+
+    const filePath = path.join(testDir, "run-no-sink.json");
+    const raw = await fs.readFile(filePath, "utf-8");
+    const parsed = JSON.parse(raw) as RunSessionMetadata;
+    expect(parsed.run_id).toBe("run-no-sink");
+  });
+
+  it("does not fail local persistence when sink upsert fails", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const sinkClient: Pick<EventSinkClient, "upsertRun"> = {
+      upsertRun: vi.fn().mockRejectedValue(new Error("sink down")),
+    };
+    const mgr = new SessionManager(testDir, sinkClient);
+    const run = makeRun({ run_id: "run-sink-failure" });
+
+    await expect(mgr.persist(run)).resolves.toBeUndefined();
+
+    const session = await mgr.get("run-sink-failure");
+    expect(session).not.toBeNull();
+    expect(sinkClient.upsertRun).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("[session-sink] Failed to upsert run run-sink-failure")
+    );
+
+    warnSpy.mockRestore();
   });
 
   it("updates an existing session on re-persist", async () => {
@@ -180,6 +233,26 @@ describe("SessionManager", () => {
     const session = await mgr.get("run-cancel");
     expect(session!.status).toBe("cancelled");
     expect(session!.ticket_id).toBe("TEST-1"); // unchanged
+  });
+
+  it("updateStatus succeeds even when sink upsert fails", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const sinkClient: Pick<EventSinkClient, "upsertRun"> = {
+      upsertRun: vi.fn().mockRejectedValue(new Error("sink update failed")),
+    };
+    const mgr = new SessionManager(testDir, sinkClient);
+    const run = makeRun({ run_id: "run-update-sink-failure", status: "executing" });
+
+    await mgr.persist(run);
+    const updated = await mgr.updateStatus("run-update-sink-failure", "cancelled");
+
+    expect(updated).toBe(true);
+    const session = await mgr.get("run-update-sink-failure");
+    expect(session!.status).toBe("cancelled");
+    expect(sinkClient.upsertRun).toHaveBeenCalledTimes(2);
+    expect(warnSpy).toHaveBeenCalled();
+
+    warnSpy.mockRestore();
   });
 
   it("updateStatus returns false for nonexistent session", async () => {

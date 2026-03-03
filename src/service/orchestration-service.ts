@@ -90,7 +90,7 @@ export class OrchestrationService {
     this.git = new GitManager(projectConfig.repo, projectConfig.branch_strategy);
     this.notifications = new NotificationService(projectConfig.integrations);
     this.sessions = new RuntimeSessionStore();
-    this.sessionManager = new SessionManager();
+    this.sessionManager = new SessionManager(undefined, eventSinkClient);
 
     // Initialize lifecycle manager if an SCM plugin is available
     const scmPlugin = this.registry?.getFirst<SCMPlugin>("scm") ?? null;
