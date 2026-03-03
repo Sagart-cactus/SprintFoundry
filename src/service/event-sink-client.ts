@@ -15,14 +15,24 @@ export class EventSinkClient {
     if (!this.url) return;
 
     // fire-and-forget by design: failures should never block the caller.
-    void this.postWithRetry(event).catch(() => undefined);
+    void this.postEvent(event).catch(() => undefined);
   }
 
-  private async postWithRetry(event: TaskEvent): Promise<void> {
+  async postEvent(event: TaskEvent): Promise<void> {
+    if (!this.url) return;
+
+    const delivered = await this.postWithRetry(event);
+    if (!delivered) {
+      throw new Error("Failed to post event to sink");
+    }
+  }
+
+  private async postWithRetry(event: TaskEvent): Promise<boolean> {
     for (let attempt = 0; attempt <= EVENT_SINK_RETRY_COUNT; attempt += 1) {
       const delivered = await this.postOnce(event);
-      if (delivered) return;
+      if (delivered) return true;
     }
+    return false;
   }
 
   private async postOnce(event: TaskEvent): Promise<boolean> {
