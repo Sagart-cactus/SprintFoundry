@@ -11,24 +11,42 @@ import type {
 import { evaluateGuardrail, type GuardrailToolCall } from "./agent-hooks.js";
 import { runProcess, parseTokenUsage } from "./process-utils.js";
 import type { RuntimeMetadataEnvelope } from "../../shared/types.js";
+import type { RuntimeLogChunk } from "../event-sink-client.js";
+
+const LOG_CHUNK_FLUSH_INTERVAL_MS = 5_000;
+const LOG_CHUNK_MAX_BYTES = 4_096;
+
+interface ActivityDispatcher {
+  hasConsumer: boolean;
+  emit(event: RuntimeActivityEvent): Promise<void>;
+  flushFinal(): Promise<void>;
+}
 
 export class ClaudeCodeRuntime implements AgentRuntime {
   async runStep(config: RuntimeStepContext): Promise<RuntimeStepResult> {
+    const activityDispatcher = this.createActivityDispatcher(config);
     await fs.mkdir(config.workspacePath, { recursive: true });
-    if (config.runtime.mode === "container") {
-      console.warn(
-        "[sprintfoundry] Container mode is deprecated and will be removed in v0.3.0. " +
-        "Use local_process instead."
-      );
-      return this.runContainer(config);
+    try {
+      if (config.runtime.mode === "container") {
+        console.warn(
+          "[sprintfoundry] Container mode is deprecated and will be removed in v0.3.0. " +
+          "Use local_process instead."
+        );
+        return this.runContainer(config);
+      }
+      if (config.runtime.mode === "local_sdk") return this.runSdk(config, activityDispatcher);
+      return this.runLocal(config, activityDispatcher);
+    } finally {
+      await activityDispatcher.flushFinal();
     }
-    if (config.runtime.mode === "local_sdk") return this.runSdk(config);
-    return this.runLocal(config);
   }
 
-  private async runLocal(config: RuntimeStepContext): Promise<RuntimeStepResult> {
+  private async runLocal(
+    config: RuntimeStepContext,
+    activityDispatcher: ActivityDispatcher
+  ): Promise<RuntimeStepResult> {
     // When there is an activity listener, use streaming so the monitor gets per-turn events.
-    if (config.onActivity) return this.runLocalStreaming(config);
+    if (activityDispatcher.hasConsumer) return this.runLocalStreaming(config, activityDispatcher);
 
     const args = this.buildCliArgs(config, "json");
     const paths = this.buildLogPaths(config);
@@ -87,7 +105,10 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     };
   }
 
-  private async runLocalStreaming(config: RuntimeStepContext): Promise<RuntimeStepResult> {
+  private async runLocalStreaming(
+    config: RuntimeStepContext,
+    activityDispatcher: ActivityDispatcher
+  ): Promise<RuntimeStepResult> {
     const paths = this.buildLogPaths(config);
     const args = this.buildCliArgs(config, "stream-json");
     const env: NodeJS.ProcessEnv = {
@@ -178,8 +199,8 @@ export class ClaudeCodeRuntime implements AgentRuntime {
 
           // Emit per-turn activity events (tool calls, file edits, commands, thinking)
           const activities = this.extractActivityEventsFromSdkMessage(msg);
-          for (const activity of activities) {
-            void this.safeEmitActivity(config, activity);
+          for (const activityEvent of activities) {
+            void this.safeEmitActivity(activityDispatcher, activityEvent);
           }
         }
       });
@@ -275,7 +296,10 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     return `Read task details in .agent-task.md and follow CLAUDE.md.`;
   }
 
-  private async runSdk(config: RuntimeStepContext): Promise<RuntimeStepResult> {
+  private async runSdk(
+    config: RuntimeStepContext,
+    activityDispatcher: ActivityDispatcher
+  ): Promise<RuntimeStepResult> {
     const paths = this.buildLogPaths(config);
     const prompts = await this.readPrompts(config.workspacePath);
     const flags = config.cliFlags ?? {};
@@ -334,13 +358,13 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       })) {
         const guardrailViolation = this.findGuardrailViolation(message, config);
         if (guardrailViolation) {
-          await this.emitGuardrailBlock(config, guardrailViolation);
+          await this.emitGuardrailBlock(activityDispatcher, guardrailViolation);
           throw new Error(`Guardrail blocked: ${guardrailViolation.reason ?? "blocked"}`);
         }
         stdout += `${JSON.stringify(message)}\n`;
         const activities = this.extractActivityEventsFromSdkMessage(message);
-        for (const activity of activities) {
-          await this.safeEmitActivity(config, activity);
+        for (const activityEvent of activities) {
+          await this.safeEmitActivity(activityDispatcher, activityEvent);
         }
         if ("session_id" in message && typeof message.session_id === "string") {
           runtimeId = message.session_id;
@@ -471,11 +495,10 @@ export class ClaudeCodeRuntime implements AgentRuntime {
   }
 
   private async emitGuardrailBlock(
-    config: RuntimeStepContext,
+    activityDispatcher: ActivityDispatcher,
     toolCall: GuardrailToolCall & { reason?: string; rule?: string }
   ): Promise<void> {
-    if (!config.onActivity) return;
-    await this.safeEmitActivity(config, {
+    await this.safeEmitActivity(activityDispatcher, {
       type: "agent_guardrail_block",
       data: {
         tool_name: toolCall.tool_name ?? "",
@@ -548,12 +571,11 @@ export class ClaudeCodeRuntime implements AgentRuntime {
   }
 
   private async safeEmitActivity(
-    config: RuntimeStepContext,
+    activityDispatcher: ActivityDispatcher,
     event: RuntimeActivityEvent
   ): Promise<void> {
-    if (!config.onActivity) return;
     try {
-      await config.onActivity(event);
+      await activityDispatcher.emit(event);
     } catch (error) {
       console.warn(
         `[claude-runtime] Failed to emit activity event ${event.type}: ${
@@ -561,6 +583,103 @@ export class ClaudeCodeRuntime implements AgentRuntime {
         }`
       );
     }
+  }
+
+  private createActivityDispatcher(config: RuntimeStepContext): ActivityDispatcher {
+    const callback = config.onActivity;
+    const sinkClient = config.sinkClient;
+    const hasConsumer = Boolean(callback || sinkClient);
+    if (!hasConsumer) {
+      return {
+        hasConsumer: false,
+        emit: async () => undefined,
+        flushFinal: async () => undefined,
+      };
+    }
+
+    let buffer = "";
+    let bufferBytes = 0;
+    let sequence = 0;
+    let timer: NodeJS.Timeout | undefined;
+    let flushChain: Promise<void> = Promise.resolve();
+
+    const clearTimer = () => {
+      if (!timer) return;
+      clearTimeout(timer);
+      timer = undefined;
+    };
+
+    const startTimerIfNeeded = () => {
+      if (!sinkClient || timer || bufferBytes <= 0) return;
+      timer = setTimeout(() => {
+        void queueFlush(false);
+      }, LOG_CHUNK_FLUSH_INTERVAL_MS);
+    };
+
+    const queueFlush = (isFinal: boolean): Promise<void> => {
+      flushChain = flushChain.then(async () => {
+        if (!sinkClient || bufferBytes <= 0) {
+          clearTimer();
+          return;
+        }
+        const chunk = buffer;
+        const byteLength = bufferBytes;
+        buffer = "";
+        bufferBytes = 0;
+        clearTimer();
+        const payload: RuntimeLogChunk = {
+          step_number: config.stepNumber,
+          step_attempt: config.stepAttempt,
+          agent: config.agent,
+          runtime_provider: config.runtime.provider,
+          sequence,
+          chunk,
+          byte_length: byteLength,
+          stream: "activity",
+          is_final: isFinal,
+          timestamp: new Date().toISOString(),
+        };
+        sequence += 1;
+        try {
+          await sinkClient.postLog(payload);
+        } catch (error) {
+          console.warn(
+            `[claude-runtime] Failed to post activity log chunk step=${config.stepNumber} attempt=${config.stepAttempt}: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
+        } finally {
+          startTimerIfNeeded();
+        }
+      });
+      return flushChain;
+    };
+
+    return {
+      hasConsumer: true,
+      emit: async (event: RuntimeActivityEvent) => {
+        if (callback) {
+          await callback(event);
+        }
+        if (!sinkClient) return;
+        const line = `${JSON.stringify({
+          type: event.type,
+          data: event.data,
+          timestamp: new Date().toISOString(),
+        })}\n`;
+        buffer += line;
+        bufferBytes += Buffer.byteLength(line, "utf-8");
+        if (bufferBytes >= LOG_CHUNK_MAX_BYTES) {
+          await queueFlush(false);
+          return;
+        }
+        startTimerIfNeeded();
+      },
+      flushFinal: async () => {
+        clearTimer();
+        await queueFlush(true);
+      },
+    };
   }
 
   private extractActivityEventsFromSdkMessage(message: unknown): RuntimeActivityEvent[] {

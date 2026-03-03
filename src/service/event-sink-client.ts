@@ -7,6 +7,20 @@ import type {
 const EVENT_SINK_TIMEOUT_MS = 2_000;
 const EVENT_SINK_RETRY_COUNT = 1;
 const RUN_UPSERT_PATH = "/v1/runs/upsert";
+const LOG_CHUNK_PATH = "/v1/logs/chunk";
+
+export interface RuntimeLogChunk {
+  step_number: number;
+  step_attempt: number;
+  agent: string;
+  runtime_provider: string;
+  sequence: number;
+  chunk: string;
+  byte_length: number;
+  stream: "activity";
+  is_final: boolean;
+  timestamp: string;
+}
 
 type FetchFn = typeof fetch;
 
@@ -38,6 +52,15 @@ export class EventSinkClient {
     const delivered = await this.postWithRetry(this.resolveRunUpsertUrl(), session);
     if (!delivered) {
       throw new Error("Failed to upsert run to sink");
+    }
+  }
+
+  async postLog(chunk: RuntimeLogChunk): Promise<void> {
+    if (!this.url) return;
+
+    const delivered = await this.postWithRetry(this.resolveLogChunkUrl(), chunk);
+    if (!delivered) {
+      throw new Error("Failed to post log chunk to sink");
     }
   }
 
@@ -87,6 +110,25 @@ export class EventSinkClient {
         return `${trimmed.slice(0, -"/events".length)}${RUN_UPSERT_PATH}`;
       }
       return `${trimmed}${RUN_UPSERT_PATH}`;
+    }
+  }
+
+  private resolveLogChunkUrl(): string {
+    if (!this.url) return LOG_CHUNK_PATH;
+
+    try {
+      const parsed = new URL(this.url);
+      parsed.pathname = LOG_CHUNK_PATH;
+      parsed.search = "";
+      parsed.hash = "";
+      return parsed.toString();
+    } catch {
+      const trimmed = this.url.replace(/\/+$/, "");
+      if (trimmed.endsWith(LOG_CHUNK_PATH)) return trimmed;
+      if (trimmed.endsWith("/events")) {
+        return `${trimmed.slice(0, -"/events".length)}${LOG_CHUNK_PATH}`;
+      }
+      return `${trimmed}${LOG_CHUNK_PATH}`;
     }
   }
 }

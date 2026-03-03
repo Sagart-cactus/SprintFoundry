@@ -5,6 +5,7 @@ import type {
   RunSessionMetadata,
   TaskEvent,
 } from "../src/shared/types.js";
+import type { RuntimeLogChunk } from "../src/service/event-sink-client.js";
 
 const baseEvent: TaskEvent = {
   event_id: "evt-1",
@@ -33,6 +34,19 @@ const baseRun: RunSessionMetadata = {
   updated_at: "2026-01-01T00:00:00.000Z",
   completed_at: null,
   error: null,
+};
+
+const baseChunk: RuntimeLogChunk = {
+  step_number: 2,
+  step_attempt: 1,
+  agent: "developer",
+  runtime_provider: "codex",
+  sequence: 0,
+  chunk: "{\"type\":\"agent_command_run\"}\n",
+  byte_length: 30,
+  stream: "activity",
+  is_final: false,
+  timestamp: "2026-01-01T00:00:00.000Z",
 };
 
 afterEach(() => {
@@ -111,6 +125,32 @@ describe("EventSinkClient", () => {
     const client = new EventSinkClient(undefined, fetchMock);
 
     await client.upsertRun(baseRun);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("posts log chunks to /v1/logs/chunk", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 200 }));
+    const client = new EventSinkClient("https://sink.example/events", fetchMock);
+
+    await client.postLog(baseChunk);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://sink.example/v1/logs/chunk",
+      expect.objectContaining({
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(baseChunk),
+      }),
+    );
+  });
+
+  it("postLog is a no-op when event sink URL is unset", async () => {
+    const fetchMock = vi.fn<typeof fetch>();
+    const client = new EventSinkClient(undefined, fetchMock);
+
+    await client.postLog(baseChunk);
 
     expect(fetchMock).not.toHaveBeenCalled();
   });

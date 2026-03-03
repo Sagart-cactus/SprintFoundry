@@ -318,6 +318,36 @@ describe("CodexRuntime local_sdk mode", () => {
     );
   });
 
+  it("posts buffered activity log chunks when sink client is configured", async () => {
+    mockRunStreamedFn.mockResolvedValueOnce(
+      buildStreamedTurn({
+        usage: { input_tokens: 10, cached_input_tokens: 0, output_tokens: 3 },
+        items: [{ id: "cmd-2", type: "command_execution", command: "npm run test" }],
+      })
+    );
+    const postLog = vi.fn().mockResolvedValue(undefined);
+
+    const runtime = new CodexRuntime();
+    await runtime.runStep(
+      makeContext(tmpDir, {
+        sinkClient: { postLog },
+      })
+    );
+
+    expect(postLog).toHaveBeenCalled();
+    expect(postLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        step_number: 1,
+        step_attempt: 1,
+        agent: "developer",
+        runtime_provider: "codex",
+        stream: "activity",
+      })
+    );
+    const payload = postLog.mock.calls.at(-1)?.[0];
+    expect(payload.chunk).toContain("\"type\":\"agent_command_run\"");
+  });
+
   it("blocks command executions that violate guardrails", async () => {
     mockRunStreamedFn.mockResolvedValueOnce(
       buildStreamedTurn({
