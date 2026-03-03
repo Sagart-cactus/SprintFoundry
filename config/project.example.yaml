@@ -157,13 +157,11 @@ integrations:
 #     enabled: true
 #     webhook_secret: ${SPRINTFOUNDRY_GITHUB_WEBHOOK_SECRET}
 #     allowed_events:
-#       - issues.opened
-#       - issues.labeled
 #       - issue_comment.created
 #     label_trigger: sf:auto-run
 #     command_trigger: /sf-run
-#     require_command: false
-#     dedupe_window_minutes: 30
+#     require_command: true
+#     dedupe_window_minutes: 1440
 #   linear:
 #     enabled: true
 #     webhook_secret: ${SPRINTFOUNDRY_LINEAR_WEBHOOK_SECRET}

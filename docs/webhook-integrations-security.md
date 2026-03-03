@@ -58,13 +58,11 @@ autoexecute:
     enabled: true
     webhook_secret: ${SPRINTFOUNDRY_GITHUB_WEBHOOK_SECRET}
     allowed_events:
-      - issues.opened
-      - issues.labeled
       - issue_comment.created
     label_trigger: sf:auto-run
     command_trigger: /sf-run
-    require_command: false
-    dedupe_window_minutes: 30
+    require_command: true
+    dedupe_window_minutes: 1440
   linear:
     enabled: true
     webhook_secret: ${SPRINTFOUNDRY_LINEAR_WEBHOOK_SECRET}
@@ -81,7 +79,8 @@ Notes:
 
 - `autoexecute.enabled` must be `true`.
 - You can enable only GitHub, only Linear, or both.
-- Prefer `require_command: true` for high-safety production rollout.
+- `issue_comment.created` + `require_command: true` is the secure default for GitHub.
+- For Linear autoexecute, set `integrations.ticket_source.config.team_id` or `team_key` so webhook routing is unambiguous.
 
 ## 4. Environment Variables
 

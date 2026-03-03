@@ -176,6 +176,136 @@ describe("OrchestrationService", () => {
     expect(mockAgentRunner.run).toHaveBeenCalled();
   });
 
+  it("resumeTask resumes from requested failed step and injects operator prompt", async () => {
+    const workspacePath = await fs.mkdtemp(path.join(os.tmpdir(), "sf-resume-test-"));
+    const plan = makePlan({
+      steps: [
+        makeStep({ step_number: 1, agent: "developer", task: "Build baseline" }),
+        makeStep({ step_number: 2, agent: "qa", task: "Run tests", depends_on: [1] }),
+      ],
+    });
+
+    const runState = {
+      run_id: "run-resume-1",
+      project_id: "test-project",
+      ticket: makeTicket(),
+      plan,
+      validated_plan: plan,
+      status: "failed",
+      steps: [
+        {
+          step_number: 1,
+          agent: "developer",
+          task: "Build baseline",
+          status: "completed",
+          container_id: "session-dev-1",
+          tokens_used: 100,
+          cost_usd: 0.01,
+          started_at: new Date().toISOString(),
+          completed_at: new Date().toISOString(),
+          result: makeResult({ summary: "Baseline complete" }),
+          rework_count: 0,
+          runtime_metadata: null,
+        },
+        {
+          step_number: 2,
+          agent: "qa",
+          task: "Run tests",
+          status: "failed",
+          container_id: "session-qa-1",
+          tokens_used: 80,
+          cost_usd: 0.01,
+          started_at: new Date().toISOString(),
+          completed_at: new Date().toISOString(),
+          result: makeFailedResult(),
+          rework_count: 0,
+          runtime_metadata: null,
+        },
+      ],
+      total_tokens_used: 180,
+      total_cost_usd: 0.02,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      completed_at: new Date().toISOString(),
+      pr_url: null,
+      error: "QA failed",
+    };
+
+    const stateDir = path.join(workspacePath, ".sprintfoundry");
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, "run-state.json"),
+      JSON.stringify(runState, null, 2),
+      "utf-8"
+    );
+
+    (service as any).sessionManager.get = vi.fn().mockResolvedValue({
+      run_id: "run-resume-1",
+      workspace_path: workspacePath,
+      status: "failed",
+    });
+
+    mockAgentRunner.run.mockResolvedValue({
+      agentResult: makeResult({ summary: "QA now passing" }),
+      tokens_used: 40,
+      cost_usd: 0.005,
+      duration_seconds: 3,
+      container_id: "session-qa-2",
+    });
+
+    const run = await service.resumeTask("run-resume-1", {
+      step: 2,
+      prompt: "Focus on flaky snapshot tests and update snapshots if needed.",
+    });
+
+    expect(run.status).toBe("completed");
+    expect(mockAgentRunner.run).toHaveBeenCalledTimes(1);
+    const call = mockAgentRunner.run.mock.calls[0][0];
+    expect(call.stepNumber).toBe(2);
+    expect(call.task).toContain("Operator Resume Prompt");
+    expect(call.task).toContain("flaky snapshot tests");
+  });
+
+  it("resumeTask rejects non-failed runs", async () => {
+    const workspacePath = await fs.mkdtemp(path.join(os.tmpdir(), "sf-resume-test-"));
+    const plan = makePlan({
+      steps: [makeStep({ step_number: 1, agent: "developer", task: "Build baseline" })],
+    });
+    const runState = {
+      run_id: "run-resume-2",
+      project_id: "test-project",
+      ticket: makeTicket(),
+      plan,
+      validated_plan: plan,
+      status: "completed",
+      steps: [],
+      total_tokens_used: 0,
+      total_cost_usd: 0,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      completed_at: new Date().toISOString(),
+      pr_url: null,
+      error: null,
+    };
+    const stateDir = path.join(workspacePath, ".sprintfoundry");
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, "run-state.json"),
+      JSON.stringify(runState, null, 2),
+      "utf-8"
+    );
+
+    (service as any).sessionManager.get = vi.fn().mockResolvedValue({
+      run_id: "run-resume-2",
+      workspace_path: workspacePath,
+      status: "completed",
+    });
+
+    await expect(service.resumeTask("run-resume-2")).rejects.toThrow(
+      /Only failed\/cancelled runs can be resumed/
+    );
+  });
+
   it("persists runtime activity events emitted by SDK runtimes", async () => {
     const plan = makePlan({
       steps: [makeStep({ step_number: 1, agent: "developer", task: "Implement feature" })],

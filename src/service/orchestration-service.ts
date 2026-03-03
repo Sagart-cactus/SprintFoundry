@@ -28,6 +28,7 @@ import type {
   RuntimeMetadataEnvelope,
   ProjectStack,
   TaskSource,
+  RunSessionMetadata,
 } from "../shared/types.js";
 import { parse as parseYaml } from "yaml";
 import { PlanValidator } from "./plan-validator.js";
@@ -53,6 +54,20 @@ import { LifecycleManager, defaultLifecycleConfig } from "./lifecycle-manager.js
 import { NotificationRouter, defaultRoutingConfig } from "./notification-router.js";
 import { MetricsService } from "./metrics-service.js";
 import { trace, type Span } from "@opentelemetry/api";
+
+const RUN_STATE_DIR = ".sprintfoundry";
+const RUN_STATE_FILE = "run-state.json";
+
+interface ExecutePlanOptions {
+  initialCompletedSteps?: Set<number>;
+  resumeFromStep?: number;
+  operatorPrompt?: string;
+}
+
+interface ResumeTaskOptions {
+  step?: number;
+  prompt?: string;
+}
 
 export class OrchestrationService {
   private validator: PlanValidator;
@@ -114,6 +129,11 @@ export class OrchestrationService {
   // ---- Session persistence (fire-and-forget, never fails the run) ----
 
   private persistSession(run: TaskRun, extra?: { workspace_path?: string; branch?: string }): void {
+    if (extra?.workspace_path) {
+      this.persistRunState(run, extra.workspace_path).catch((err) => {
+        console.warn(`[session] Failed to persist run state ${run.run_id}: ${err instanceof Error ? err.message : String(err)}`);
+      });
+    }
     this.sessionManager.persist(run, extra).catch((err) => {
       console.warn(`[session] Failed to persist session ${run.run_id}: ${err instanceof Error ? err.message : String(err)}`);
     });
@@ -219,15 +239,57 @@ export class OrchestrationService {
   ): Promise<boolean> {
     const wsPlugin = this.getWorkspacePlugin();
     if (wsPlugin) {
-      return wsPlugin.commitStepChanges(workspacePath, runId, stepNumber, agent);
+      try {
+        return await wsPlugin.commitStepChanges(workspacePath, runId, stepNumber, agent);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!message.includes("Workspace not initialized")) throw error;
+        console.warn("[workspace] Plugin workspace state unavailable for checkpoint commit. Falling back to git manager.");
+      }
     }
     return this.git.commitStepCheckpoint(workspacePath, runId, stepNumber, agent);
   }
 
   private async createPullRequest(workspacePath: string, run: TaskRun): Promise<string> {
     const wsPlugin = this.getWorkspacePlugin();
-    if (wsPlugin) return wsPlugin.createPullRequest(workspacePath, run);
+    if (wsPlugin) {
+      try {
+        return await wsPlugin.createPullRequest(workspacePath, run);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!message.includes("Workspace not initialized")) throw error;
+        console.warn("[workspace] Plugin workspace state unavailable for PR creation. Falling back to git manager.");
+      }
+    }
     return this.git.createPullRequest(workspacePath, run);
+  }
+
+  private async finalizeCompletedRun(run: TaskRun, workspacePath: string): Promise<void> {
+    if (!run.pr_url) {
+      const gitStart = Date.now();
+      try {
+        const prUrl = await this.createPullRequest(workspacePath, run);
+        run.pr_url = prUrl;
+        await this.emitEvent(run.run_id, "pr.created", { prUrl });
+        this.metricsService.recordGitOperation({ operation: "pr_create", status: "success", durationMs: Date.now() - gitStart });
+        this.metricsService.recordPrCreated({ project_id: this.projectConfig.project_id, status: "success" });
+      } catch (prErr) {
+        this.metricsService.recordGitOperation({ operation: "pr_create", status: "error", durationMs: Date.now() - gitStart });
+        this.metricsService.recordPrCreated({ project_id: this.projectConfig.project_id, status: "error" });
+        throw prErr;
+      }
+    }
+
+    await this.updateTicketStatus(run.ticket, "in_review", run.pr_url ?? undefined);
+    await this.emitEvent(run.run_id, "ticket.updated", { status: "in_review" });
+
+    await this.sendNotification(
+      `Task ${run.ticket.id} completed. PR: ${run.pr_url ?? "n/a"}`
+    );
+    this.persistSession(run, { workspace_path: workspacePath });
+
+    // Start lifecycle monitoring for this PR (non-blocking)
+    this.startLifecycleWatch(run, workspacePath);
   }
 
   // ---- Main entry point ----
@@ -249,6 +311,91 @@ export class OrchestrationService {
         }
       }
     );
+  }
+
+  async resumeTask(
+    runId: string,
+    options?: ResumeTaskOptions
+  ): Promise<TaskRun> {
+    return this.tracer.startActiveSpan(
+      "task.resume",
+      { attributes: { project_id: this.projectConfig.project_id, run_id: runId } },
+      async (span) => {
+        try {
+          return await this.resumeTaskBody(runId, options, span);
+        } finally {
+          span.end();
+        }
+      }
+    );
+  }
+
+  private async resumeTaskBody(
+    runId: string,
+    options: ResumeTaskOptions | undefined,
+    span: Span
+  ): Promise<TaskRun> {
+    const session = await this.sessionManager.get(runId);
+    if (!session) {
+      throw new Error(`Session not found for run: ${runId}`);
+    }
+    if (!session.workspace_path) {
+      throw new Error(`Run ${runId} does not have a workspace path; resume is not available.`);
+    }
+
+    const workspacePath = session.workspace_path;
+    const run = (await this.loadRunState(workspacePath, runId))
+      ?? (await this.rebuildRunStateFromEvents(workspacePath, session));
+    if (!run) {
+      throw new Error(`Run state not found for run: ${runId}. Expected ${path.join(workspacePath, RUN_STATE_DIR, RUN_STATE_FILE)}`);
+    }
+    if (run.status !== "failed" && run.status !== "cancelled") {
+      throw new Error(`Run ${runId} status is '${run.status}'. Only failed/cancelled runs can be resumed.`);
+    }
+
+    const plan = run.validated_plan ?? run.plan;
+    if (!plan) {
+      throw new Error(`Run ${runId} has no execution plan to resume.`);
+    }
+
+    await this.events.initialize(workspacePath);
+
+    const resumeFromStep = this.resolveResumeStep(run, plan, options?.step);
+    const initialCompletedSteps = this.buildInitialCompletedSteps(run, plan, resumeFromStep);
+    span.setAttribute("resume_step", resumeFromStep);
+
+    run.status = "executing";
+    run.error = null;
+    run.completed_at = null;
+    run.updated_at = new Date();
+
+    await this.emitEvent(run.run_id, "task.started", {
+      resumed: true,
+      resume_step: resumeFromStep,
+      additional_prompt: Boolean(options?.prompt?.trim()),
+    });
+    this.persistSession(run, { workspace_path: workspacePath });
+
+    try {
+      await this.executePlan(run, plan, workspacePath, {
+        initialCompletedSteps,
+        resumeFromStep,
+        operatorPrompt: options?.prompt?.trim() || undefined,
+      });
+
+      if ((run.status as string) === "completed") {
+        await this.finalizeCompletedRun(run, workspacePath);
+      }
+      return run;
+    } catch (error) {
+      run.status = "failed";
+      run.error = error instanceof Error ? error.message : String(error);
+      await this.emitEvent(run.run_id, "task.failed", { error: run.error, resumed: true });
+      this.persistSession(run, { workspace_path: workspacePath });
+      return run;
+    } finally {
+      await this.events.close();
+    }
   }
 
   private async handleTaskBody(
@@ -380,31 +527,7 @@ export class OrchestrationService {
 
       // 7. If all passed, create PR and update ticket
       if ((run.status as string) === "completed") {
-        const gitStart = Date.now();
-        let prCreationStatus: "success" | "error" = "success";
-        try {
-          const prUrl = await this.createPullRequest(workspacePath, run);
-          run.pr_url = prUrl;
-          await this.emitEvent(run.run_id, "pr.created", { prUrl });
-          this.metricsService.recordGitOperation({ operation: "pr_create", status: "success", durationMs: Date.now() - gitStart });
-          this.metricsService.recordPrCreated({ project_id: this.projectConfig.project_id, status: "success" });
-        } catch (prErr) {
-          prCreationStatus = "error";
-          this.metricsService.recordGitOperation({ operation: "pr_create", status: "error", durationMs: Date.now() - gitStart });
-          this.metricsService.recordPrCreated({ project_id: this.projectConfig.project_id, status: "error" });
-          throw prErr;
-        }
-
-        await this.updateTicketStatus(ticket, "in_review", run.pr_url!);
-        await this.emitEvent(run.run_id, "ticket.updated", { status: "in_review" });
-
-        await this.sendNotification(
-          `Task ${ticket.id} completed. PR: ${run.pr_url}`
-        );
-        this.persistSession(run, { workspace_path: workspacePath });
-
-        // Start lifecycle monitoring for this PR (non-blocking)
-        this.startLifecycleWatch(run, workspacePath);
+        await this.finalizeCompletedRun(run, workspacePath);
       }
 
       this.metricsService.recordRunCompleted({
@@ -518,9 +641,15 @@ export class OrchestrationService {
   private async executePlan(
     run: TaskRun,
     plan: ExecutionPlan,
-    workspacePath: string
+    workspacePath: string,
+    options?: ExecutePlanOptions
   ): Promise<void> {
-    const completed = new Set<number>();
+    const planStepNumbers = new Set(plan.steps.map((s) => s.step_number));
+    const completed = new Set<number>(
+      options?.initialCompletedSteps
+        ? Array.from(options.initialCompletedSteps).filter((stepNum) => planStepNumbers.has(stepNum))
+        : []
+    );
     const reworkCounts = new Map<number, number>();
 
     // Build dependency graph
@@ -537,6 +666,7 @@ export class OrchestrationService {
       if (ready.length === 0) {
         run.status = "failed";
         run.error = "Deadlock: no executable steps remaining";
+        this.persistSession(run, { workspace_path: workspacePath });
         return;
       }
 
@@ -563,7 +693,19 @@ export class OrchestrationService {
                 stepWorkspace = await wsPlugin!.createSubWorktree!(workspacePath, step.step_number);
                 console.log(`[parallel] Step ${step.step_number} using sub-worktree: ${stepWorkspace}`);
               }
-              const result = await this.executeStep(run, step, stepWorkspace, reworkCounts, reworkSignals);
+              const operatorPrompt =
+                options?.operatorPrompt && options.resumeFromStep === step.step_number
+                  ? options.operatorPrompt
+                  : undefined;
+              const result = await this.executeStep(
+                run,
+                step,
+                stepWorkspace,
+                reworkCounts,
+                reworkSignals,
+                undefined,
+                operatorPrompt
+              );
               if (useSubWorktrees && result === "completed") {
                 await wsPlugin!.mergeSubWorktree!(workspacePath, stepWorkspace, step.step_number);
                 console.log(`[parallel] Step ${step.step_number} merged back to parent.`);
@@ -586,6 +728,7 @@ export class OrchestrationService {
         for (let i = 0; i < parallelGroup.length; i++) {
           if (results[i] === "failed") {
             run.status = "failed";
+            this.persistSession(run, { workspace_path: workspacePath });
             return;
           }
         }
@@ -600,6 +743,7 @@ export class OrchestrationService {
             await this.sendNotification(
               `Parallel group exceeded max rework cycles (${maxRework}). Escalating.`
             );
+            this.persistSession(run, { workspace_path: workspacePath });
             return;
           }
 
@@ -648,6 +792,7 @@ export class OrchestrationService {
             );
             if (reworkResult === "failed") {
               run.status = "failed";
+              this.persistSession(run, { workspace_path: workspacePath });
               return;
             }
           }
@@ -664,12 +809,17 @@ export class OrchestrationService {
       } else {
         // Execute sequentially
         const step = ready[0];
-        const result = await this.executeStep(run, step, workspacePath, reworkCounts);
+        const operatorPrompt =
+          options?.operatorPrompt && options.resumeFromStep === step.step_number
+            ? options.operatorPrompt
+            : undefined;
+        const result = await this.executeStep(run, step, workspacePath, reworkCounts, undefined, undefined, operatorPrompt);
 
         if (result === "completed") {
           completed.add(step.step_number);
         } else if (result === "failed") {
           run.status = "failed";
+          this.persistSession(run, { workspace_path: workspacePath });
           return;
         }
       }
@@ -737,14 +887,23 @@ export class OrchestrationService {
     workspacePath: string,
     reworkCounts: Map<number, number>,
     parallelReworkSignals?: Array<{ step: PlanStep; agentResult: AgentResult; currentRework: number }>,
-    resumeReason?: string
+    resumeReason?: string,
+    operatorPrompt?: string
   ): Promise<"completed" | "failed" | "rework"> {
     return this.tracer.startActiveSpan(
       "agent.step",
       { attributes: { run_id: run.run_id, step_id: String(step.step_number), "step.agent": step.agent } },
       async (span) => {
         try {
-          return await this.executeStepBody(run, step, workspacePath, reworkCounts, parallelReworkSignals, resumeReason);
+          return await this.executeStepBody(
+            run,
+            step,
+            workspacePath,
+            reworkCounts,
+            parallelReworkSignals,
+            resumeReason,
+            operatorPrompt
+          );
         } finally {
           span.end();
         }
@@ -758,16 +917,21 @@ export class OrchestrationService {
     workspacePath: string,
     reworkCounts: Map<number, number>,
     parallelReworkSignals?: Array<{ step: PlanStep; agentResult: AgentResult; currentRework: number }>,
-    resumeReason?: string
+    resumeReason?: string,
+    operatorPrompt?: string
   ): Promise<"completed" | "failed" | "rework"> {
     const budget = this.resolveBudget(run.ticket);
     const maxRework = budget.max_rework_cycles ?? this.platformConfig.defaults.max_rework_cycles;
     const currentRework = reworkCounts.get(step.step_number) ?? 0;
+    const effectiveTask = operatorPrompt
+      ? `${step.task}\n\n## Operator Resume Prompt\n${operatorPrompt}`
+      : step.task;
 
     // Initialize step execution record
     const stepExec: StepExecution = {
       step_number: step.step_number,
       agent: step.agent,
+      task: effectiveTask,
       status: "running",
       container_id: null,
       tokens_used: 0,
@@ -809,7 +973,8 @@ export class OrchestrationService {
     await this.emitEvent(run.run_id, "step.started", {
       step: step.step_number,
       agent: step.agent,
-      task: step.task,
+      task: effectiveTask,
+      ...(operatorPrompt ? { operator_prompt: operatorPrompt } : {}),
       ...initialResumeTelemetry,
       runtime_metadata: runtimeMetadata,
     });
@@ -876,7 +1041,7 @@ export class OrchestrationService {
         stepNumber: step.step_number,
         stepAttempt: currentRework + 1,
         agent: step.agent,
-        task: step.task,
+        task: effectiveTask,
         context_inputs: step.context_inputs,
         workspacePath,
         modelConfig,
@@ -1044,7 +1209,15 @@ export class OrchestrationService {
             }
 
             reworkCounts.set(step.step_number, currentRework + 1);
-            return this.executeStep(run, step, workspacePath, reworkCounts, undefined, "quality_gate_retry");
+            return this.executeStep(
+              run,
+              step,
+              workspacePath,
+              reworkCounts,
+              undefined,
+              "quality_gate_retry",
+              operatorPrompt
+            );
           }
         }
 
@@ -1118,7 +1291,15 @@ export class OrchestrationService {
         }
 
         // Retry the original step
-        return this.executeStep(run, step, workspacePath, reworkCounts, undefined, "rework_retry");
+        return this.executeStep(
+          run,
+          step,
+          workspacePath,
+          reworkCounts,
+          undefined,
+          "rework_retry",
+          operatorPrompt
+        );
       }
 
       // Blocked or failed
@@ -1574,6 +1755,204 @@ export class OrchestrationService {
 
   // ---- Helper Methods ----
 
+  private getRunStatePath(workspacePath: string): string {
+    return path.join(workspacePath, RUN_STATE_DIR, RUN_STATE_FILE);
+  }
+
+  private async persistRunState(run: TaskRun, workspacePath: string): Promise<void> {
+    const statePath = this.getRunStatePath(workspacePath);
+    await fs.mkdir(path.dirname(statePath), { recursive: true });
+    const payload = this.serializeRun(run);
+    await fs.writeFile(statePath, JSON.stringify(payload, null, 2), "utf-8");
+  }
+
+  private async loadRunState(workspacePath: string, runId: string): Promise<TaskRun | null> {
+    const statePath = this.getRunStatePath(workspacePath);
+    try {
+      const raw = await fs.readFile(statePath, "utf-8");
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      if (String(parsed.run_id ?? "") !== runId) return null;
+      return this.deserializeRun(parsed);
+    } catch {
+      return null;
+    }
+  }
+
+  private serializeRun(run: TaskRun): Record<string, unknown> {
+    return {
+      ...run,
+      created_at: run.created_at.toISOString(),
+      updated_at: run.updated_at.toISOString(),
+      completed_at: run.completed_at ? run.completed_at.toISOString() : null,
+      steps: run.steps.map((step) => ({
+        ...step,
+        started_at: step.started_at ? step.started_at.toISOString() : null,
+        completed_at: step.completed_at ? step.completed_at.toISOString() : null,
+      })),
+    };
+  }
+
+  private deserializeRun(payload: Record<string, unknown>): TaskRun {
+    const raw = payload as unknown as TaskRun;
+    return {
+      ...raw,
+      created_at: new Date(raw.created_at),
+      updated_at: new Date(raw.updated_at),
+      completed_at: raw.completed_at ? new Date(raw.completed_at) : null,
+      steps: (raw.steps ?? []).map((step) => ({
+        ...step,
+        started_at: step.started_at ? new Date(step.started_at) : null,
+        completed_at: step.completed_at ? new Date(step.completed_at) : null,
+      })),
+    };
+  }
+
+  private async rebuildRunStateFromEvents(
+    workspacePath: string,
+    session: RunSessionMetadata
+  ): Promise<TaskRun | null> {
+    const eventsPath = path.join(workspacePath, ".events.jsonl");
+    const raw = await fs.readFile(eventsPath, "utf-8").catch(() => "");
+    if (!raw.trim()) return null;
+
+    const events = raw
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        try {
+          return JSON.parse(line) as TaskEvent;
+        } catch {
+          return null;
+        }
+      })
+      .filter((event): event is TaskEvent => Boolean(event))
+      .filter((event) => event.run_id === session.run_id);
+    if (events.length === 0) return null;
+
+    const latestTicketEvent = [...events]
+      .reverse()
+      .find((event) => event.event_type === "task.created" && event.data.ticket);
+    const ticket = (latestTicketEvent?.data.ticket as TicketDetails | undefined)
+      ?? this.createTicketFromPrompt(session.ticket_id, session.ticket_title);
+
+    const latestPlanEvent = [...events]
+      .reverse()
+      .find((event) => event.event_type === "task.plan_generated" && event.data.plan);
+    const plan = latestPlanEvent?.data.plan as ExecutionPlan | undefined;
+    if (!plan) return null;
+
+    const stepExecutions: StepExecution[] = [];
+    for (const event of events) {
+      if (event.event_type === "step.started") {
+        const stepNum = Number(event.data.step ?? 0);
+        const agent = String(event.data.agent ?? "unknown");
+        if (!stepNum) continue;
+        stepExecutions.push({
+          step_number: stepNum,
+          agent,
+          task: typeof event.data.task === "string" ? event.data.task : undefined,
+          status: "running",
+          container_id: null,
+          tokens_used: 0,
+          cost_usd: 0,
+          started_at: event.timestamp instanceof Date ? event.timestamp : new Date(event.timestamp),
+          completed_at: null,
+          result: null,
+          rework_count: 0,
+          runtime_metadata: null,
+        });
+        continue;
+      }
+
+      if (event.event_type === "step.completed" || event.event_type === "step.failed") {
+        const stepNum = Number(event.data.step ?? 0);
+        if (!stepNum) continue;
+        const target = [...stepExecutions]
+          .reverse()
+          .find((entry) => entry.step_number === stepNum && entry.completed_at === null);
+        if (!target) continue;
+        target.status = event.event_type === "step.completed" ? "completed" : "failed";
+        target.completed_at = event.timestamp instanceof Date ? event.timestamp : new Date(event.timestamp);
+        if (typeof event.data.tokens === "number") {
+          target.tokens_used = event.data.tokens;
+        }
+      }
+
+      if (event.event_type === "step.rework_triggered") {
+        const stepNum = Number(event.data.step ?? 0);
+        if (!stepNum) continue;
+        const target = [...stepExecutions]
+          .reverse()
+          .find((entry) => entry.step_number === stepNum && entry.completed_at === null);
+        if (target) {
+          target.status = "needs_rework";
+        }
+      }
+    }
+
+    return {
+      run_id: session.run_id,
+      project_id: session.project_id,
+      ticket,
+      plan,
+      validated_plan: plan,
+      status: session.status,
+      steps: stepExecutions,
+      total_tokens_used: session.total_tokens,
+      total_cost_usd: session.total_cost_usd,
+      created_at: new Date(session.created_at),
+      updated_at: new Date(session.updated_at),
+      completed_at: session.completed_at ? new Date(session.completed_at) : null,
+      pr_url: session.pr_url,
+      error: session.error,
+    };
+  }
+
+  private resolveResumeStep(run: TaskRun, plan: ExecutionPlan, requestedStep?: number): number {
+    const planSteps = new Set(plan.steps.map((step) => step.step_number));
+    const failedHistory = run.steps.filter((step) => step.status === "failed" || step.status === "needs_rework");
+
+    if (requestedStep !== undefined) {
+      if (!Number.isInteger(requestedStep) || requestedStep <= 0) {
+        throw new Error(`Invalid --step value: ${requestedStep}`);
+      }
+      if (!planSteps.has(requestedStep)) {
+        throw new Error(`Step ${requestedStep} is not part of the validated plan and cannot be resumed.`);
+      }
+      if (!failedHistory.some((step) => step.step_number === requestedStep)) {
+        throw new Error(`Step ${requestedStep} does not appear as failed/needs_rework in run ${run.run_id}.`);
+      }
+      return requestedStep;
+    }
+
+    const latestFailed = [...failedHistory]
+      .reverse()
+      .find((step) => planSteps.has(step.step_number));
+    if (!latestFailed) {
+      throw new Error(`Run ${run.run_id} has no failed plan step to resume.`);
+    }
+    return latestFailed.step_number;
+  }
+
+  private buildInitialCompletedSteps(
+    run: TaskRun,
+    plan: ExecutionPlan,
+    resumeFromStep: number
+  ): Set<number> {
+    const completed = new Set<number>();
+    const allowed = new Set(plan.steps.map((step) => step.step_number));
+    for (let i = run.steps.length - 1; i >= 0; i -= 1) {
+      const step = run.steps[i];
+      if (step.status !== "completed") continue;
+      if (step.step_number >= resumeFromStep) continue;
+      if (!allowed.has(step.step_number)) continue;
+      if (completed.has(step.step_number)) continue;
+      completed.add(step.step_number);
+    }
+    return completed;
+  }
+
   private createRun(ticketId: string): TaskRun {
     return {
       run_id: `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -1722,14 +2101,22 @@ export class OrchestrationService {
   }
 
   private gatherPreviousResults(run: TaskRun, step: PlanStep) {
-    return run.steps
-      .filter(
-        (s) =>
-          step.depends_on.includes(s.step_number) &&
-          s.status === "completed" &&
-          s.result
-      )
-      .map((s) => ({ step_number: s.step_number, agent: s.agent, result: s.result! }));
+    const needed = new Set(step.depends_on);
+    const latestByStep = new Map<number, { step_number: number; agent: AgentType; result: AgentResult }>();
+    for (let i = run.steps.length - 1; i >= 0; i -= 1) {
+      const entry = run.steps[i];
+      if (!needed.has(entry.step_number)) continue;
+      if (entry.status !== "completed" || !entry.result) continue;
+      if (latestByStep.has(entry.step_number)) continue;
+      latestByStep.set(entry.step_number, {
+        step_number: entry.step_number,
+        agent: entry.agent,
+        result: entry.result,
+      });
+    }
+    return step.depends_on
+      .map((stepNumber) => latestByStep.get(stepNumber))
+      .filter((entry): entry is { step_number: number; agent: AgentType; result: AgentResult } => Boolean(entry));
   }
 
   private buildReviewSummary(run: TaskRun, afterStep: number): string {
