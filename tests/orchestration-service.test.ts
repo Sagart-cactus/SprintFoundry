@@ -9,6 +9,7 @@ import { makeResult, makeFailedResult, makeReworkResult } from "./fixtures/resul
 
 const eventStoreCtor = vi.fn();
 const eventSinkCtor = vi.fn();
+const eventSinkUpsertRun = vi.fn();
 
 // Mock all sub-services using class syntax so they work with `new`
 // Mock PlannerFactory — returns a mock planner with generatePlan/planRework
@@ -84,6 +85,7 @@ vi.mock("../src/service/event-store.js", () => ({
 vi.mock("../src/service/event-sink-client.js", () => ({
   EventSinkClient: class {
     postEvent = vi.fn();
+    upsertRun = eventSinkUpsertRun;
     constructor(url: string) {
       eventSinkCtor(url);
     }
@@ -141,6 +143,33 @@ describe("OrchestrationService", () => {
     expect(eventSinkCtor).toHaveBeenCalledWith("https://sink.example/events");
     expect(eventStoreCtor).toHaveBeenCalledTimes(2);
     expect(eventStoreCtor.mock.calls[1][1]).toBeDefined();
+  });
+
+  it("wires sink client into SessionManager persistence when sink env is set", async () => {
+    process.env.SPRINTFOUNDRY_EVENT_SINK_URL = "https://sink.example/events";
+    const sinkEnabledService = new OrchestrationService(
+      makePlatformConfig(),
+      makeProjectConfig()
+    );
+
+    const mockPlanner = (sinkEnabledService as any).plannerRuntime;
+    const mockRunner = (sinkEnabledService as any).agentRunner;
+
+    const plan = makeDevQaPlan();
+    mockPlanner.generatePlan.mockResolvedValue(plan);
+    mockRunner.run.mockResolvedValue({
+      agentResult: makeResult(),
+      tokens_used: 100,
+      cost_usd: 0.01,
+      duration_seconds: 5,
+      container_id: "local-1",
+    });
+
+    await sinkEnabledService.handleTask("p1", "prompt", "Build a thing");
+
+    await vi.waitFor(() => {
+      expect(eventSinkUpsertRun).toHaveBeenCalled();
+    });
   });
 
   it("handleTask with source=prompt creates ticket from prompt text", async () => {

@@ -1,7 +1,12 @@
-import type { IntegrationConfig, TaskEvent } from "../shared/types.js";
+import type {
+  IntegrationConfig,
+  RunSessionMetadata,
+  TaskEvent,
+} from "../shared/types.js";
 
 const EVENT_SINK_TIMEOUT_MS = 2_000;
 const EVENT_SINK_RETRY_COUNT = 1;
+const RUN_UPSERT_PATH = "/v1/runs/upsert";
 
 type FetchFn = typeof fetch;
 
@@ -21,33 +26,40 @@ export class EventSinkClient {
   async postEvent(event: TaskEvent): Promise<void> {
     if (!this.url) return;
 
-    const delivered = await this.postWithRetry(event);
+    const delivered = await this.postWithRetry(this.url, event);
     if (!delivered) {
       throw new Error("Failed to post event to sink");
     }
   }
 
-  private async postWithRetry(event: TaskEvent): Promise<boolean> {
+  async upsertRun(session: RunSessionMetadata): Promise<void> {
+    if (!this.url) return;
+
+    const delivered = await this.postWithRetry(this.resolveRunUpsertUrl(), session);
+    if (!delivered) {
+      throw new Error("Failed to upsert run to sink");
+    }
+  }
+
+  private async postWithRetry(url: string, body: unknown): Promise<boolean> {
     for (let attempt = 0; attempt <= EVENT_SINK_RETRY_COUNT; attempt += 1) {
-      const delivered = await this.postOnce(event);
+      const delivered = await this.postOnce(url, body);
       if (delivered) return true;
     }
     return false;
   }
 
-  private async postOnce(event: TaskEvent): Promise<boolean> {
-    if (!this.url) return false;
-
+  private async postOnce(url: string, body: unknown): Promise<boolean> {
     const controller = new AbortController();
     const timeout = setTimeout(() => {
       controller.abort();
     }, EVENT_SINK_TIMEOUT_MS);
 
     try {
-      const response = await this.fetchFn(this.url, {
+      const response = await this.fetchFn(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(event),
+        body: JSON.stringify(body),
         signal: controller.signal,
       });
 
@@ -56,6 +68,25 @@ export class EventSinkClient {
       return false;
     } finally {
       clearTimeout(timeout);
+    }
+  }
+
+  private resolveRunUpsertUrl(): string {
+    if (!this.url) return RUN_UPSERT_PATH;
+
+    try {
+      const parsed = new URL(this.url);
+      parsed.pathname = RUN_UPSERT_PATH;
+      parsed.search = "";
+      parsed.hash = "";
+      return parsed.toString();
+    } catch {
+      const trimmed = this.url.replace(/\/+$/, "");
+      if (trimmed.endsWith(RUN_UPSERT_PATH)) return trimmed;
+      if (trimmed.endsWith("/events")) {
+        return `${trimmed.slice(0, -"/events".length)}${RUN_UPSERT_PATH}`;
+      }
+      return `${trimmed}${RUN_UPSERT_PATH}`;
     }
   }
 }
