@@ -91,13 +91,37 @@ describe("EventStore", () => {
     expect(parsed.event_id).toBe(event.event_id);
   });
 
-  it("posts to sink after successful JSONL write", async () => {
-    const workspaceDir = path.join(tmpDir, "workspace-sink");
+  it("keeps baseline JSONL behavior unchanged when no sink is configured", async () => {
+    const eventsDir = path.join(tmpDir, "baseline-events");
+    const workspaceDir = path.join(tmpDir, "baseline-workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+
+    const store = new EventStore(eventsDir);
+    await store.initialize(workspaceDir);
+
+    const event = makeEvent();
+    await expect(store.store(event)).resolves.toBeUndefined();
+
+    const globalContent = await fs.readFile(
+      path.join(eventsDir, "events.jsonl"),
+      "utf-8",
+    );
+    const runContent = await fs.readFile(
+      path.join(workspaceDir, ".events.jsonl"),
+      "utf-8",
+    );
+    expect(JSON.parse(globalContent.trim()).event_id).toBe(event.event_id);
+    expect(JSON.parse(runContent.trim()).event_id).toBe(event.event_id);
+  });
+
+  it("dual-writes to sink and JSONL when sink is configured", async () => {
+    const eventsDir = path.join(tmpDir, "dual-write-events");
+    const workspaceDir = path.join(tmpDir, "dual-write-workspace");
     await fs.mkdir(workspaceDir, { recursive: true });
     const sinkClient = {
       postEvent: vi.fn().mockResolvedValue(undefined),
     };
-    const store = new EventStore(undefined, sinkClient);
+    const store = new EventStore(eventsDir, sinkClient);
     await store.initialize(workspaceDir);
 
     const event = makeEvent();
@@ -105,26 +129,45 @@ describe("EventStore", () => {
 
     expect(sinkClient.postEvent).toHaveBeenCalledTimes(1);
     expect(sinkClient.postEvent).toHaveBeenCalledWith(event);
-    const content = await fs.readFile(path.join(workspaceDir, ".events.jsonl"), "utf-8");
-    expect(content.trim().length).toBeGreaterThan(0);
+
+    const globalContent = await fs.readFile(
+      path.join(eventsDir, "events.jsonl"),
+      "utf-8",
+    );
+    const runContent = await fs.readFile(
+      path.join(workspaceDir, ".events.jsonl"),
+      "utf-8",
+    );
+    expect(JSON.parse(globalContent.trim()).event_id).toBe(event.event_id);
+    expect(JSON.parse(runContent.trim()).event_id).toBe(event.event_id);
   });
 
-  it("warns when sink posting fails without failing store()", async () => {
-    const workspaceDir = path.join(tmpDir, "workspace-sink-failure");
+  it("does not fail store() when sink post errors", async () => {
+    const eventsDir = path.join(tmpDir, "sink-failure-events");
+    const workspaceDir = path.join(tmpDir, "sink-failure-workspace");
     await fs.mkdir(workspaceDir, { recursive: true });
     const sinkClient = {
       postEvent: vi.fn().mockRejectedValue(new Error("sink down")),
     };
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const store = new EventStore(undefined, sinkClient);
+    const store = new EventStore(eventsDir, sinkClient);
     await store.initialize(workspaceDir);
 
     const event = makeEvent();
     await expect(store.store(event)).resolves.toBeUndefined();
     expect(sinkClient.postEvent).toHaveBeenCalledTimes(1);
     expect(warnSpy).toHaveBeenCalledTimes(1);
-    const content = await fs.readFile(path.join(workspaceDir, ".events.jsonl"), "utf-8");
-    expect(content.trim().length).toBeGreaterThan(0);
+
+    const globalContent = await fs.readFile(
+      path.join(eventsDir, "events.jsonl"),
+      "utf-8",
+    );
+    const runContent = await fs.readFile(
+      path.join(workspaceDir, ".events.jsonl"),
+      "utf-8",
+    );
+    expect(JSON.parse(globalContent.trim()).event_id).toBe(event.event_id);
+    expect(JSON.parse(runContent.trim()).event_id).toBe(event.event_id);
     warnSpy.mockRestore();
   });
 
