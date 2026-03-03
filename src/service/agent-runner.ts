@@ -24,6 +24,7 @@ import { RuntimeFactory } from "./runtime/runtime-factory.js";
 import { CodexSkillManager } from "./runtime/codex-skill-manager.js";
 import { parseTokenUsage as parseRuntimeTokenUsage } from "./runtime/process-utils.js";
 import type { RuntimeActivityEvent } from "./runtime/types.js";
+import type { EventSinkClient } from "./event-sink-client.js";
 
 export interface AgentRunConfig {
   stepNumber: number;
@@ -47,6 +48,7 @@ export interface AgentRunConfig {
   resumeSessionId?: string;
   resumeReason?: string;
   onRuntimeActivity?: (event: RuntimeActivityEvent) => Promise<void> | void;
+  sinkClient?: Pick<EventSinkClient, "postLog">;
 }
 
 interface WorkspacePrepResult {
@@ -133,6 +135,7 @@ export class AgentRunner {
       resumeReason: config.resumeReason,
       guardrails: this.resolveGuardrails(),
       onActivity: config.onRuntimeActivity,
+      sinkClient: config.sinkClient,
     });
 
     if ((prep.codexSkillNames?.length ?? 0) > 0 || (prep.skillWarnings?.length ?? 0) > 0) {

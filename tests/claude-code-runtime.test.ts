@@ -480,4 +480,31 @@ describe("ClaudeCodeRuntime", () => {
     expect(types).toContain("agent_file_edit");
     expect(types).toContain("agent_tool_call");
   });
+
+  it("posts buffered activity log chunks when sink client is configured", async () => {
+    const postLog = vi.fn().mockResolvedValue(undefined);
+    const runtime = new ClaudeCodeRuntime();
+    const activityDispatcher = (runtime as any).createActivityDispatcher({
+      ...makeContext(tmpDir, "local_process"),
+      sinkClient: { postLog },
+    });
+    await activityDispatcher.emit({
+      type: "agent_command_run",
+      data: { tool_name: "bash", command: "npm test -- foo" },
+    });
+    await activityDispatcher.flushFinal();
+
+    expect(postLog).toHaveBeenCalled();
+    expect(postLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        step_number: 1,
+        step_attempt: 1,
+        agent: "developer",
+        runtime_provider: "claude-code",
+        stream: "activity",
+      })
+    );
+    const payload = postLog.mock.calls.at(-1)?.[0];
+    expect(payload.chunk).toContain("\"type\":\"agent_command_run\"");
+  });
 });

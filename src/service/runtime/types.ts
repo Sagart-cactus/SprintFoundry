@@ -17,6 +17,7 @@ import type {
   RuntimeMetadataEnvelope,
   EventType,
 } from "../../shared/types.js";
+import type { EventSinkClient } from "../event-sink-client.js";
 
 export type RuntimeActivityType =
   | Extract<EventType, "agent_tool_call">
@@ -57,6 +58,7 @@ export interface RuntimeStepContext {
   resumeReason?: string;
   guardrails?: GuardrailConfig;
   onActivity?: (event: RuntimeActivityEvent) => Promise<void> | void;
+  sinkClient?: Pick<EventSinkClient, "postLog">;
 }
 
 export interface RuntimeStepResult {
