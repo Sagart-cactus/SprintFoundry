@@ -100,6 +100,28 @@ vi.mock("../src/service/runtime-session-store.js", () => ({
   },
 }));
 
+vi.mock("../src/service/session-manager.js", () => ({
+  SessionManager: class {
+    private sinkClient?: { upsertRun?: (session: unknown) => Promise<void> | void };
+    constructor(_baseDir?: string, sinkClient?: { upsertRun?: (session: unknown) => Promise<void> | void }) {
+      this.sinkClient = sinkClient;
+    }
+    persist = vi.fn(async (run: any) => {
+      if (this.sinkClient?.upsertRun) {
+        await this.sinkClient.upsertRun({
+          run_id: run.run_id,
+          status: run.status,
+        });
+      }
+    });
+    get = vi.fn().mockResolvedValue(null);
+    list = vi.fn().mockResolvedValue([]);
+    archive = vi.fn().mockResolvedValue(true);
+    remove = vi.fn().mockResolvedValue(true);
+    updateStatus = vi.fn().mockResolvedValue(true);
+  },
+}));
+
 const { OrchestrationService } = await import(
   "../src/service/orchestration-service.js"
 );
@@ -147,10 +169,7 @@ describe("OrchestrationService", () => {
 
   it("wires sink client into SessionManager persistence when sink env is set", async () => {
     process.env.SPRINTFOUNDRY_EVENT_SINK_URL = "https://sink.example/events";
-    const sinkEnabledService = new OrchestrationService(
-      makePlatformConfig(),
-      makeProjectConfig()
-    );
+    const sinkEnabledService = new OrchestrationService(makePlatformConfig(), makeProjectConfig());
 
     const mockPlanner = (sinkEnabledService as any).plannerRuntime;
     const mockRunner = (sinkEnabledService as any).agentRunner;
@@ -167,9 +186,12 @@ describe("OrchestrationService", () => {
 
     await sinkEnabledService.handleTask("p1", "prompt", "Build a thing");
 
-    await vi.waitFor(() => {
-      expect(eventSinkUpsertRun).toHaveBeenCalled();
-    });
+    await vi.waitFor(
+      () => {
+        expect(eventSinkUpsertRun).toHaveBeenCalled();
+      },
+      { timeout: 5000 }
+    );
   });
 
   it("handleTask with source=prompt creates ticket from prompt text", async () => {

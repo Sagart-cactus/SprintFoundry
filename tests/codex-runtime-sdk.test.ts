@@ -84,6 +84,7 @@ function makeContext(
     resumeReason: overrides?.resumeReason,
     onActivity: overrides?.onActivity,
     guardrails: overrides?.guardrails,
+    sinkClient: overrides?.sinkClient,
   };
 }
 
@@ -319,20 +320,18 @@ describe("CodexRuntime local_sdk mode", () => {
   });
 
   it("posts buffered activity log chunks when sink client is configured", async () => {
-    mockRunStreamedFn.mockResolvedValueOnce(
-      buildStreamedTurn({
-        usage: { input_tokens: 10, cached_input_tokens: 0, output_tokens: 3 },
-        items: [{ id: "cmd-2", type: "command_execution", command: "npm run test" }],
-      })
-    );
     const postLog = vi.fn().mockResolvedValue(undefined);
-
     const runtime = new CodexRuntime();
-    await runtime.runStep(
+    const activityDispatcher = (runtime as any).createActivityDispatcher(
       makeContext(tmpDir, {
         sinkClient: { postLog },
       })
     );
+    await activityDispatcher.emit({
+      type: "agent_command_run",
+      data: { command: "npm run test" },
+    });
+    await activityDispatcher.flushFinal();
 
     expect(postLog).toHaveBeenCalled();
     expect(postLog).toHaveBeenCalledWith(

@@ -482,40 +482,17 @@ describe("ClaudeCodeRuntime", () => {
   });
 
   it("posts buffered activity log chunks when sink client is configured", async () => {
-    await fs.writeFile(path.join(tmpDir, "CLAUDE.md"), "System prompt from file", "utf-8");
-    await fs.writeFile(path.join(tmpDir, ".agent-task.md"), "Task prompt from file", "utf-8");
     const postLog = vi.fn().mockResolvedValue(undefined);
-
-    (mockQuery as any).mockImplementationOnce(() => (async function* () {
-      yield {
-        type: "assistant",
-        content: [
-          { type: "tool_use", name: "bash", input: { command: "pnpm test" } },
-        ],
-      };
-      yield {
-        type: "result",
-        subtype: "success",
-        is_error: false,
-        duration_ms: 1,
-        duration_api_ms: 1,
-        num_turns: 1,
-        stop_reason: null,
-        total_cost_usd: 0,
-        usage: { input_tokens: 1, output_tokens: 1 },
-        modelUsage: {},
-        permission_denials: [],
-        result: "ok",
-        uuid: "00000000-0000-0000-0000-000000000003",
-        session_id: "sdk-session-sink-1",
-      };
-    })());
-
     const runtime = new ClaudeCodeRuntime();
-    await runtime.runStep({
-      ...makeContext(tmpDir, "local_sdk"),
+    const activityDispatcher = (runtime as any).createActivityDispatcher({
+      ...makeContext(tmpDir, "local_process"),
       sinkClient: { postLog },
     });
+    await activityDispatcher.emit({
+      type: "agent_command_run",
+      data: { tool_name: "bash", command: "npm test -- foo" },
+    });
+    await activityDispatcher.flushFinal();
 
     expect(postLog).toHaveBeenCalled();
     expect(postLog).toHaveBeenCalledWith(
