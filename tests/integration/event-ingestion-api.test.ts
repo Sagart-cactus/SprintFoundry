@@ -545,6 +545,79 @@ describe("event-ingestion-api integration", () => {
     expect(invalid.status).toBe(403);
   });
 
+  it("enforces bearer token auth across all protected POST endpoints", async () => {
+    const app = new FakeExpressApp();
+    const db = new InMemoryDatabase();
+
+    registerEventIngestionRoutes(app, {
+      internalApiToken: validToken,
+      database: db,
+      redisPublisher: null,
+    });
+
+    const requests: Array<{ path: "/events" | "/runs" | "/step-results" | "/logs"; body: Record<string, unknown> }> = [
+      {
+        path: "/events",
+        body: {
+          event_id: "evt-auth-all",
+          run_id: "run-1",
+          event_type: "task.created",
+          timestamp: "2026-03-04T00:00:17.000Z",
+          data: {},
+        },
+      },
+      {
+        path: "/runs",
+        body: runPayload({ run_id: "run-auth-all" }),
+      },
+      {
+        path: "/step-results",
+        body: {
+          run_id: "run-1",
+          step_number: 1,
+          step_attempt: 1,
+          agent: "qa",
+          status: "completed",
+          started_at: "2026-03-04T00:00:18.000Z",
+          completed_at: "2026-03-04T00:00:19.000Z",
+          result: { ok: true },
+        },
+      },
+      {
+        path: "/logs",
+        body: {
+          run_id: "run-1",
+          step_number: 1,
+          step_attempt: 1,
+          agent: "qa",
+          runtime_provider: "codex",
+          sequence: 99,
+          stream: "activity",
+          chunk: "auth-check",
+          byte_length: 10,
+          is_final: false,
+          timestamp: "2026-03-04T00:00:20.000Z",
+        },
+      },
+    ];
+
+    for (const request of requests) {
+      const missing = await app.inject({
+        method: "POST",
+        path: request.path,
+        body: request.body,
+      });
+      const invalid = await app.inject({
+        method: "POST",
+        path: request.path,
+        headers: authHeader("wrong-token"),
+        body: request.body,
+      });
+      expect(missing.status).toBe(401);
+      expect(invalid.status).toBe(403);
+    }
+  });
+
   it("GET /health reports dependency status with redis enabled/disabled", async () => {
     const appWithRedis = new FakeExpressApp();
     const dbUp = new InMemoryDatabase();
