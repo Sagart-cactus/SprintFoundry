@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 
 const require = createRequire(import.meta.url);
 
@@ -22,6 +22,7 @@ interface RedisPublisher {
 interface RequestLike {
   headers: Record<string, string | string[] | undefined>;
   body?: unknown;
+  authToken?: string;
 }
 
 interface ResponseLike {
@@ -43,6 +44,9 @@ export interface EventIngestionApiOptions {
   redisUrl?: string;
   database?: DatabaseClient;
   redisPublisher?: RedisPublisher | null;
+  rateLimit?: Partial<RateLimitConfig>;
+  limits?: Partial<IngestionLimits>;
+  rateLimiter?: RateLimiter;
   logger?: Pick<Console, "warn" | "error">;
 }
 
@@ -106,6 +110,54 @@ interface LogPayload {
   timestamp: string;
 }
 
+interface IngestionLimits {
+  eventsBodyMaxBytes: number;
+  runsBodyMaxBytes: number;
+  stepResultsBodyMaxBytes: number;
+  logsBodyMaxBytes: number;
+  eventDataMaxBytes: number;
+  stepResultMaxBytes: number;
+  logChunkMaxBytes: number;
+  genericFieldMaxChars: number;
+  errorFieldMaxChars: number;
+}
+
+interface RateLimitConfig {
+  windowMs: number;
+  eventsPerWindow: number;
+  runsPerWindow: number;
+  stepResultsPerWindow: number;
+  logsPerWindow: number;
+}
+
+interface RateLimitResult {
+  allowed: boolean;
+}
+
+interface RateLimiter {
+  consume(token: string, route: keyof Pick<RateLimitConfig, "eventsPerWindow" | "runsPerWindow" | "stepResultsPerWindow" | "logsPerWindow">): RateLimitResult;
+}
+
+const DEFAULT_LIMITS: IngestionLimits = {
+  eventsBodyMaxBytes: 64 * 1024,
+  runsBodyMaxBytes: 32 * 1024,
+  stepResultsBodyMaxBytes: 64 * 1024,
+  logsBodyMaxBytes: 128 * 1024,
+  eventDataMaxBytes: 48 * 1024,
+  stepResultMaxBytes: 48 * 1024,
+  logChunkMaxBytes: 64 * 1024,
+  genericFieldMaxChars: 512,
+  errorFieldMaxChars: 4096,
+};
+
+const DEFAULT_RATE_LIMIT: RateLimitConfig = {
+  windowMs: 60_000,
+  eventsPerWindow: 240,
+  runsPerWindow: 120,
+  stepResultsPerWindow: 240,
+  logsPerWindow: 360,
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -142,7 +194,100 @@ function asIsoDateString(value: unknown): string | null {
   return Number.isNaN(ts) ? null : raw;
 }
 
-function parseEventPayload(body: unknown): { value?: EventPayload; errors: string[] } {
+function parsePositiveIntegerEnv(value: string | undefined): number | null {
+  if (!value) return null;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed <= 0) return null;
+  return parsed;
+}
+
+function loadLimits(overrides?: Partial<IngestionLimits>): IngestionLimits {
+  const envLimits: Partial<IngestionLimits> = {
+    eventsBodyMaxBytes: parsePositiveIntegerEnv(process.env.SPRINTFOUNDRY_INGEST_EVENTS_MAX_BODY_BYTES) ?? undefined,
+    runsBodyMaxBytes: parsePositiveIntegerEnv(process.env.SPRINTFOUNDRY_INGEST_RUNS_MAX_BODY_BYTES) ?? undefined,
+    stepResultsBodyMaxBytes: parsePositiveIntegerEnv(process.env.SPRINTFOUNDRY_INGEST_STEP_RESULTS_MAX_BODY_BYTES) ?? undefined,
+    logsBodyMaxBytes: parsePositiveIntegerEnv(process.env.SPRINTFOUNDRY_INGEST_LOGS_MAX_BODY_BYTES) ?? undefined,
+    eventDataMaxBytes: parsePositiveIntegerEnv(process.env.SPRINTFOUNDRY_INGEST_EVENT_DATA_MAX_BYTES) ?? undefined,
+    stepResultMaxBytes: parsePositiveIntegerEnv(process.env.SPRINTFOUNDRY_INGEST_STEP_RESULT_MAX_BYTES) ?? undefined,
+    logChunkMaxBytes: parsePositiveIntegerEnv(process.env.SPRINTFOUNDRY_INGEST_LOG_CHUNK_MAX_BYTES) ?? undefined,
+    genericFieldMaxChars: parsePositiveIntegerEnv(process.env.SPRINTFOUNDRY_INGEST_GENERIC_FIELD_MAX_CHARS) ?? undefined,
+    errorFieldMaxChars: parsePositiveIntegerEnv(process.env.SPRINTFOUNDRY_INGEST_ERROR_FIELD_MAX_CHARS) ?? undefined,
+  };
+
+  return {
+    ...DEFAULT_LIMITS,
+    ...envLimits,
+    ...overrides,
+  };
+}
+
+function loadRateLimit(overrides?: Partial<RateLimitConfig>): RateLimitConfig {
+  const envRate: Partial<RateLimitConfig> = {
+    windowMs: parsePositiveIntegerEnv(process.env.SPRINTFOUNDRY_INGEST_RATE_LIMIT_WINDOW_MS) ?? undefined,
+    eventsPerWindow: parsePositiveIntegerEnv(process.env.SPRINTFOUNDRY_INGEST_RATE_LIMIT_EVENTS_PER_WINDOW) ?? undefined,
+    runsPerWindow: parsePositiveIntegerEnv(process.env.SPRINTFOUNDRY_INGEST_RATE_LIMIT_RUNS_PER_WINDOW) ?? undefined,
+    stepResultsPerWindow: parsePositiveIntegerEnv(process.env.SPRINTFOUNDRY_INGEST_RATE_LIMIT_STEP_RESULTS_PER_WINDOW) ?? undefined,
+    logsPerWindow: parsePositiveIntegerEnv(process.env.SPRINTFOUNDRY_INGEST_RATE_LIMIT_LOGS_PER_WINDOW) ?? undefined,
+  };
+
+  return {
+    ...DEFAULT_RATE_LIMIT,
+    ...envRate,
+    ...overrides,
+  };
+}
+
+class FixedWindowRateLimiter implements RateLimiter {
+  private readonly buckets = new Map<string, { count: number; windowStartedAtMs: number }>();
+  private readonly routeLimits: Record<string, number>;
+
+  constructor(private readonly config: RateLimitConfig) {
+    this.routeLimits = {
+      eventsPerWindow: config.eventsPerWindow,
+      runsPerWindow: config.runsPerWindow,
+      stepResultsPerWindow: config.stepResultsPerWindow,
+      logsPerWindow: config.logsPerWindow,
+    };
+  }
+
+  consume(
+    token: string,
+    route: keyof Pick<RateLimitConfig, "eventsPerWindow" | "runsPerWindow" | "stepResultsPerWindow" | "logsPerWindow">,
+  ): RateLimitResult {
+    const nowMs = Date.now();
+    const bucketKey = `${route}:${token}`;
+    const existing = this.buckets.get(bucketKey);
+    const routeLimit = this.routeLimits[route];
+
+    if (!existing || nowMs - existing.windowStartedAtMs >= this.config.windowMs) {
+      this.buckets.set(bucketKey, { count: 1, windowStartedAtMs: nowMs });
+      return { allowed: true };
+    }
+
+    if (existing.count >= routeLimit) {
+      return { allowed: false };
+    }
+
+    existing.count += 1;
+    return { allowed: true };
+  }
+}
+
+function safeJsonByteLength(value: unknown): number {
+  try {
+    return Buffer.byteLength(JSON.stringify(value));
+  } catch {
+    return Number.MAX_SAFE_INTEGER;
+  }
+}
+
+function enforceMaxLength(fieldName: string, value: string, maxChars: number, errors: string[]): void {
+  if (value.length > maxChars) {
+    errors.push(`${fieldName} exceeds max length ${maxChars}`);
+  }
+}
+
+function parseEventPayload(body: unknown, limits: IngestionLimits): { value?: EventPayload; errors: string[] } {
   if (!isRecord(body)) return { errors: ["body must be a JSON object"] };
 
   const event_id = asString(body.event_id);
@@ -157,6 +302,12 @@ function parseEventPayload(body: unknown): { value?: EventPayload; errors: strin
   if (!event_type) errors.push("event_type is required");
   if (!timestamp) errors.push("timestamp must be a valid ISO date-time string");
   if (!data) errors.push("data must be an object");
+  if (event_id) enforceMaxLength("event_id", event_id, limits.genericFieldMaxChars, errors);
+  if (run_id) enforceMaxLength("run_id", run_id, limits.genericFieldMaxChars, errors);
+  if (event_type) enforceMaxLength("event_type", event_type, limits.genericFieldMaxChars, errors);
+  if (data && safeJsonByteLength(data) > limits.eventDataMaxBytes) {
+    errors.push(`data exceeds max size ${limits.eventDataMaxBytes} bytes`);
+  }
 
   if (errors.length > 0 || !event_id || !run_id || !event_type || !timestamp || !data) {
     return { errors };
@@ -174,7 +325,7 @@ function parseEventPayload(body: unknown): { value?: EventPayload; errors: strin
   };
 }
 
-function parseRunPayload(body: unknown): { value?: RunPayload; errors: string[] } {
+function parseRunPayload(body: unknown, limits: IngestionLimits): { value?: RunPayload; errors: string[] } {
   if (!isRecord(body)) return { errors: ["body must be a JSON object"] };
 
   const run_id = asString(body.run_id);
@@ -217,6 +368,17 @@ function parseRunPayload(body: unknown): { value?: RunPayload; errors: string[] 
   if (body.completed_at !== null && body.completed_at !== undefined && !completed_at) {
     errors.push("completed_at must be null or a valid ISO date-time string");
   }
+  if (run_id) enforceMaxLength("run_id", run_id, limits.genericFieldMaxChars, errors);
+  if (project_id) enforceMaxLength("project_id", project_id, limits.genericFieldMaxChars, errors);
+  if (ticket_id) enforceMaxLength("ticket_id", ticket_id, limits.genericFieldMaxChars, errors);
+  if (ticket_source) enforceMaxLength("ticket_source", ticket_source, limits.genericFieldMaxChars, errors);
+  if (ticket_title) enforceMaxLength("ticket_title", ticket_title, limits.genericFieldMaxChars, errors);
+  if (status) enforceMaxLength("status", status, limits.genericFieldMaxChars, errors);
+  if (plan_classification) enforceMaxLength("plan_classification", plan_classification, limits.genericFieldMaxChars, errors);
+  if (workspace_path) enforceMaxLength("workspace_path", workspace_path, limits.genericFieldMaxChars, errors);
+  if (branch) enforceMaxLength("branch", branch, limits.genericFieldMaxChars, errors);
+  if (pr_url) enforceMaxLength("pr_url", pr_url, limits.genericFieldMaxChars, errors);
+  if (error) enforceMaxLength("error", error, limits.errorFieldMaxChars, errors);
 
   if (
     errors.length > 0 ||
@@ -264,7 +426,7 @@ function parseRunPayload(body: unknown): { value?: RunPayload; errors: string[] 
   };
 }
 
-function parseStepResultPayload(body: unknown): { value?: StepResultPayload; errors: string[] } {
+function parseStepResultPayload(body: unknown, limits: IngestionLimits): { value?: StepResultPayload; errors: string[] } {
   if (!isRecord(body)) return { errors: ["body must be a JSON object"] };
 
   const run_id = asString(body.run_id);
@@ -285,6 +447,12 @@ function parseStepResultPayload(body: unknown): { value?: StepResultPayload; err
   if (!started_at) errors.push("started_at must be a valid ISO date-time string");
   if (!completed_at) errors.push("completed_at must be a valid ISO date-time string");
   if (!result) errors.push("result must be an object");
+  if (run_id) enforceMaxLength("run_id", run_id, limits.genericFieldMaxChars, errors);
+  if (agent) enforceMaxLength("agent", agent, limits.genericFieldMaxChars, errors);
+  if (status) enforceMaxLength("status", status, limits.genericFieldMaxChars, errors);
+  if (result && safeJsonByteLength(result) > limits.stepResultMaxBytes) {
+    errors.push(`result exceeds max size ${limits.stepResultMaxBytes} bytes`);
+  }
 
   if (
     errors.length > 0 ||
@@ -315,7 +483,7 @@ function parseStepResultPayload(body: unknown): { value?: StepResultPayload; err
   };
 }
 
-function parseLogPayload(body: unknown): { value?: LogPayload; errors: string[] } {
+function parseLogPayload(body: unknown, limits: IngestionLimits): { value?: LogPayload; errors: string[] } {
   if (!isRecord(body)) return { errors: ["body must be a JSON object"] };
 
   const run_id = asString(body.run_id);
@@ -338,10 +506,24 @@ function parseLogPayload(body: unknown): { value?: LogPayload; errors: string[] 
   if (!runtime_provider) errors.push("runtime_provider is required");
   if (sequence === null) errors.push("sequence must be an integer >= 0");
   if (!stream) errors.push("stream is required");
+  if (stream && stream !== "activity") errors.push("stream must be 'activity'");
   if (!chunk) errors.push("chunk is required");
   if (byte_length === null) errors.push("byte_length must be an integer >= 0");
   if (is_final === null) errors.push("is_final must be a boolean");
   if (!timestamp) errors.push("timestamp must be a valid ISO date-time string");
+  if (run_id) enforceMaxLength("run_id", run_id, limits.genericFieldMaxChars, errors);
+  if (agent) enforceMaxLength("agent", agent, limits.genericFieldMaxChars, errors);
+  if (runtime_provider) enforceMaxLength("runtime_provider", runtime_provider, limits.genericFieldMaxChars, errors);
+  if (stream) enforceMaxLength("stream", stream, limits.genericFieldMaxChars, errors);
+  if (chunk && Buffer.byteLength(chunk) > limits.logChunkMaxBytes) {
+    errors.push(`chunk exceeds max size ${limits.logChunkMaxBytes} bytes`);
+  }
+  if (byte_length !== null && byte_length > limits.logChunkMaxBytes) {
+    errors.push(`byte_length exceeds max size ${limits.logChunkMaxBytes} bytes`);
+  }
+  if (chunk && byte_length !== null && Buffer.byteLength(chunk) !== byte_length) {
+    errors.push("byte_length must match chunk byte length");
+  }
 
   if (
     errors.length > 0 ||
@@ -386,11 +568,9 @@ function getAuthorizationHeader(req: RequestLike): string | null {
 }
 
 function secureTokenEquals(expected: string, actual: string): boolean {
-  const expectedBuffer = Buffer.from(expected);
-  const actualBuffer = Buffer.from(actual);
-
-  if (expectedBuffer.length !== actualBuffer.length) return false;
-  return timingSafeEqual(expectedBuffer, actualBuffer);
+  const expectedDigest = createHash("sha256").update(expected).digest();
+  const actualDigest = createHash("sha256").update(actual).digest();
+  return timingSafeEqual(expectedDigest, actualDigest);
 }
 
 function createAuthMiddleware(token: string): Handler {
@@ -409,6 +589,39 @@ function createAuthMiddleware(token: string): Handler {
 
     if (!secureTokenEquals(token, parts[1])) {
       res.status(403).json({ error: "forbidden" });
+      return;
+    }
+
+    req.authToken = parts[1];
+    next();
+  };
+}
+
+function createBodySizeGuard(maxBytes: number): Handler {
+  return (req, res, next) => {
+    if (safeJsonByteLength(req.body) > maxBytes) {
+      res.status(413).json({ error: "payload_too_large" });
+      return;
+    }
+    next();
+  };
+}
+
+function createRateLimitGuard(
+  rateLimiter: RateLimiter,
+  route: keyof Pick<RateLimitConfig, "eventsPerWindow" | "runsPerWindow" | "stepResultsPerWindow" | "logsPerWindow">,
+): Handler {
+  return (req, res, next) => {
+    const token = req.authToken;
+    if (!token) {
+      res.status(401).json({ error: "unauthorized" });
+      return;
+    }
+
+    const tokenKey = createHash("sha256").update(token).digest("hex");
+    const result = rateLimiter.consume(tokenKey, route);
+    if (!result.allowed) {
+      res.status(429).json({ error: "rate_limited" });
       return;
     }
 
@@ -494,6 +707,8 @@ export function registerEventIngestionRoutes(
   const logger = options.logger ?? console;
   const database = buildDatabaseClient(options);
   const redisPublisher = buildRedisPublisher(options);
+  const limits = loadLimits(options.limits);
+  const rateLimiter = options.rateLimiter ?? new FixedWindowRateLimiter(loadRateLimit(options.rateLimit));
 
   const token = options.internalApiToken ?? process.env.SPRINTFOUNDRY_INTERNAL_API_TOKEN;
   if (!token) {
@@ -505,8 +720,10 @@ export function registerEventIngestionRoutes(
   app.post(
     "/events",
     requireAuth,
+    createRateLimitGuard(rateLimiter, "eventsPerWindow"),
+    createBodySizeGuard(limits.eventsBodyMaxBytes),
     wrapHandler(logger, async (req, res) => {
-      const parsed = parseEventPayload(req.body);
+      const parsed = parseEventPayload(req.body, limits);
       if (!parsed.value) {
         res.status(422).json({ error: "validation_failed", details: parsed.errors });
         return;
@@ -553,8 +770,10 @@ export function registerEventIngestionRoutes(
   app.post(
     "/runs",
     requireAuth,
+    createRateLimitGuard(rateLimiter, "runsPerWindow"),
+    createBodySizeGuard(limits.runsBodyMaxBytes),
     wrapHandler(logger, async (req, res) => {
-      const parsed = parseRunPayload(req.body);
+      const parsed = parseRunPayload(req.body, limits);
       if (!parsed.value) {
         res.status(422).json({ error: "validation_failed", details: parsed.errors });
         return;
@@ -640,8 +859,10 @@ export function registerEventIngestionRoutes(
   app.post(
     "/step-results",
     requireAuth,
+    createRateLimitGuard(rateLimiter, "stepResultsPerWindow"),
+    createBodySizeGuard(limits.stepResultsBodyMaxBytes),
     wrapHandler(logger, async (req, res) => {
-      const parsed = parseStepResultPayload(req.body);
+      const parsed = parseStepResultPayload(req.body, limits);
       if (!parsed.value) {
         res.status(422).json({ error: "validation_failed", details: parsed.errors });
         return;
@@ -696,8 +917,10 @@ export function registerEventIngestionRoutes(
   app.post(
     "/logs",
     requireAuth,
+    createRateLimitGuard(rateLimiter, "logsPerWindow"),
+    createBodySizeGuard(limits.logsBodyMaxBytes),
     wrapHandler(logger, async (req, res) => {
-      const parsed = parseLogPayload(req.body);
+      const parsed = parseLogPayload(req.body, limits);
       if (!parsed.value) {
         res.status(422).json({ error: "validation_failed", details: parsed.errors });
         return;

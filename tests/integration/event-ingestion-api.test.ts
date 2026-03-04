@@ -573,4 +573,120 @@ describe("event-ingestion-api integration", () => {
     expect(db.events.size).toBe(1);
     expect(redis.published).toHaveLength(1);
   });
+
+  it("returns 413 for oversized request bodies", async () => {
+    const app = new FakeExpressApp();
+    const db = new InMemoryDatabase();
+
+    registerEventIngestionRoutes(app, {
+      internalApiToken: validToken,
+      database: db,
+      redisPublisher: null,
+      limits: {
+        logsBodyMaxBytes: 128,
+      },
+    });
+
+    await app.inject({ method: "POST", path: "/runs", headers: authHeader(), body: runPayload() });
+
+    const response = await app.inject({
+      method: "POST",
+      path: "/logs",
+      headers: authHeader(),
+      body: {
+        run_id: "run-1",
+        step_number: 1,
+        step_attempt: 1,
+        agent: "developer",
+        runtime_provider: "codex",
+        sequence: 1,
+        stream: "activity",
+        chunk: "x".repeat(300),
+        byte_length: 300,
+        is_final: false,
+        timestamp: "2026-03-04T00:00:12.000Z",
+      },
+    });
+
+    expect(response.status).toBe(413);
+  });
+
+  it("returns 429 when per-token route rate limit is exceeded", async () => {
+    const app = new FakeExpressApp();
+    const db = new InMemoryDatabase();
+
+    registerEventIngestionRoutes(app, {
+      internalApiToken: validToken,
+      database: db,
+      redisPublisher: null,
+      rateLimit: {
+        eventsPerWindow: 1,
+      },
+    });
+
+    await app.inject({ method: "POST", path: "/runs", headers: authHeader(), body: runPayload() });
+
+    const first = await app.inject({
+      method: "POST",
+      path: "/events",
+      headers: authHeader(),
+      body: {
+        event_id: "evt-rate-1",
+        run_id: "run-1",
+        event_type: "task.created",
+        timestamp: "2026-03-04T00:00:13.000Z",
+        data: {},
+      },
+    });
+
+    const second = await app.inject({
+      method: "POST",
+      path: "/events",
+      headers: authHeader(),
+      body: {
+        event_id: "evt-rate-2",
+        run_id: "run-1",
+        event_type: "task.created",
+        timestamp: "2026-03-04T00:00:14.000Z",
+        data: {},
+      },
+    });
+
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(429);
+  });
+
+  it("rejects unknown log stream names", async () => {
+    const app = new FakeExpressApp();
+    const db = new InMemoryDatabase();
+
+    registerEventIngestionRoutes(app, {
+      internalApiToken: validToken,
+      database: db,
+      redisPublisher: null,
+    });
+
+    await app.inject({ method: "POST", path: "/runs", headers: authHeader(), body: runPayload() });
+
+    const response = await app.inject({
+      method: "POST",
+      path: "/logs",
+      headers: authHeader(),
+      body: {
+        run_id: "run-1",
+        step_number: 1,
+        step_attempt: 1,
+        agent: "developer",
+        runtime_provider: "codex",
+        sequence: 1,
+        stream: "stderr",
+        chunk: "x",
+        byte_length: 1,
+        is_final: false,
+        timestamp: "2026-03-04T00:00:15.000Z",
+      },
+    });
+
+    expect(response.status).toBe(422);
+  });
 });
