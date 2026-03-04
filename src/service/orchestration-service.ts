@@ -39,6 +39,7 @@ import { TicketFetcher } from "./ticket-fetcher.js";
 import { GitManager } from "./git-manager.js";
 import { NotificationService } from "./notification-service.js";
 import { RuntimeSessionStore } from "./runtime-session-store.js";
+import { ArtifactUploader } from "./artifact-uploader.js";
 import type { PlannerRuntime } from "./runtime/types.js";
 import { PlannerFactory } from "./runtime/planner-factory.js";
 import type { RuntimeActivityEvent } from "./runtime/types.js";
@@ -70,6 +71,7 @@ export class OrchestrationService {
   private notificationRouter: NotificationRouter | null = null;
   private registry: PluginRegistry | null;
   private metricsService: MetricsService;
+  private artifactUploader: ArtifactUploader;
   private tracer = trace.getTracer("sprintfoundry", "1.0.0");
 
   constructor(
@@ -79,6 +81,7 @@ export class OrchestrationService {
   ) {
     this.registry = registry ?? null;
     this.metricsService = new MetricsService(process.env.SPRINTFOUNDRY_OTEL_ENABLED === "1");
+    this.artifactUploader = new ArtifactUploader();
     this.validator = new PlanValidator(platformConfig, projectConfig);
     this.agentRunner = new AgentRunner(platformConfig, projectConfig);
     this.plannerRuntime = new PlannerFactory().create(platformConfig, projectConfig);
@@ -121,6 +124,19 @@ export class OrchestrationService {
     this.sessionManager.persist(run, extra).catch((err) => {
       console.warn(`[session] Failed to persist session ${run.run_id}: ${err instanceof Error ? err.message : String(err)}`);
     });
+  }
+
+  private async uploadArtifactsIfConfigured(runId: string, workspacePath: string): Promise<void> {
+    try {
+      const summary = await this.artifactUploader.uploadRunArtifacts(runId, workspacePath);
+      if (!summary.skipped && summary.attempted > summary.uploaded) {
+        console.warn(
+          `[artifacts] Partial upload for run ${runId}: uploaded ${summary.uploaded}/${summary.attempted} to s3://${summary.bucket}/${summary.prefix}`
+        );
+      }
+    } catch (err) {
+      console.warn(`[artifacts] Upload skipped for run ${runId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   // ---- Lifecycle watch (non-blocking, only when SCM plugin is available) ----
@@ -264,6 +280,7 @@ export class OrchestrationService {
   ): Promise<TaskRun> {
     // 1. Create the run
     const run = this.createRun(ticketId);
+    let workspacePath: string | null = null;
     const triggerSource = process.env.SPRINTFOUNDRY_TRIGGER_SOURCE ?? null;
     span.setAttribute("run_id", run.run_id);
     const runStartMs = Date.now();
@@ -287,7 +304,6 @@ export class OrchestrationService {
       this.persistSession(run);
 
       // 3. Prepare workspace (clone repo, create branch)
-      let workspacePath: string;
       const wsPlugin = this.getWorkspacePlugin();
 
       if (!opts?.dryRun && wsPlugin) {
@@ -436,9 +452,12 @@ export class OrchestrationService {
       await this.sendNotification(
         `Task ${run.ticket?.id ?? ticketId} failed: ${run.error}`
       );
-      this.persistSession(run);
+      this.persistSession(run, workspacePath ? { workspace_path: workspacePath } : undefined);
       return run;
     } finally {
+      if (workspacePath) {
+        await this.uploadArtifactsIfConfigured(run.run_id, workspacePath);
+      }
       await this.events.close();
     }
   }

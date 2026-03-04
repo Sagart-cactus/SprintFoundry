@@ -2,7 +2,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { promises as fs, watchFile, unwatchFile, statSync, openSync, readSync, closeSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { parse as parseYaml } from "yaml";
@@ -15,6 +15,8 @@ const runsRoot = process.env.SPRINTFOUNDRY_RUNS_ROOT ?? process.env.AGENTSDLC_RU
 const sessionsRoot = process.env.SPRINTFOUNDRY_SESSIONS_DIR ?? path.join(os.homedir(), ".sprintfoundry", "sessions");
 const configRoot = process.env.SPRINTFOUNDRY_CONFIG_DIR ?? path.join(repoRoot, "config");
 const autoexecuteDryRun = process.env.SPRINTFOUNDRY_AUTORUN_DRY_RUN === "1";
+const monitorReadToken = String(process.env.SPRINTFOUNDRY_MONITOR_API_TOKEN ?? "").trim();
+const monitorWriteToken = String(process.env.SPRINTFOUNDRY_MONITOR_WRITE_TOKEN ?? "").trim();
 const databaseUrl = String(process.env.SPRINTFOUNDRY_DATABASE_URL ?? "").trim();
 const redisUrl = String(process.env.SPRINTFOUNDRY_REDIS_URL ?? "").trim();
 const useDatabaseBackend = databaseUrl.length > 0;
@@ -144,6 +146,42 @@ function sendJson(res, status, body) {
 function sendText(res, status, body) {
   res.writeHead(status, { "Content-Type": "text/plain; charset=utf-8" });
   res.end(body);
+}
+
+function extractRequestToken(req, reqUrl) {
+  const authHeader = req.headers.authorization;
+  const authValue = Array.isArray(authHeader) ? authHeader[0] : authHeader;
+  const bearer = String(authValue ?? "");
+  if (bearer.toLowerCase().startsWith("bearer ")) {
+    return bearer.slice(7).trim();
+  }
+  return String(reqUrl.searchParams.get("token") ?? "").trim();
+}
+
+function authorizeApiRequest(req, reqUrl, scope) {
+  if (!monitorReadToken && !monitorWriteToken) {
+    return { ok: true };
+  }
+
+  const provided = extractRequestToken(req, reqUrl);
+  if (!provided) {
+    return { ok: false, status: 401, error: "Authentication required" };
+  }
+
+  const accepted = new Set();
+  if (scope === "write") {
+    if (monitorWriteToken) accepted.add(monitorWriteToken);
+    else if (monitorReadToken) accepted.add(monitorReadToken);
+  } else {
+    if (monitorReadToken) accepted.add(monitorReadToken);
+    if (monitorWriteToken) accepted.add(monitorWriteToken);
+  }
+
+  if (!accepted.has(provided)) {
+    return { ok: false, status: 403, error: "Invalid token" };
+  }
+
+  return { ok: true };
 }
 
 function interpolateEnvVars(raw) {
@@ -319,7 +357,7 @@ async function loadAutoexecuteProjects() {
       const repo = String(ticketSource?.config?.repo ?? "").trim();
       if (!owner || !repo) continue;
 
-      const autoCfg = normalizeGitHubAutoexecuteConfig(project);
+      const autoCfg = webhookHandlerApi.normalizeGitHubAutoexecuteConfig(project);
       if (!autoCfg.enabled) continue;
 
       projects.push({
@@ -335,7 +373,7 @@ async function loadAutoexecuteProjects() {
     }
 
     if (sourceType === "linear") {
-      const autoCfg = normalizeLinearAutoexecuteConfig(project);
+      const autoCfg = webhookHandlerApi.normalizeLinearAutoexecuteConfig(project);
       if (!autoCfg.enabled) continue;
 
       const teamId = String(ticketSource?.config?.team_id ?? "").trim().toLowerCase();
@@ -476,6 +514,32 @@ function extractLinearTrigger(payload, config) {
   return { allowed: true, ticketId };
 }
 
+async function loadSharedWebhookHandlerModule() {
+  const compiledPath = path.join(repoRoot, "dist", "service", "webhook-handler.js");
+  try {
+    const imported = await import(pathToFileURL(compiledPath).href);
+    if (imported && typeof imported === "object") {
+      console.log(`[monitor] Using shared webhook handler module: ${compiledPath}`);
+      return imported;
+    }
+  } catch {
+    // Ignore missing compiled module and fall back to inline implementations.
+  }
+  return null;
+}
+
+const sharedWebhookModule = await loadSharedWebhookHandlerModule();
+const webhookHandlerApi = {
+  normalizeGitHubAutoexecuteConfig:
+    sharedWebhookModule?.normalizeGitHubAutoexecuteConfig ?? normalizeGitHubAutoexecuteConfig,
+  normalizeLinearAutoexecuteConfig:
+    sharedWebhookModule?.normalizeLinearAutoexecuteConfig ?? normalizeLinearAutoexecuteConfig,
+  verifyGitHubSignature: sharedWebhookModule?.verifyGitHubSignature ?? verifyGitHubSignature,
+  verifyLinearSignature: sharedWebhookModule?.verifyLinearSignature ?? verifyLinearSignature,
+  extractGitHubTrigger: sharedWebhookModule?.extractGitHubTrigger ?? extractGitHubTrigger,
+  extractLinearTrigger: sharedWebhookModule?.extractLinearTrigger ?? extractLinearTrigger,
+};
+
 function shouldDedupeRun(dedupeKey, dedupeWindowMinutes) {
   const now = Date.now();
   const windowMs = Math.max(1, dedupeWindowMinutes) * 60_000;
@@ -600,13 +664,13 @@ async function handleGitHubWebhookRequest(req, res) {
     return;
   }
 
-  if (!verifyGitHubSignature(rawBody, signature, matched.autoCfg.webhookSecret)) {
+  if (!webhookHandlerApi.verifyGitHubSignature(rawBody, signature, matched.autoCfg.webhookSecret)) {
     sendJson(res, 401, { accepted: false, error: "Invalid webhook signature" });
     return;
   }
 
   const action = String(payload?.action ?? "");
-  const trigger = extractGitHubTrigger(payload, event, action, matched.autoCfg);
+  const trigger = webhookHandlerApi.extractGitHubTrigger(payload, event, action, matched.autoCfg);
   if (!trigger.allowed) {
     sendJson(res, 202, {
       accepted: false,
@@ -689,7 +753,7 @@ async function handleLinearWebhookRequest(req, res) {
     return;
   }
 
-  if (!verifyLinearSignature(rawBody, signature, matched.autoCfg.webhookSecret)) {
+  if (!webhookHandlerApi.verifyLinearSignature(rawBody, signature, matched.autoCfg.webhookSecret)) {
     sendJson(res, 401, { accepted: false, error: "Invalid webhook signature" });
     return;
   }
@@ -703,7 +767,7 @@ async function handleLinearWebhookRequest(req, res) {
     }
   }
 
-  const trigger = extractLinearTrigger(payload, matched.autoCfg);
+  const trigger = webhookHandlerApi.extractLinearTrigger(payload, matched.autoCfg);
   if (!trigger.allowed) {
     sendJson(res, 202, {
       accepted: false,
@@ -1796,6 +1860,18 @@ const server = http.createServer(async (req, res) => {
   const pathname = reqUrl.pathname;
 
   try {
+    const isApiRoute = pathname.startsWith("/api/");
+    const isWebhookRoute = pathname === "/api/webhooks/github" || pathname === "/api/webhooks/linear";
+    if (isApiRoute && !isWebhookRoute) {
+      const method = String(req.method ?? "GET").toUpperCase();
+      const isWriteScope = method !== "GET" && method !== "HEAD";
+      const authResult = authorizeApiRequest(req, reqUrl, isWriteScope ? "write" : "read");
+      if (!authResult.ok) {
+        sendJson(res, authResult.status, { error: authResult.error });
+        return;
+      }
+    }
+
     if (pathname === "/v2" || pathname.startsWith("/v2/")) {
       // /v2 is removed. Returning 404 rather than redirecting to / so that
       // any stale bookmarks or scripts that check for a 2xx response fail

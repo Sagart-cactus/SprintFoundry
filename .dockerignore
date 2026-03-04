@@ -1,11 +1,13 @@
 node_modules/
-dist/
 .git/
 *.log
 video/
 .playwright-cli/
 .playwright-mcp/
 workspaces/
+tests/
+*.test.ts
+**/*.test.ts
 config/project.yaml
 config/project-*.yaml
 !config/project.example.yaml
