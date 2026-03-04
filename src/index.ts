@@ -6,6 +6,7 @@ import * as path from "path";
 import * as os from "os";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
+import { spawn } from "child_process";
 
 const require = createRequire(import.meta.url);
 const { version } = require("../package.json");
@@ -23,6 +24,29 @@ import { worktreeWorkspaceModule } from "./plugins/workspace-worktree/index.js";
 import { defaultTrackerModule } from "./plugins/tracker-default/index.js";
 import { consoleNotifierModule } from "./plugins/notifier-console/index.js";
 import { githubSCMModule } from "./plugins/scm-github/index.js";
+import { startDispatchControllerServer } from "./service/dispatch-controller.js";
+
+async function maybeRunRuntimeCliPassthrough(): Promise<void> {
+  const runtimeCli = process.argv[2];
+  if (runtimeCli !== "claude" && runtimeCli !== "codex") {
+    return;
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(runtimeCli, process.argv.slice(3), { stdio: "inherit" });
+    child.on("error", reject);
+    child.on("exit", (code, signal) => {
+      if (signal) {
+        process.kill(process.pid, signal);
+        return;
+      }
+      resolve();
+      process.exit(code ?? 0);
+    });
+  });
+}
+
+await maybeRunRuntimeCliPassthrough();
 
 // Migrate deprecated AGENTSDLC_* env vars to SPRINTFOUNDRY_*
 migrateEnvVars();
@@ -254,6 +278,43 @@ program
     console.log(`Starting monitor on http://127.0.0.1:${opts.port}/`);
     const proc = spawn("node", [serverPath, "--port", opts.port], { stdio: "inherit" });
     proc.on("exit", (code) => process.exit(code ?? 0));
+  });
+
+program
+  .command("dispatch")
+  .description("Start the dispatch controller API and queue consumer")
+  .option("--port <port>", "Port to listen on", "4320")
+  .option("--host <host>", "Host to bind", "0.0.0.0")
+  .option("--config <dir>", "Config directory", "config")
+  .action(async (opts) => {
+    const port = Number.parseInt(String(opts.port ?? ""), 10);
+    if (!Number.isInteger(port) || port <= 0) {
+      console.error("Error: --port must be a positive integer");
+      process.exit(1);
+    }
+
+    const runtime = await startDispatchControllerServer({
+      port,
+      host: String(opts.host ?? "0.0.0.0"),
+      configDir: String(opts.config ?? "config"),
+    });
+
+    const bound = runtime.server.address();
+    const boundPort = bound && typeof bound === "object" ? bound.port : port;
+    const host = String(opts.host ?? "0.0.0.0");
+    console.log(`Dispatch Controller listening on http://${host}:${boundPort}`);
+
+    const shutdown = async () => {
+      await runtime.close();
+      process.exit(0);
+    };
+
+    process.once("SIGINT", () => {
+      void shutdown();
+    });
+    process.once("SIGTERM", () => {
+      void shutdown();
+    });
   });
 
 program
