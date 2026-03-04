@@ -168,6 +168,10 @@ function asString(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function asStringRaw(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
 function asInteger(value: unknown, min: number): number | null {
   if (typeof value !== "number" || !Number.isInteger(value) || value < min) return null;
   return value;
@@ -493,7 +497,7 @@ function parseLogPayload(body: unknown, limits: IngestionLimits): { value?: LogP
   const runtime_provider = asString(body.runtime_provider);
   const sequence = asInteger(body.sequence, 0);
   const stream = asString(body.stream);
-  const chunk = asString(body.chunk);
+  const chunk = asStringRaw(body.chunk);
   const byte_length = asInteger(body.byte_length, 0);
   const is_final = asBoolean(body.is_final);
   const timestamp = asIsoDateString(body.timestamp);
@@ -507,7 +511,7 @@ function parseLogPayload(body: unknown, limits: IngestionLimits): { value?: LogP
   if (sequence === null) errors.push("sequence must be an integer >= 0");
   if (!stream) errors.push("stream is required");
   if (stream && stream !== "activity") errors.push("stream must be 'activity'");
-  if (!chunk) errors.push("chunk is required");
+  if (chunk === null) errors.push("chunk is required");
   if (byte_length === null) errors.push("byte_length must be an integer >= 0");
   if (is_final === null) errors.push("is_final must be a boolean");
   if (!timestamp) errors.push("timestamp must be a valid ISO date-time string");
@@ -515,13 +519,13 @@ function parseLogPayload(body: unknown, limits: IngestionLimits): { value?: LogP
   if (agent) enforceMaxLength("agent", agent, limits.genericFieldMaxChars, errors);
   if (runtime_provider) enforceMaxLength("runtime_provider", runtime_provider, limits.genericFieldMaxChars, errors);
   if (stream) enforceMaxLength("stream", stream, limits.genericFieldMaxChars, errors);
-  if (chunk && Buffer.byteLength(chunk) > limits.logChunkMaxBytes) {
+  if (chunk !== null && Buffer.byteLength(chunk) > limits.logChunkMaxBytes) {
     errors.push(`chunk exceeds max size ${limits.logChunkMaxBytes} bytes`);
   }
   if (byte_length !== null && byte_length > limits.logChunkMaxBytes) {
     errors.push(`byte_length exceeds max size ${limits.logChunkMaxBytes} bytes`);
   }
-  if (chunk && byte_length !== null && Buffer.byteLength(chunk) !== byte_length) {
+  if (chunk !== null && byte_length !== null && Buffer.byteLength(chunk) !== byte_length) {
     errors.push("byte_length must match chunk byte length");
   }
 
@@ -534,7 +538,7 @@ function parseLogPayload(body: unknown, limits: IngestionLimits): { value?: LogP
     !runtime_provider ||
     sequence === null ||
     !stream ||
-    !chunk ||
+    chunk === null ||
     byte_length === null ||
     is_final === null ||
     !timestamp

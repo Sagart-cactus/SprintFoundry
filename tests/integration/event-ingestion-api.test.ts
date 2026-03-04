@@ -101,6 +101,8 @@ interface LogRow {
   step_attempt: number;
   sequence: number;
   stream: string;
+  chunk: string;
+  byte_length: number;
 }
 
 class InMemoryDatabase {
@@ -166,6 +168,8 @@ class InMemoryDatabase {
       const stepAttempt = Number(params[2]);
       const sequence = Number(params[5]);
       const stream = String(params[6]);
+      const chunk = String(params[7]);
+      const byteLength = Number(params[8]);
       const key = `${runId}:${stepNumber}:${stepAttempt}:${sequence}:${stream}`;
       if (this.logKeys.has(key)) {
         return { rows: [], rowCount: 0 };
@@ -177,6 +181,8 @@ class InMemoryDatabase {
         step_attempt: stepAttempt,
         sequence,
         stream,
+        chunk,
+        byte_length: byteLength,
       });
       return { rows: [{ id: this.logs.length } as Row], rowCount: 1 };
     }
@@ -459,6 +465,45 @@ describe("event-ingestion-api integration", () => {
     const sequences = db.logs.map((log) => log.sequence);
     expect(sequences).toEqual([1, 2]);
     expect(duplicateResponse.status).toBe(200);
+  });
+
+  it("POST /logs preserves chunk bytes without trimming", async () => {
+    const app = new FakeExpressApp();
+    const db = new InMemoryDatabase();
+
+    registerEventIngestionRoutes(app, {
+      internalApiToken: validToken,
+      database: db,
+      redisPublisher: null,
+    });
+
+    await app.inject({ method: "POST", path: "/runs", headers: authHeader(), body: runPayload() });
+
+    const rawChunk = "  leading and trailing whitespace  \n";
+    const rawChunkLength = Buffer.byteLength(rawChunk);
+
+    const response = await app.inject({
+      method: "POST",
+      path: "/logs",
+      headers: authHeader(),
+      body: {
+        run_id: "run-1",
+        step_number: 1,
+        step_attempt: 1,
+        agent: "developer",
+        runtime_provider: "codex",
+        sequence: 3,
+        stream: "activity",
+        chunk: rawChunk,
+        byte_length: rawChunkLength,
+        is_final: false,
+        timestamp: "2026-03-04T00:00:16.000Z",
+      },
+    });
+
+    expect(response.status).toBe(201);
+    expect(db.logs.at(-1)?.chunk).toBe(rawChunk);
+    expect(db.logs.at(-1)?.byte_length).toBe(rawChunkLength);
   });
 
   it("enforces bearer token auth for protected routes", async () => {
