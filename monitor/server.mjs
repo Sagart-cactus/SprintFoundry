@@ -15,6 +15,12 @@ const runsRoot = process.env.SPRINTFOUNDRY_RUNS_ROOT ?? process.env.AGENTSDLC_RU
 const sessionsRoot = process.env.SPRINTFOUNDRY_SESSIONS_DIR ?? path.join(os.homedir(), ".sprintfoundry", "sessions");
 const configRoot = process.env.SPRINTFOUNDRY_CONFIG_DIR ?? path.join(repoRoot, "config");
 const autoexecuteDryRun = process.env.SPRINTFOUNDRY_AUTORUN_DRY_RUN === "1";
+const databaseUrl = String(process.env.SPRINTFOUNDRY_DATABASE_URL ?? "").trim();
+const redisUrl = String(process.env.SPRINTFOUNDRY_REDIS_URL ?? "").trim();
+const useDatabaseBackend = databaseUrl.length > 0;
+const selectedDataSourceLabel = useDatabaseBackend
+  ? `postgres+redis${redisUrl ? "" : " (redis_url_missing: polling_fallback)"}`
+  : "filesystem";
 
 const portArgIndex = process.argv.indexOf("--port");
 const portArg = portArgIndex !== -1 ? process.argv[portArgIndex + 1] : undefined;
@@ -769,6 +775,349 @@ function safeJoin(base, ...parts) {
   return resolved;
 }
 
+let databasePoolPromise = null;
+let redisSubscriberFactoryPromise = null;
+
+async function getDatabasePool() {
+  if (!useDatabaseBackend) return null;
+  if (!databasePoolPromise) {
+    databasePoolPromise = (async () => {
+      let pgModule;
+      try {
+        pgModule = await import("pg");
+      } catch (err) {
+        throw new Error(`Database backend requested, but "pg" is unavailable: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      const Pool = pgModule?.Pool ?? pgModule?.default?.Pool;
+      if (!Pool) {
+        throw new Error('Database backend requested, but "pg" did not expose Pool');
+      }
+      return new Pool({ connectionString: databaseUrl });
+    })();
+  }
+  return databasePoolPromise;
+}
+
+async function getRedisSubscriberFactory() {
+  if (!redisUrl) return null;
+  if (!redisSubscriberFactoryPromise) {
+    redisSubscriberFactoryPromise = (async () => {
+      let redisModule;
+      try {
+        redisModule = await import("redis");
+      } catch (err) {
+        throw new Error(`Redis backend requested, but "redis" is unavailable: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      const createClient = redisModule?.createClient ?? redisModule?.default?.createClient;
+      if (!createClient) {
+        throw new Error('Redis backend requested, but "redis" did not expose createClient');
+      }
+      return () => createClient({ url: redisUrl });
+    })();
+  }
+  return redisSubscriberFactoryPromise;
+}
+
+function toIsoTimestamp(value) {
+  if (!value) return null;
+  if (value instanceof Date) return value.toISOString();
+  const parsed = Date.parse(String(value));
+  if (!Number.isFinite(parsed)) return null;
+  return new Date(parsed).toISOString();
+}
+
+function normalizeMonitorEvent(rawEvent) {
+  if (!rawEvent || typeof rawEvent !== "object") return null;
+  const eventType = String(rawEvent.event_type ?? "").trim();
+  if (!eventType) return null;
+  const timestamp = toIsoTimestamp(rawEvent.timestamp) ?? new Date().toISOString();
+  const data = rawEvent.data && typeof rawEvent.data === "object" ? rawEvent.data : {};
+  return {
+    event_type: eventType,
+    timestamp,
+    data,
+  };
+}
+
+function trimToLineCount(text, lines) {
+  const allLines = String(text ?? "").split("\n");
+  return allLines.slice(Math.max(0, allLines.length - lines)).join("\n");
+}
+
+async function getDbRunRecord(projectId, runId) {
+  const db = await getDatabasePool();
+  if (!db) return null;
+  const query = await db.query(
+    `
+      SELECT
+        run_id,
+        project_id,
+        ticket_id,
+        ticket_source,
+        ticket_title,
+        status,
+        current_step,
+        total_steps,
+        plan_classification,
+        workspace_path,
+        branch,
+        pr_url,
+        total_tokens,
+        total_cost_usd,
+        created_at,
+        updated_at,
+        completed_at,
+        error
+      FROM runs
+      WHERE project_id = $1 AND run_id = $2
+      LIMIT 1
+    `,
+    [projectId, runId]
+  );
+  return query.rows[0] ?? null;
+}
+
+async function readEventsFromDb(runId, limit = null) {
+  const db = await getDatabasePool();
+  if (!db) return [];
+
+  const boundedLimit = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : null;
+  const queryResult = boundedLimit
+    ? await db.query(
+      `
+        SELECT event_type, timestamp, data
+        FROM (
+          SELECT event_type, timestamp, data, received_at, event_id
+          FROM events
+          WHERE run_id = $1
+          ORDER BY timestamp DESC, received_at DESC, event_id DESC
+          LIMIT $2
+        ) recent
+        ORDER BY timestamp ASC, received_at ASC, event_id ASC
+      `,
+      [runId, boundedLimit]
+    )
+    : await db.query(
+      `
+        SELECT event_type, timestamp, data
+        FROM events
+        WHERE run_id = $1
+        ORDER BY timestamp ASC, received_at ASC, event_id ASC
+      `,
+      [runId]
+    );
+
+  return queryResult.rows
+    .map((row) => normalizeMonitorEvent(row))
+    .filter(Boolean);
+}
+
+function buildDbSessionFallback(runRecord) {
+  return {
+    status: typeof runRecord.status === "string" ? runRecord.status : "unknown",
+    plan_classification: runRecord.plan_classification ?? null,
+    total_steps: Number.isFinite(runRecord.total_steps) ? runRecord.total_steps : 0,
+    created_at: toIsoTimestamp(runRecord.created_at),
+    updated_at: toIsoTimestamp(runRecord.updated_at),
+    ticket_source: runRecord.ticket_source ?? null,
+    ticket_id: runRecord.ticket_id ?? null,
+    ticket_title: runRecord.ticket_title ?? null,
+  };
+}
+
+function extractResultSummaryText(result) {
+  return typeof result?.summary === "string" && result.summary.trim()
+    ? result.summary.trim()
+    : null;
+}
+
+async function loadRunSummaryFromDbRecord(runRecord) {
+  const events = await readEventsFromDb(runRecord.run_id);
+  const planEvent = events.find((e) => e.event_type === "task.plan_generated");
+  const plan = planEvent?.data?.plan ?? null;
+  const steps = buildStepStatus(plan, events);
+  const last = events.at(-1);
+  const hasEvents = events.length > 0;
+  const projectRepoUrl = await getProjectRepoUrl(runRecord.project_id);
+  const sessionFallback = buildDbSessionFallback(runRecord);
+  const sourceMeta = extractRunSourceMetadata(events, sessionFallback, projectRepoUrl);
+  let fallbackRepoUrl = sourceMeta.ticket_repo_url;
+  if (!fallbackRepoUrl && typeof runRecord.workspace_path === "string" && runRecord.workspace_path) {
+    fallbackRepoUrl = await getWorkspaceRepoUrl(runRecord.workspace_path);
+  }
+
+  return {
+    project_id: runRecord.project_id,
+    run_id: runRecord.run_id,
+    status: hasEvents ? inferStatus(events) : (runRecord.status ?? "unknown"),
+    classification: plan?.classification ?? runRecord.plan_classification ?? null,
+    step_count: hasEvents ? (plan?.steps?.length ?? 0) : (runRecord.total_steps ?? 0),
+    steps,
+    started_at: events.find((e) => e.event_type === "task.created")?.timestamp ?? toIsoTimestamp(runRecord.created_at),
+    last_event_type: last?.event_type ?? null,
+    last_event_ts: last?.timestamp
+      ? Date.parse(last.timestamp)
+      : (runRecord.updated_at ? Date.parse(String(runRecord.updated_at)) : null),
+    workspace_path: runRecord.workspace_path ?? "",
+    ...sourceMeta,
+    ticket_repo_url: fallbackRepoUrl,
+  };
+}
+
+async function listRunsFromDb() {
+  const db = await getDatabasePool();
+  if (!db) return [];
+  const result = await db.query(
+    `
+      SELECT
+        run_id,
+        project_id,
+        ticket_id,
+        ticket_source,
+        ticket_title,
+        status,
+        current_step,
+        total_steps,
+        plan_classification,
+        workspace_path,
+        branch,
+        pr_url,
+        total_tokens,
+        total_cost_usd,
+        created_at,
+        updated_at,
+        completed_at,
+        error
+      FROM runs
+    `
+  );
+  const runs = await Promise.all(result.rows.map((runRecord) => loadRunSummaryFromDbRecord(runRecord)));
+  runs.sort((a, b) => (b.last_event_ts ?? 0) - (a.last_event_ts ?? 0));
+  return runs;
+}
+
+async function loadRunFromDb(projectId, runId) {
+  const runRecord = await getDbRunRecord(projectId, runId);
+  if (!runRecord) {
+    throw new Error(`Run not found: ${projectId}/${runId}`);
+  }
+  const summary = await loadRunSummaryFromDbRecord(runRecord);
+  const events = await readEventsFromDb(runRecord.run_id);
+  const planEvent = events.find((e) => e.event_type === "task.plan_generated");
+  const db = await getDatabasePool();
+  const stepResults = await db.query(
+    `
+      SELECT DISTINCT ON (step_number) step_number, result
+      FROM step_results
+      WHERE run_id = $1
+      ORDER BY step_number ASC, step_attempt DESC
+    `,
+    [runRecord.run_id]
+  );
+  const summaryByStep = new Map(
+    stepResults.rows.map((row) => [row.step_number, extractResultSummaryText(row.result)])
+  );
+
+  return {
+    ...summary,
+    steps: (summary.steps ?? []).map((step) => ({
+      ...step,
+      result_summary: summaryByStep.get(step.step_number) ?? null,
+    })),
+    plan: planEvent?.data?.plan ?? null,
+    step_models: {},
+  };
+}
+
+async function readLogTextFromDb(projectId, runId, kind, lines = 400, stepNumber = null) {
+  const runRecord = await getDbRunRecord(projectId, runId);
+  if (!runRecord) {
+    throw new Error(`Run not found: ${projectId}/${runId}`);
+  }
+  const db = await getDatabasePool();
+
+  if (kind === "agent_result") {
+    const hasStep = Number.isFinite(stepNumber);
+    const params = hasStep ? [runRecord.run_id, stepNumber] : [runRecord.run_id];
+    const whereStep = hasStep ? "AND step_number = $2" : "";
+    const result = await db.query(
+      `
+        SELECT result
+        FROM step_results
+        WHERE run_id = $1
+        ${whereStep}
+        ORDER BY step_number DESC, step_attempt DESC
+        LIMIT 1
+      `,
+      params
+    );
+    const row = result.rows[0];
+    if (!row) return "";
+    return trimToLineCount(JSON.stringify(row.result ?? {}, null, 2), lines);
+  }
+
+  if (!["planner_stdout", "planner_stderr", "agent_stdout", "agent_stderr"].includes(kind)) {
+    return "";
+  }
+
+  const isPlanner = kind.startsWith("planner_");
+  const where = ["run_id = $1", "stream = 'activity'"];
+  const params = [runRecord.run_id];
+
+  if (Number.isFinite(stepNumber)) {
+    params.push(stepNumber);
+    where.push(`step_number = $${params.length}`);
+  }
+
+  if (isPlanner) {
+    where.push("agent = 'planner'");
+  } else {
+    where.push("agent <> 'planner'");
+  }
+
+  const chunks = await db.query(
+    `
+      SELECT chunk
+      FROM run_logs
+      WHERE ${where.join(" AND ")}
+      ORDER BY step_number ASC, step_attempt ASC, sequence ASC
+      LIMIT 50000
+    `,
+    params
+  );
+  const text = chunks.rows.map((row) => String(row.chunk ?? "")).join("");
+  return trimToLineCount(text, lines);
+}
+
+async function readNewEventsFromDbSince(runIdOrNull, cursorIso) {
+  const db = await getDatabasePool();
+  if (!db) return { events: [], cursorIso };
+  const where = ["received_at > $1"];
+  const params = [cursorIso];
+  if (runIdOrNull) {
+    params.push(runIdOrNull);
+    where.push(`run_id = $${params.length}`);
+  }
+  const result = await db.query(
+    `
+      SELECT event_type, timestamp, data, received_at
+      FROM events
+      WHERE ${where.join(" AND ")}
+      ORDER BY received_at ASC, timestamp ASC, event_type ASC
+      LIMIT 500
+    `,
+    params
+  );
+  const events = result.rows
+    .map((row) => normalizeMonitorEvent(row))
+    .filter(Boolean);
+  const lastReceived = result.rows.at(-1)?.received_at;
+  return {
+    events,
+    cursorIso: toIsoTimestamp(lastReceived) ?? cursorIso,
+  };
+}
+
 async function listRuns() {
   const projects = await fs.readdir(runsRoot, { withFileTypes: true }).catch(() => []);
   const byKey = new Map();
@@ -1229,6 +1578,34 @@ async function listFiles(projectId, runId, root = "") {
   return out;
 }
 
+async function listRunsSelected() {
+  if (useDatabaseBackend) return listRunsFromDb();
+  return listRuns();
+}
+
+async function loadRunSelected(projectId, runId) {
+  if (useDatabaseBackend) return loadRunFromDb(projectId, runId);
+  return loadRun(projectId, runId);
+}
+
+async function listEventsSelected(projectId, runId, limit) {
+  if (useDatabaseBackend) {
+    const runRecord = await getDbRunRecord(projectId, runId);
+    if (!runRecord) {
+      throw new Error(`Run not found: ${projectId}/${runId}`);
+    }
+    return readEventsFromDb(runRecord.run_id, limit);
+  }
+  const runPath = await resolveRunPath(projectId, runId);
+  const events = await readEvents(runPath);
+  return events.slice(Math.max(0, events.length - limit));
+}
+
+async function readLogTextSelected(projectId, runId, kind, lines, stepNumber = null) {
+  if (useDatabaseBackend) return readLogTextFromDb(projectId, runId, kind, lines, stepNumber);
+  return readLogText(projectId, runId, kind, lines, stepNumber);
+}
+
 async function serveStatic(res, pathname, rootDir = publicV3Dir) {
   const filePath = pathname === "/" ? path.join(rootDir, "index.html") : safeJoin(rootDir, pathname.slice(1));
   const contentType = filePath.endsWith(".css")
@@ -1336,6 +1713,84 @@ const sseHeartbeatInterval = setInterval(() => {
 }, SSE_HEARTBEAT_MS);
 sseHeartbeatInterval.unref?.();
 
+async function startDatabaseSSEFeed(project, run, res) {
+  const cleanups = [];
+  let targetRunId = null;
+
+  if (project && run) {
+    const runRecord = await getDbRunRecord(project, run);
+    if (!runRecord) {
+      return () => {
+        for (const cleanup of cleanups) {
+          try { cleanup(); } catch { /* best effort */ }
+        }
+      };
+    }
+    targetRunId = runRecord.run_id;
+  }
+
+  let redisAttached = false;
+  if (redisUrl) {
+    try {
+      const createClient = await getRedisSubscriberFactory();
+      if (createClient) {
+        const subscriber = createClient();
+        await subscriber.connect();
+        const onMessage = (message) => {
+          try {
+            const parsed = JSON.parse(String(message ?? ""));
+            const normalized = normalizeMonitorEvent(parsed);
+            if (normalized) {
+              sseWrite(res, "event", normalized);
+            }
+          } catch {
+            // Invalid payload from pubsub; skip.
+          }
+        };
+        if (targetRunId) {
+          const channel = `sprintfoundry:events:${targetRunId}`;
+          await subscriber.subscribe(channel, onMessage);
+        } else {
+          await subscriber.pSubscribe("sprintfoundry:events:*", onMessage);
+        }
+        cleanups.push(() => {
+          void subscriber.quit().catch(() => undefined);
+        });
+        redisAttached = true;
+      }
+    } catch {
+      // Redis unavailable; fallback to polling DB.
+    }
+  }
+
+  if (!redisAttached) {
+    let polling = false;
+    let cursorIso = new Date().toISOString();
+    const pollHandle = setInterval(async () => {
+      if (polling) return;
+      polling = true;
+      try {
+        const { events, cursorIso: nextCursor } = await readNewEventsFromDbSince(targetRunId, cursorIso);
+        cursorIso = nextCursor;
+        for (const event of events) {
+          sseWrite(res, "event", event);
+        }
+      } catch {
+        // Transient poll failure; skip this tick.
+      } finally {
+        polling = false;
+      }
+    }, SSE_POLL_MS);
+    cleanups.push(() => clearInterval(pollHandle));
+  }
+
+  return () => {
+    for (const cleanup of cleanups) {
+      try { cleanup(); } catch { /* best effort */ }
+    }
+  };
+}
+
 const server = http.createServer(async (req, res) => {
   const reqUrl = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
   const pathname = reqUrl.pathname;
@@ -1360,7 +1815,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === "/api/runs") {
-      const runs = await listRuns();
+      const runs = await listRunsSelected();
       sendJson(res, 200, { runs, runs_root: runsRoot });
       return;
     }
@@ -1372,7 +1827,7 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { error: "Missing project/run query params" });
         return;
       }
-      const data = await loadRun(project, run);
+      const data = await loadRunSelected(project, run);
       sendJson(res, 200, data);
       return;
     }
@@ -1385,9 +1840,8 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { error: "Missing project/run query params" });
         return;
       }
-      const runPath = await resolveRunPath(project, run);
-      const events = await readEvents(runPath);
-      sendJson(res, 200, { events: events.slice(Math.max(0, events.length - limit)) });
+      const events = await listEventsSelected(project, run, limit);
+      sendJson(res, 200, { events });
       return;
     }
 
@@ -1407,37 +1861,47 @@ const server = http.createServer(async (req, res) => {
       sseWrite(res, "connected", { ts: Date.now() });
       sseClients.add(res);
 
-      // If project+run specified, watch that specific run's events file
-      const watchedFiles = [];
-      if (project && run) {
-        try {
-          const runPath = await resolveRunPath(project, run);
-          const eventsFile = path.join(runPath, ".events.jsonl");
-          startSSEWatcher(eventsFile, res);
-          watchedFiles.push(eventsFile);
-        } catch {
-          // Invalid path — just stream heartbeats
-        }
+      let stopSelectedFeed = () => undefined;
+      if (useDatabaseBackend) {
+        stopSelectedFeed = await startDatabaseSSEFeed(project, run, res);
       } else {
-        // No specific run — watch all known runs' event files
-        // (scan once at connection time; new runs picked up on reconnect)
-        try {
-          const runs = await listRuns();
-          for (const summary of runs) {
-            if (!summary.workspace_path) continue;
-            const eventsFile = path.join(summary.workspace_path, ".events.jsonl");
+        // If project+run specified, watch that specific run's events file
+        const watchedFiles = [];
+        if (project && run) {
+          try {
+            const runPath = await resolveRunPath(project, run);
+            const eventsFile = path.join(runPath, ".events.jsonl");
             startSSEWatcher(eventsFile, res);
             watchedFiles.push(eventsFile);
+          } catch {
+            // Invalid path — just stream heartbeats
           }
-        } catch {
-          // Scan failed — just stream heartbeats
+        } else {
+          // No specific run — watch all known runs' event files
+          // (scan once at connection time; new runs picked up on reconnect)
+          try {
+            const runs = await listRuns();
+            for (const summary of runs) {
+              if (!summary.workspace_path) continue;
+              const eventsFile = path.join(summary.workspace_path, ".events.jsonl");
+              startSSEWatcher(eventsFile, res);
+              watchedFiles.push(eventsFile);
+            }
+          } catch {
+            // Scan failed — just stream heartbeats
+          }
         }
+        stopSelectedFeed = () => {
+          for (const file of watchedFiles) {
+            stopSSEWatcher(file, res);
+          }
+        };
       }
 
       // Also send periodic run summary refreshes so the list view stays current
       const summaryInterval = setInterval(async () => {
         try {
-          const runs = await listRuns();
+          const runs = await listRunsSelected();
           sseWrite(res, "runs", { runs });
         } catch {
           // Transient failure — skip this tick
@@ -1447,9 +1911,7 @@ const server = http.createServer(async (req, res) => {
       req.on("close", () => {
         sseClients.delete(res);
         clearInterval(summaryInterval);
-        for (const file of watchedFiles) {
-          stopSSEWatcher(file, res);
-        }
+        stopSelectedFeed();
       });
       return;
     }
@@ -1465,7 +1927,7 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { error: "Missing project/run/kind query params" });
         return;
       }
-      const text = await readLogText(project, run, kind, lines, Number.isFinite(stepNumber) ? stepNumber : null);
+      const text = await readLogTextSelected(project, run, kind, lines, Number.isFinite(stepNumber) ? stepNumber : null);
       sendText(res, 200, text);
       return;
     }
@@ -1689,6 +2151,7 @@ if (webhookServer) {
 server.listen(port, "127.0.0.1", () => {
   const actualPort = server.address()?.port ?? port;
   console.log(`[monitor] Run Monitor listening at http://127.0.0.1:${actualPort}`);
+  console.log(`[monitor] Data source: ${selectedDataSourceLabel}`);
   console.log(`[monitor] Watching runs under: ${runsRoot}`);
 });
 
