@@ -95,6 +95,10 @@ source .env.distributed
 set +a
 ```
 
+`docker-compose.distributed.yml` uses `SPRINTFOUNDRY_COMPOSE_DATABASE_URL` and
+`SPRINTFOUNDRY_COMPOSE_REDIS_URL` for container-to-container networking (`postgres`/`redis`).
+`SPRINTFOUNDRY_DATABASE_URL` and `SPRINTFOUNDRY_REDIS_URL` remain host-oriented defaults.
+
 2. Start distributed services:
 
 ```bash

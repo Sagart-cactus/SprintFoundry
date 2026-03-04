@@ -62,8 +62,9 @@ services:
         condition: service_completed_successfully
     environment:
       SPRINTFOUNDRY_EVENT_API_PORT: 3001
-      SPRINTFOUNDRY_DATABASE_URL: ${SPRINTFOUNDRY_DATABASE_URL:-postgres://sf:sf@postgres:5432/sprintfoundry}
-      SPRINTFOUNDRY_REDIS_URL: ${SPRINTFOUNDRY_REDIS_URL:-redis://redis:6379}
+      # Always prefer compose-internal URLs for container networking.
+      SPRINTFOUNDRY_DATABASE_URL: ${SPRINTFOUNDRY_COMPOSE_DATABASE_URL:-postgres://sf:sf@postgres:5432/sprintfoundry}
+      SPRINTFOUNDRY_REDIS_URL: ${SPRINTFOUNDRY_COMPOSE_REDIS_URL:-redis://redis:6379}
       SPRINTFOUNDRY_INTERNAL_API_TOKEN: ${SPRINTFOUNDRY_INTERNAL_API_TOKEN:-dev-token}
     ports:
       - "3001:3001"
@@ -81,8 +82,9 @@ services:
         condition: service_completed_successfully
     environment:
       MONITOR_PORT: 4310
-      SPRINTFOUNDRY_DATABASE_URL: ${SPRINTFOUNDRY_DATABASE_URL:-postgres://sf:sf@postgres:5432/sprintfoundry}
-      SPRINTFOUNDRY_REDIS_URL: ${SPRINTFOUNDRY_REDIS_URL:-redis://redis:6379}
+      # Always prefer compose-internal URLs for container networking.
+      SPRINTFOUNDRY_DATABASE_URL: ${SPRINTFOUNDRY_COMPOSE_DATABASE_URL:-postgres://sf:sf@postgres:5432/sprintfoundry}
+      SPRINTFOUNDRY_REDIS_URL: ${SPRINTFOUNDRY_COMPOSE_REDIS_URL:-redis://redis:6379}
     ports:
       - "4310:4310"
     restart: unless-stopped
