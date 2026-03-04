@@ -82,6 +82,54 @@ Open http://127.0.0.1:4310/
 
 The monitor shows all runs, live step progress, streaming agent output (tool calls, file edits, commands), token usage, and cost.
 
+## Local Distributed Testing
+
+Use this mode when you want event ingestion + monitor backed by Postgres/Redis.
+
+1. Create local env values:
+
+```bash
+cp .env.distributed.example .env.distributed
+set -a
+source .env.distributed
+set +a
+```
+
+2. Start distributed services:
+
+```bash
+docker compose -f docker-compose.distributed.yml up -d --build
+```
+
+This stack runs:
+- `postgres` (`postgres:16-alpine`) on `5432`
+- `redis` (`redis:7-alpine`) on `6379`
+- `migrate` one-shot init job (`migrations/001_create_event_tables.sql`)
+- `event-api` on `3001` (health: `GET /health`)
+- `monitor` on `4310`
+
+3. Verify services:
+
+```bash
+docker compose -f docker-compose.distributed.yml ps
+curl http://localhost:3001/health
+open http://localhost:4310
+```
+
+4. Run SprintFoundry with sink enabled:
+
+```bash
+pnpm dev -- run --project my-project --source prompt --prompt "test distributed mode"
+```
+
+5. Stop services:
+
+```bash
+docker compose -f docker-compose.distributed.yml down
+```
+
+Use `docker compose -f docker-compose.distributed.yml down -v` to also remove the Postgres named volume.
+
 ## CLI Reference
 
 ```

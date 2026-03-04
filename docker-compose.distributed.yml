@@ -1,0 +1,91 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${SPRINTFOUNDRY_POSTGRES_USER:-sf}
+      POSTGRES_PASSWORD: ${SPRINTFOUNDRY_POSTGRES_PASSWORD:-sf}
+      POSTGRES_DB: ${SPRINTFOUNDRY_POSTGRES_DB:-sprintfoundry}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${SPRINTFOUNDRY_POSTGRES_USER:-sf} -d ${SPRINTFOUNDRY_POSTGRES_DB:-sprintfoundry}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  migrate:
+    image: postgres:16-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${SPRINTFOUNDRY_POSTGRES_PASSWORD:-sf}
+    volumes:
+      - ./migrations:/migrations:ro
+    command:
+      - sh
+      - -lc
+      - >
+        psql
+        -h postgres
+        -U ${SPRINTFOUNDRY_POSTGRES_USER:-sf}
+        -d ${SPRINTFOUNDRY_POSTGRES_DB:-sprintfoundry}
+        -f /migrations/001_create_event_tables.sql
+    restart: "no"
+
+  event-api:
+    image: sprintfoundry-distributed:local
+    build:
+      context: .
+      dockerfile: Dockerfile.distributed
+    command: ["pnpm", "event-api"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      SPRINTFOUNDRY_EVENT_API_PORT: 3001
+      SPRINTFOUNDRY_DATABASE_URL: ${SPRINTFOUNDRY_DATABASE_URL:-postgres://sf:sf@postgres:5432/sprintfoundry}
+      SPRINTFOUNDRY_REDIS_URL: ${SPRINTFOUNDRY_REDIS_URL:-redis://redis:6379}
+      SPRINTFOUNDRY_INTERNAL_API_TOKEN: ${SPRINTFOUNDRY_INTERNAL_API_TOKEN:-dev-token}
+    ports:
+      - "3001:3001"
+    restart: unless-stopped
+
+  monitor:
+    image: sprintfoundry-distributed:local
+    command: ["pnpm", "monitor"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      MONITOR_PORT: 4310
+      SPRINTFOUNDRY_DATABASE_URL: ${SPRINTFOUNDRY_DATABASE_URL:-postgres://sf:sf@postgres:5432/sprintfoundry}
+      SPRINTFOUNDRY_REDIS_URL: ${SPRINTFOUNDRY_REDIS_URL:-redis://redis:6379}
+    ports:
+      - "4310:4310"
+    restart: unless-stopped
+
+volumes:
+  postgres-data:

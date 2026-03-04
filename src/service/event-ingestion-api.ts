@@ -721,8 +721,7 @@ export function registerEventIngestionRoutes(
 
   const requireAuth = createAuthMiddleware(token);
 
-  app.post(
-    "/events",
+  const eventHandlers: Handler[] = [
     requireAuth,
     createRateLimitGuard(rateLimiter, "eventsPerWindow"),
     createBodySizeGuard(limits.eventsBodyMaxBytes),
@@ -769,10 +768,10 @@ export function registerEventIngestionRoutes(
         redis_published: redisPublished,
       });
     }),
-  );
+  ];
+  app.post("/events", ...eventHandlers);
 
-  app.post(
-    "/runs",
+  const runHandlers: Handler[] = [
     requireAuth,
     createRateLimitGuard(rateLimiter, "runsPerWindow"),
     createBodySizeGuard(limits.runsBodyMaxBytes),
@@ -858,7 +857,9 @@ export function registerEventIngestionRoutes(
         run_id: payload.run_id,
       });
     }),
-  );
+  ];
+  app.post("/runs", ...runHandlers);
+  app.post("/v1/runs/upsert", ...runHandlers);
 
   app.post(
     "/step-results",
@@ -918,8 +919,7 @@ export function registerEventIngestionRoutes(
     }),
   );
 
-  app.post(
-    "/logs",
+  const logHandlers: Handler[] = [
     requireAuth,
     createRateLimitGuard(rateLimiter, "logsPerWindow"),
     createBodySizeGuard(limits.logsBodyMaxBytes),
@@ -972,7 +972,9 @@ export function registerEventIngestionRoutes(
         sequence: payload.sequence,
       });
     }),
-  );
+  ];
+  app.post("/logs", ...logHandlers);
+  app.post("/v1/logs/chunk", ...logHandlers);
 
   app.get(
     "/health",

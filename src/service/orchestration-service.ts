@@ -83,7 +83,8 @@ export class OrchestrationService {
     this.agentRunner = new AgentRunner(platformConfig, projectConfig);
     this.plannerRuntime = new PlannerFactory().create(platformConfig, projectConfig);
     const eventSinkUrl = process.env.SPRINTFOUNDRY_EVENT_SINK_URL?.trim();
-    const eventSinkClient = eventSinkUrl ? new EventSinkClient(eventSinkUrl) : undefined;
+    const internalApiToken = process.env.SPRINTFOUNDRY_INTERNAL_API_TOKEN?.trim();
+    const eventSinkClient = eventSinkUrl ? new EventSinkClient(eventSinkUrl, globalThis.fetch, internalApiToken) : undefined;
     this.events = new EventStore(platformConfig.events_dir, eventSinkClient);
     this.workspace = new WorkspaceManager(projectConfig);
     this.tickets = new TicketFetcher(projectConfig.integrations);
