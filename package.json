@@ -18,6 +18,7 @@
   "scripts": {
     "build": "tsc && node scripts/copy-assets.mjs",
     "dev": "tsx src/index.ts",
+    "event-api": "tsx src/service/event-ingestion-server.ts",
     "monitor": "node monitor/server.mjs",
     "start": "node dist/index.js",
     "lint": "tsc --noEmit",
@@ -51,6 +52,8 @@
     "@opentelemetry/sdk-metrics": "^1.30.0",
     "commander": "^13.1.0",
     "dockerode": "^4.0.4",
+    "pg": "^8.16.3",
+    "redis": "^5.8.2",
     "yaml": "^2.7.0"
   },
   "devDependencies": {

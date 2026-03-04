@@ -28,6 +28,7 @@ export class EventSinkClient {
   constructor(
     private readonly url: string | undefined,
     private readonly fetchFn: FetchFn = globalThis.fetch,
+    private readonly internalApiToken?: string,
   ) {}
 
   emit(event: TaskEvent): void {
@@ -79,9 +80,14 @@ export class EventSinkClient {
     }, EVENT_SINK_TIMEOUT_MS);
 
     try {
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (this.internalApiToken) {
+        headers.Authorization = `Bearer ${this.internalApiToken}`;
+      }
+
       const response = await this.fetchFn(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify(body),
         signal: controller.signal,
       });

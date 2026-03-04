@@ -191,4 +191,21 @@ describe("EventSinkClient", () => {
     await Promise.resolve();
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
+
+  it("adds bearer auth header when internal token is configured", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 200 }));
+    const client = new EventSinkClient("https://sink.example/events", fetchMock, "dev-token");
+
+    await client.postEvent(baseEvent);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://sink.example/events",
+      expect.objectContaining({
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer dev-token",
+        },
+      }),
+    );
+  });
 });

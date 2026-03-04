@@ -344,6 +344,27 @@ describe("event-ingestion-api integration", () => {
     expect(stored?.current_step).toBe(3);
   });
 
+  it("POST /v1/runs/upsert maps to run upsert handler", async () => {
+    const app = new FakeExpressApp();
+    const db = new InMemoryDatabase();
+
+    registerEventIngestionRoutes(app, {
+      internalApiToken: validToken,
+      database: db,
+      redisPublisher: null,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      path: "/v1/runs/upsert",
+      headers: authHeader(),
+      body: runPayload({ status: "executing", current_step: 1 }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(db.runs.get("run-1")?.status).toBe("executing");
+  });
+
   it("POST /step-results upserts by run_id/step_number/step_attempt", async () => {
     const app = new FakeExpressApp();
     const db = new InMemoryDatabase();
@@ -465,6 +486,41 @@ describe("event-ingestion-api integration", () => {
     const sequences = db.logs.map((log) => log.sequence);
     expect(sequences).toEqual([1, 2]);
     expect(duplicateResponse.status).toBe(200);
+  });
+
+  it("POST /v1/logs/chunk maps to log ingestion handler", async () => {
+    const app = new FakeExpressApp();
+    const db = new InMemoryDatabase();
+
+    registerEventIngestionRoutes(app, {
+      internalApiToken: validToken,
+      database: db,
+      redisPublisher: null,
+    });
+
+    await app.inject({ method: "POST", path: "/runs", headers: authHeader(), body: runPayload() });
+
+    const response = await app.inject({
+      method: "POST",
+      path: "/v1/logs/chunk",
+      headers: authHeader(),
+      body: {
+        run_id: "run-1",
+        step_number: 1,
+        step_attempt: 1,
+        agent: "developer",
+        runtime_provider: "codex",
+        sequence: 100,
+        stream: "activity",
+        chunk: "alias",
+        byte_length: 5,
+        is_final: false,
+        timestamp: "2026-03-04T00:00:09.000Z",
+      },
+    });
+
+    expect(response.status).toBe(201);
+    expect(db.logs.at(-1)?.sequence).toBe(100);
   });
 
   it("POST /logs preserves chunk bytes without trimming", async () => {
