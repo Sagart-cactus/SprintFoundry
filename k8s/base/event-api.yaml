@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: event-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: event-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: event-api
+    spec:
+      containers:
+        - name: event-api
+          image: sprintfoundry-runner:latest
+          command:
+            - node
+            - dist/service/event-ingestion-server.js
+          ports:
+            - containerPort: 3001
+              name: http
+          env:
+            - name: SPRINTFOUNDRY_EVENT_API_PORT
+              value: "3001"
+            - name: SPRINTFOUNDRY_DATABASE_URL
+              value: postgres://sf:sf@postgres:5432/sprintfoundry
+            - name: SPRINTFOUNDRY_REDIS_URL
+              value: redis://redis:6379
+            - name: SPRINTFOUNDRY_INTERNAL_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: sprintfoundry-system-secrets
+                  key: SPRINTFOUNDRY_INTERNAL_API_TOKEN
+                  optional: true
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: event-api
+spec:
+  selector:
+    app.kubernetes.io/name: event-api
+  ports:
+    - name: http
+      port: 3001
+      targetPort: http
