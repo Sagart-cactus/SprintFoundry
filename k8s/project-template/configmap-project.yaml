@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: project-config
+  namespace: __PROJECT_NAMESPACE__
+  labels:
+    sprintfoundry.io/project-id: __PROJECT_ID__
+data:
+  project.yaml: |
+__PROJECT_CONFIG_CONTENT__

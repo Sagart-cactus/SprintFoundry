@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: monitor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: monitor
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: monitor
+    spec:
+      containers:
+        - name: monitor
+          image: sprintfoundry-runner:latest
+          args:
+            - monitor
+            - --port
+            - "4310"
+          ports:
+            - containerPort: 4310
+              name: http
+          env:
+            - name: MONITOR_PORT
+              value: "4310"
+            - name: SPRINTFOUNDRY_DATABASE_URL
+              value: postgres://sf:sf@postgres:5432/sprintfoundry
+            - name: SPRINTFOUNDRY_REDIS_URL
+              value: redis://redis:6379
+            - name: SPRINTFOUNDRY_MONITOR_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: sprintfoundry-system-secrets
+                  key: SPRINTFOUNDRY_MONITOR_API_TOKEN
+                  optional: true
+            - name: SPRINTFOUNDRY_MONITOR_WRITE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: sprintfoundry-system-secrets
+                  key: SPRINTFOUNDRY_MONITOR_WRITE_TOKEN
+                  optional: true
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: monitor
+spec:
+  selector:
+    app.kubernetes.io/name: monitor
+  ports:
+    - name: http
+      port: 4310
+      targetPort: http

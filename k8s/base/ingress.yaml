@@ -1,0 +1,39 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: sprintfoundry
+  annotations:
+    kubernetes.io/ingress.class: nginx
+spec:
+  rules:
+    - host: sprintfoundry.local
+      http:
+        paths:
+          - path: /api/dispatch
+            pathType: Prefix
+            backend:
+              service:
+                name: dispatch-controller
+                port:
+                  number: 4320
+          - path: /api/webhooks
+            pathType: Prefix
+            backend:
+              service:
+                name: dispatch-controller
+                port:
+                  number: 4320
+          - path: /api/internal
+            pathType: Prefix
+            backend:
+              service:
+                name: event-api
+                port:
+                  number: 3001
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: monitor
+                port:
+                  number: 4310
