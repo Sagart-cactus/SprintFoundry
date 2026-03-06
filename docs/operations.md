@@ -105,6 +105,7 @@ Planner/runtime failures:
 - inspect planner logs:
   - `.planner-runtime.stdout.log`
   - `.planner-runtime.stderr.log`
+- for `codex --json` planner runs, API/auth failures are emitted in `.planner-runtime.stdout.log` as JSON `{"type":"error"}` events
 - inspect agent logs:
   - `.codex-runtime*.log`
   - `.claude-runtime*.log`

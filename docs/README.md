@@ -9,6 +9,7 @@ Multi-agent orchestration platform for AI-powered software development. Takes ti
 | [configuration.md](./configuration.md) | Full project config schema — all fields, defaults, and examples |
 | [agents.md](./agents.md) | All agent types, roles, capabilities, plugins, and output artifacts |
 | [architecture.md](./architecture.md) | System design, two-layer model, filesystem message bus |
+| [architecture-k8s-hosting.md](./architecture-k8s-hosting.md) | Kubernetes/distributed hosting architecture and issue traceability (#65-#78) |
 | [monitor.md](./monitor.md) | Run monitor — setup, data sources, API |
 | [webhook-integrations-security.md](./webhook-integrations-security.md) | Secure GitHub + Linear webhook autoexecute setup (including split-port deployment) |
 | [operations.md](./operations.md) | Running tasks, human gates, rework cycles |

@@ -84,6 +84,7 @@ function makeContext(
     resumeReason: overrides?.resumeReason,
     onActivity: overrides?.onActivity,
     guardrails: overrides?.guardrails,
+    sinkClient: overrides?.sinkClient,
   };
 }
 
@@ -316,6 +317,57 @@ describe("CodexRuntime local_sdk mode", () => {
         data: expect.objectContaining({ tool_name: "read_file" }),
       })
     );
+  });
+
+  it("posts buffered activity log chunks when sink client is configured", async () => {
+    const postLog = vi.fn().mockResolvedValue(undefined);
+    const runtime = new CodexRuntime();
+    const activityDispatcher = (runtime as any).createActivityDispatcher(
+      makeContext(tmpDir, {
+        sinkClient: { postLog },
+      })
+    );
+    await activityDispatcher.emit({
+      type: "agent_command_run",
+      data: { command: "npm run test" },
+    });
+    await activityDispatcher.flushFinal();
+
+    expect(postLog).toHaveBeenCalled();
+    expect(postLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        step_number: 1,
+        step_attempt: 1,
+        agent: "developer",
+        runtime_provider: "codex",
+        stream: "activity",
+      })
+    );
+    const payload = postLog.mock.calls.at(-1)?.[0];
+    expect(payload.chunk).toContain("\"type\":\"agent_command_run\"");
+  });
+
+  it("still posts sink log chunks when onActivity callback throws", async () => {
+    const postLog = vi.fn().mockResolvedValue(undefined);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const runtime = new CodexRuntime();
+    const activityDispatcher = (runtime as any).createActivityDispatcher(
+      makeContext(tmpDir, {
+        onActivity: async () => {
+          throw new Error("callback failed");
+        },
+        sinkClient: { postLog },
+      })
+    );
+    await activityDispatcher.emit({
+      type: "agent_command_run",
+      data: { command: "npm run test" },
+    });
+    await activityDispatcher.flushFinal();
+
+    expect(postLog).toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Activity callback failed"));
+    warnSpy.mockRestore();
   });
 
   it("blocks command executions that violate guardrails", async () => {

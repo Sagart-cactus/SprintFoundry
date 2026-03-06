@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: sprintfoundry-system
+resources:
+  - namespace.yaml
+  - dispatch-controller.yaml
+  - monitor.yaml
+  - event-api.yaml
+  - ingress.yaml
+  - rbac.yaml
+  - configmap-platform.yaml
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: sprintfoundry

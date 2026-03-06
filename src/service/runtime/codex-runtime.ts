@@ -6,10 +6,12 @@ import type {
 } from "./types.js";
 import { runProcess } from "./process-utils.js";
 import { evaluateGuardrail, type GuardrailToolCall } from "./agent-hooks.js";
+import { writeCodexConfigToml } from "./codex-planner-runtime.js";
 import { Codex } from "@openai/codex-sdk";
 import * as path from "path";
 import * as fs from "fs/promises";
 import type { RuntimeMetadataEnvelope } from "../../shared/types.js";
+import type { RuntimeLogChunk } from "../event-sink-client.js";
 
 const FORWARDED_PARENT_ENV_KEYS = [
   "PATH",
@@ -37,6 +39,13 @@ const FORWARDED_PARENT_ENV_KEYS = [
 const CODEX_HOME_FALLBACK_ENV_FLAG = "SPRINTFOUNDRY_ENABLE_CODEX_HOME_AUTH_FALLBACK";
 const CODEX_AUTH_HEADER_ERROR_SIGNATURE =
   "401 Unauthorized: Missing bearer or basic authentication in header";
+const LOG_CHUNK_FLUSH_INTERVAL_MS = 5_000;
+const LOG_CHUNK_MAX_BYTES = 4_096;
+
+interface ActivityDispatcher {
+  emit(event: RuntimeActivityEvent): Promise<void>;
+  flushFinal(): Promise<void>;
+}
 type ProcessRunResult = Awaited<ReturnType<typeof runProcess>>;
 type CodexThreadHandle = {
   id?: unknown;
@@ -53,11 +62,16 @@ type ResumeTelemetry = {
 
 export class CodexRuntime implements AgentRuntime {
   async runStep(config: RuntimeStepContext): Promise<RuntimeStepResult> {
+    const activityDispatcher = this.createActivityDispatcher(config);
     if (config.runtime.mode !== "local_process" && config.runtime.mode !== "local_sdk") {
       throw new Error("Codex runtime supports only local_process and local_sdk modes");
     }
-    if (config.runtime.mode === "local_sdk") return this.runSdk(config);
-    return this.runLocalProcess(config);
+    try {
+      if (config.runtime.mode === "local_sdk") return this.runSdk(config, activityDispatcher);
+      return this.runLocalProcess(config);
+    } finally {
+      await activityDispatcher.flushFinal();
+    }
   }
 
   private async runLocalProcess(config: RuntimeStepContext): Promise<RuntimeStepResult> {
@@ -71,8 +85,13 @@ export class CodexRuntime implements AgentRuntime {
     const hasReasoningEffortArg = runtimeArgs.some(
       (arg) => arg.includes("model_reasoning_effort")
     );
+    const hasModelArg = runtimeArgs.some((arg) => arg.includes("model="));
     const args = [
       "exec",
+      "--skip-git-repo-check",
+      ...(config.runtime.model && !hasModelArg
+        ? ["--config", `model="${config.runtime.model}"`]
+        : []),
       ...(reasoningEffort && !hasReasoningEffortArg
         ? ["--config", `model_reasoning_effort=\"${reasoningEffort}\"`]
         : []),
@@ -81,6 +100,12 @@ export class CodexRuntime implements AgentRuntime {
       ...(hasSandboxFlag || hasBypassFlag ? [] : ["--sandbox", "workspace-write"]),
     ];
     const env = this.buildRuntimeEnv(config);
+
+    // Codex v0.110+ reads credentials from ~/.codex/config.toml, not OPENAI_API_KEY env var.
+    if (config.apiKey) {
+      await writeCodexConfigToml(config.apiKey);
+    }
+
     const codexHomeFallbackEnabled =
       process.env[CODEX_HOME_FALLBACK_ENV_FLAG] === "1" ||
       config.runtime.env?.[CODEX_HOME_FALLBACK_ENV_FLAG] === "1";
@@ -159,6 +184,7 @@ export class CodexRuntime implements AgentRuntime {
     const resumeArgs = config.resumeSessionId
       ? [
         "exec",
+        "--skip-git-repo-check",
         "resume",
         config.resumeSessionId,
         ...(reasoningEffort && !hasReasoningEffortArg
@@ -230,7 +256,10 @@ export class CodexRuntime implements AgentRuntime {
     };
   }
 
-  private async runSdk(config: RuntimeStepContext): Promise<RuntimeStepResult> {
+  private async runSdk(
+    config: RuntimeStepContext,
+    activityDispatcher: ActivityDispatcher
+  ): Promise<RuntimeStepResult> {
     await fs.mkdir(config.workspacePath, { recursive: true });
 
     const prompt = await this.buildSdkPrompt(config);
@@ -311,6 +340,7 @@ export class CodexRuntime implements AgentRuntime {
             (signal, controller) =>
               this.runSdkStreamedTurn(
                 config,
+                activityDispatcher,
                 (streamSignal) => freshThread.runStreamed(prompt, { signal: streamSignal }),
                 signal,
                 controller
@@ -337,6 +367,7 @@ export class CodexRuntime implements AgentRuntime {
           config,
           freshTurn,
           this.extractSdkRuntimeId(freshThread),
+          activityDispatcher,
           {
             stepStdoutPath,
             stepStderrPath,
@@ -373,6 +404,7 @@ export class CodexRuntime implements AgentRuntime {
           (signal, controller) =>
             this.runSdkStreamedTurn(
               config,
+              activityDispatcher,
               (streamSignal) => resumedThread.runStreamed(prompt, { signal: streamSignal }),
               signal,
               controller
@@ -384,6 +416,7 @@ export class CodexRuntime implements AgentRuntime {
           config,
           resumedTurn,
           this.extractSdkRuntimeId(resumedThread),
+          activityDispatcher,
           {
             stepStdoutPath,
             stepStderrPath,
@@ -438,6 +471,7 @@ export class CodexRuntime implements AgentRuntime {
         (signal, controller) =>
           this.runSdkStreamedTurn(
             config,
+            activityDispatcher,
             (streamSignal) => thread.runStreamed(prompt, { signal: streamSignal }),
             signal,
             controller
@@ -460,6 +494,7 @@ export class CodexRuntime implements AgentRuntime {
       config,
       turn,
       this.extractSdkRuntimeId(thread),
+      activityDispatcher,
       {
         stepStdoutPath,
         stepStderrPath,
@@ -497,6 +532,7 @@ export class CodexRuntime implements AgentRuntime {
     config: RuntimeStepContext,
     turn: unknown,
     runtimeId: string,
+    activityDispatcher: ActivityDispatcher,
     logPaths: {
       stepStdoutPath: string;
       stepStderrPath: string;
@@ -510,7 +546,7 @@ export class CodexRuntime implements AgentRuntime {
     const usage = this.extractSdkUsage(turn);
     const tokenSavings = this.extractTokenSavings(usage);
     const activityEvents = this.extractSdkActivityEvents(turn);
-    await this.emitSdkActivityEvents(config, activityEvents);
+    await this.emitSdkActivityEvents(activityDispatcher, activityEvents);
     const stdoutLines = this.buildSdkStdoutLines({
       runtimeId,
       usage,
@@ -802,6 +838,7 @@ export class CodexRuntime implements AgentRuntime {
 
   private async runSdkStreamedTurn(
     config: RuntimeStepContext,
+    activityDispatcher: ActivityDispatcher,
     runStreamed: (signal: AbortSignal) => Promise<{ events?: AsyncGenerator<unknown> }>,
     signal: AbortSignal,
     controller: AbortController
@@ -815,11 +852,12 @@ export class CodexRuntime implements AgentRuntime {
         finalResponse: "",
       };
     }
-    return await this.consumeSdkStreamedTurn(config, events, controller);
+    return await this.consumeSdkStreamedTurn(config, activityDispatcher, events, controller);
   }
 
   private async consumeSdkStreamedTurn(
     config: RuntimeStepContext,
+    activityDispatcher: ActivityDispatcher,
     events: AsyncGenerator<unknown>,
     controller: AbortController
   ): Promise<{ usage: Record<string, number>; items: unknown[]; finalResponse: string }> {
@@ -868,7 +906,7 @@ export class CodexRuntime implements AgentRuntime {
         if (eventType === "item.started") {
           const guardrailViolation = this.findSdkGuardrailViolation(item, config);
           if (guardrailViolation) {
-            await this.emitGuardrailBlock(config, guardrailViolation);
+            await this.emitGuardrailBlock(activityDispatcher, guardrailViolation);
             controller.abort(
               new Error(`Guardrail blocked: ${guardrailViolation.reason ?? "blocked"}`)
             );
@@ -944,12 +982,11 @@ export class CodexRuntime implements AgentRuntime {
   }
 
   private async emitGuardrailBlock(
-    config: RuntimeStepContext,
+    activityDispatcher: ActivityDispatcher,
     toolCall: GuardrailToolCall & { reason?: string; rule?: string }
   ): Promise<void> {
-    if (!config.onActivity) return;
     try {
-      await config.onActivity({
+      await activityDispatcher.emit({
         type: "agent_guardrail_block",
         data: {
           tool_name: toolCall.tool_name ?? "",
@@ -966,6 +1003,108 @@ export class CodexRuntime implements AgentRuntime {
         }`
       );
     }
+  }
+
+  private createActivityDispatcher(config: RuntimeStepContext): ActivityDispatcher {
+    const callback = config.onActivity;
+    const sinkClient = config.sinkClient;
+    if (!callback && !sinkClient) {
+      return {
+        emit: async () => undefined,
+        flushFinal: async () => undefined,
+      };
+    }
+
+    let buffer = "";
+    let bufferBytes = 0;
+    let sequence = 0;
+    let timer: NodeJS.Timeout | undefined;
+    let flushChain: Promise<void> = Promise.resolve();
+
+    const clearTimer = () => {
+      if (!timer) return;
+      clearTimeout(timer);
+      timer = undefined;
+    };
+
+    const startTimerIfNeeded = () => {
+      if (!sinkClient || timer || bufferBytes <= 0) return;
+      timer = setTimeout(() => {
+        void queueFlush(false);
+      }, LOG_CHUNK_FLUSH_INTERVAL_MS);
+    };
+
+    const queueFlush = (isFinal: boolean): Promise<void> => {
+      flushChain = flushChain.then(async () => {
+        if (!sinkClient || bufferBytes <= 0) {
+          clearTimer();
+          return;
+        }
+        const chunk = buffer;
+        const byteLength = bufferBytes;
+        buffer = "";
+        bufferBytes = 0;
+        clearTimer();
+        const payload: RuntimeLogChunk = {
+          step_number: config.stepNumber,
+          step_attempt: config.stepAttempt,
+          agent: config.agent,
+          runtime_provider: config.runtime.provider,
+          sequence,
+          chunk,
+          byte_length: byteLength,
+          stream: "activity",
+          is_final: isFinal,
+          timestamp: new Date().toISOString(),
+        };
+        sequence += 1;
+        try {
+          await sinkClient.postLog(payload);
+        } catch (error) {
+          console.warn(
+            `[codex-runtime] Failed to post activity log chunk step=${config.stepNumber} attempt=${config.stepAttempt}: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
+        } finally {
+          startTimerIfNeeded();
+        }
+      });
+      return flushChain;
+    };
+
+    return {
+      emit: async (event: RuntimeActivityEvent) => {
+        if (callback) {
+          try {
+            await callback(event);
+          } catch (error) {
+            console.warn(
+              `[codex-runtime] Activity callback failed for ${event.type}: ${
+                error instanceof Error ? error.message : String(error)
+              }`
+            );
+          }
+        }
+        if (!sinkClient) return;
+        const line = `${JSON.stringify({
+          type: event.type,
+          data: event.data,
+          timestamp: new Date().toISOString(),
+        })}\n`;
+        buffer += line;
+        bufferBytes += Buffer.byteLength(line, "utf-8");
+        if (bufferBytes >= LOG_CHUNK_MAX_BYTES) {
+          await queueFlush(false);
+          return;
+        }
+        startTimerIfNeeded();
+      },
+      flushFinal: async () => {
+        clearTimer();
+        await queueFlush(true);
+      },
+    };
   }
 
   private extractSdkUsage(turn: unknown): Record<string, number> {
@@ -1150,13 +1289,13 @@ export class CodexRuntime implements AgentRuntime {
   }
 
   private async emitSdkActivityEvents(
-    config: RuntimeStepContext,
+    activityDispatcher: ActivityDispatcher,
     events: RuntimeActivityEvent[]
   ): Promise<void> {
-    if (!config.onActivity || events.length === 0) return;
+    if (events.length === 0) return;
     for (const event of events) {
       try {
-        await config.onActivity(event);
+        await activityDispatcher.emit(event);
       } catch (error) {
         console.warn(
           `[codex-runtime] Failed to emit activity event ${event.type}: ${

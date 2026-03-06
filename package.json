@@ -18,6 +18,7 @@
   "scripts": {
     "build": "tsc && node scripts/copy-assets.mjs",
     "dev": "tsx src/index.ts",
+    "event-api": "tsx src/service/event-ingestion-server.ts",
     "monitor": "node monitor/server.mjs",
     "start": "node dist/index.js",
     "lint": "tsc --noEmit",
@@ -44,13 +45,17 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.47",
     "@anthropic-ai/sdk": "^0.78.0",
+    "@aws-sdk/client-s3": "^3.1001.0",
     "@inquirer/prompts": "^7.0.0",
+    "@kubernetes/client-node": "^1.4.0",
     "@openai/codex-sdk": "^0.104.0",
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/exporter-metrics-otlp-http": "^0.57.0",
     "@opentelemetry/sdk-metrics": "^1.30.0",
     "commander": "^13.1.0",
     "dockerode": "^4.0.4",
+    "pg": "^8.16.3",
+    "redis": "^5.8.2",
     "yaml": "^2.7.0"
   },
   "devDependencies": {

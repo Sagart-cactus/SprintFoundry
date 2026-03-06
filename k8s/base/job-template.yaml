@@ -1,0 +1,68 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sprintfoundry-run-template
+  namespace: project-example
+  labels:
+    app.kubernetes.io/name: sprintfoundry-runner
+spec:
+  ttlSecondsAfterFinished: 1800
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sprintfoundry-runner
+    spec:
+      restartPolicy: Never
+      serviceAccountName: sprintfoundry-runner
+      tolerations:
+        - key: sprintfoundry.io/run
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+      containers:
+        - name: runner
+          image: sprintfoundry-runner:latest
+          args:
+            - run
+            - --source
+            - github
+            - --ticket
+            - "123"
+            - --config
+            - /config
+            - --project
+            - project-example
+          env:
+            - name: SPRINTFOUNDRY_EVENT_SINK_URL
+              value: http://event-api.sprintfoundry-system.svc.cluster.local:3001
+            - name: SPRINTFOUNDRY_INTERNAL_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: project-example-secrets
+                  key: SPRINTFOUNDRY_INTERNAL_API_TOKEN
+            - name: SPRINTFOUNDRY_TRIGGER_SOURCE
+              value: github_webhook
+          envFrom:
+            - secretRef:
+                name: project-example-secrets
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: project-config
+              mountPath: /config
+              readOnly: true
+      volumes:
+        - name: workspace
+          emptyDir:
+            sizeLimit: 10Gi
+        - name: project-config
+          configMap:
+            name: project-example-config

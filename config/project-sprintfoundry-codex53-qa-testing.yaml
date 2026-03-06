@@ -1,0 +1,142 @@
+# SprintFoundry — Codex 5.3 + QA Testing Skill profile
+
+project_id: sprintfoundry_codex53_qa_testing
+name: SprintFoundry Codex 5.3 QA Testing
+
+stack: js
+
+agents:
+  - product
+  - architect
+  - developer
+  - code-review
+  - qa
+  - security
+  - ui-ux
+  - devops
+  - go-developer
+  - go-qa
+
+repo:
+  url: git@github.com:Sagart-cactus/SprintFoundry.git
+  default_branch: main
+
+api_keys:
+  openai: ${SPRINTFOUNDRY_OPENAI_KEY}
+
+budget_overrides:
+  per_agent_tokens: 3000000
+  per_task_total_tokens: 30000000
+  per_task_max_cost_usd: 120
+
+model_overrides:
+  orchestrator:
+    provider: openai
+    model: gpt-5.3-codex
+  product:
+    provider: openai
+    model: gpt-5.3-codex
+  architect:
+    provider: openai
+    model: gpt-5.3-codex
+  developer:
+    provider: openai
+    model: gpt-5.3-codex
+  code-review:
+    provider: openai
+    model: gpt-5.3-codex
+  qa:
+    provider: openai
+    model: gpt-5.3-codex
+  security:
+    provider: openai
+    model: gpt-5.3-codex
+  ui-ux:
+    provider: openai
+    model: gpt-5.3-codex
+  devops:
+    provider: openai
+    model: gpt-5.3-codex
+  go-developer:
+    provider: openai
+    model: gpt-5.3-codex
+  go-qa:
+    provider: openai
+    model: gpt-5.3-codex
+
+runtime_overrides:
+  product:
+    provider: codex
+    mode: local_process
+    model_reasoning_effort: medium
+  architect:
+    provider: codex
+    mode: local_process
+    model_reasoning_effort: medium
+  developer:
+    provider: codex
+    mode: local_process
+    model_reasoning_effort: medium
+  code-review:
+    provider: codex
+    mode: local_process
+    model_reasoning_effort: medium
+  qa:
+    provider: codex
+    mode: local_process
+    model_reasoning_effort: medium
+  security:
+    provider: codex
+    mode: local_process
+    model_reasoning_effort: medium
+  ui-ux:
+    provider: codex
+    mode: local_process
+    model_reasoning_effort: medium
+  devops:
+    provider: codex
+    mode: local_process
+    model_reasoning_effort: medium
+  go-developer:
+    provider: codex
+    mode: local_process
+    model_reasoning_effort: medium
+  go-qa:
+    provider: codex
+    mode: local_process
+    model_reasoning_effort: medium
+
+planner_runtime_override:
+  provider: codex
+  mode: local_process
+  model_reasoning_effort: high
+  args:
+    - --model
+    - gpt-5.3-codex
+
+codex_skills_enabled: true
+
+codex_skill_catalog_overrides:
+  sprintfoundry-testing:
+    path: /Users/trivedi/.codex/skills/sprintfoundry-testing
+
+codex_skills_overrides:
+  qa:
+    - sprintfoundry-testing
+  go-qa:
+    - sprintfoundry-testing
+
+branch_strategy:
+  prefix: feat/
+  include_ticket_id: true
+  naming: kebab-case
+
+integrations:
+  ticket_source:
+    type: github
+    config:
+      token: ${GITHUB_TOKEN}
+      owner: Sagart-cactus
+      repo: SprintFoundry
+
+rules: []

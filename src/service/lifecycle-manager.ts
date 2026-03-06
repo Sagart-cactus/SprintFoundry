@@ -9,6 +9,7 @@ import type {
   ReactionTrigger,
   RunSessionMetadata,
 } from "../shared/types.js";
+export type { LifecycleConfig } from "../shared/types.js";
 import type {
   SCMPlugin,
   PRInfo,

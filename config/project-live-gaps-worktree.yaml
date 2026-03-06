@@ -1,0 +1,64 @@
+project_id: live-gaps-worktree
+name: Live Gaps Worktree
+
+stack: js
+
+agents:
+  - developer
+  - qa
+
+repo:
+  url: https://github.com/Sagart-cactus/sprintfoundry-dryrun.git
+  default_branch: main
+
+api_keys:
+  openai: ${SPRINTFOUNDRY_OPENAI_KEY}
+  anthropic: ${SPRINTFOUNDRY_ANTHROPIC_KEY}
+
+model_overrides:
+  orchestrator:
+    provider: openai
+    model: gpt-5.3-codex
+  developer:
+    provider: openai
+    model: gpt-5.3-codex
+  qa:
+    provider: openai
+    model: gpt-5.3-codex
+
+runtime_overrides:
+  developer:
+    provider: codex
+    mode: local_process
+    args:
+      - --dangerously-bypass-approvals-and-sandbox
+    model_reasoning_effort: medium
+  qa:
+    provider: codex
+    mode: local_process
+    args:
+      - --dangerously-bypass-approvals-and-sandbox
+    model_reasoning_effort: medium
+
+planner_runtime_override:
+  provider: codex
+  mode: local_process
+  args:
+    - --dangerously-bypass-approvals-and-sandbox
+  model_reasoning_effort: high
+
+workspace:
+  strategy: worktree
+  base_repo_dir: /tmp/sprintfoundry-worktrees
+
+branch_strategy:
+  prefix: feat/
+  include_ticket_id: true
+  naming: kebab-case
+
+integrations:
+  ticket_source:
+    type: prompt
+    config: {}
+
+rules: []

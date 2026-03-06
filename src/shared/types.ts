@@ -123,6 +123,7 @@ export interface RuntimeConfig {
   args?: string[];
   image?: string;
   env?: Record<string, string>;
+  model?: string;
   model_reasoning_effort?: "minimal" | "low" | "medium" | "high" | "xhigh";
 }
 
@@ -305,6 +306,11 @@ export interface IntegrationConfig {
     type: "slack" | "email" | "webhook";
     config: Record<string, string>;
   };
+  event_sink?: EventSinkConfig;
+}
+
+export interface EventSinkConfig {
+  url?: string;
 }
 
 export interface GitHubAutoexecuteConfig {

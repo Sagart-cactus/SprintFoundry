@@ -7,6 +7,7 @@
 import * as fs from "fs/promises";
 import * as path from "path";
 import type { TaskEvent } from "../shared/types.js";
+import type { EventSinkClient } from "./event-sink-client.js";
 
 export class EventStore {
   private events: TaskEvent[] = [];
@@ -15,8 +16,12 @@ export class EventStore {
   private initialized = false;
   private pendingBuffer: TaskEvent[] = [];
   private writeQueue: Promise<void> = Promise.resolve();
+  private sinkQueue: Promise<void> = Promise.resolve();
 
-  constructor(private eventsDir?: string) {}
+  constructor(
+    private eventsDir?: string,
+    private sinkClient?: Pick<EventSinkClient, "postEvent">,
+  ) {}
 
   /**
    * Initialize write targets. Called once the workspace path is known.
@@ -87,6 +92,25 @@ export class EventStore {
     if (writes.length > 0) {
       await Promise.all(writes);
     }
+
+    this.enqueueSinkPost(event);
+  }
+
+  private enqueueSinkPost(event: TaskEvent): void {
+    if (!this.sinkClient) return;
+
+    this.sinkQueue = this.sinkQueue
+      .then(async () => {
+        if (!this.sinkClient) return;
+        await this.sinkClient.postEvent(event);
+      })
+      .catch((error) => {
+        console.warn(
+          `[event-sink] Failed to post event ${event.event_id}: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      });
   }
 
   async getByRunId(runId: string): Promise<TaskEvent[]> {
@@ -117,5 +141,6 @@ export class EventStore {
    */
   async close(): Promise<void> {
     await this.writeQueue.catch(() => undefined);
+    await this.sinkQueue.catch(() => undefined);
   }
 }

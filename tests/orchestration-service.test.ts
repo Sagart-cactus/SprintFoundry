@@ -7,6 +7,10 @@ import { makeTicket } from "./fixtures/tickets.js";
 import { makePlan, makeStep, makeDevQaPlan } from "./fixtures/plans.js";
 import { makeResult, makeFailedResult, makeReworkResult } from "./fixtures/results.js";
 
+const eventStoreCtor = vi.fn();
+const eventSinkCtor = vi.fn();
+const eventSinkUpsertRun = vi.fn();
+
 // Mock all sub-services using class syntax so they work with `new`
 // Mock PlannerFactory — returns a mock planner with generatePlan/planRework
 vi.mock("../src/service/runtime/planner-factory.js", () => ({
@@ -72,7 +76,19 @@ vi.mock("../src/service/event-store.js", () => ({
     getAll = vi.fn().mockResolvedValue([]);
     getByRunId = vi.fn().mockResolvedValue([]);
     getByType = vi.fn().mockResolvedValue([]);
-    constructor(..._args: any[]) {}
+    constructor(...args: any[]) {
+      eventStoreCtor(...args);
+    }
+  },
+}));
+
+vi.mock("../src/service/event-sink-client.js", () => ({
+  EventSinkClient: class {
+    postEvent = vi.fn();
+    upsertRun = eventSinkUpsertRun;
+    constructor(url: string) {
+      eventSinkCtor(url);
+    }
   },
 }));
 
@@ -81,6 +97,28 @@ vi.mock("../src/service/runtime-session-store.js", () => ({
     record = vi.fn();
     findLatestByAgent = vi.fn().mockResolvedValue(null);
     constructor(..._args: any[]) {}
+  },
+}));
+
+vi.mock("../src/service/session-manager.js", () => ({
+  SessionManager: class {
+    private sinkClient?: { upsertRun?: (session: unknown) => Promise<void> | void };
+    constructor(_baseDir?: string, sinkClient?: { upsertRun?: (session: unknown) => Promise<void> | void }) {
+      this.sinkClient = sinkClient;
+    }
+    persist = vi.fn(async (run: any) => {
+      if (this.sinkClient?.upsertRun) {
+        await this.sinkClient.upsertRun({
+          run_id: run.run_id,
+          status: run.status,
+        });
+      }
+    });
+    get = vi.fn().mockResolvedValue(null);
+    list = vi.fn().mockResolvedValue([]);
+    archive = vi.fn().mockResolvedValue(true);
+    remove = vi.fn().mockResolvedValue(true);
+    updateStatus = vi.fn().mockResolvedValue(true);
   },
 }));
 
@@ -98,6 +136,7 @@ describe("OrchestrationService", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    delete process.env.SPRINTFOUNDRY_EVENT_SINK_URL;
 
     service = new OrchestrationService(
       makePlatformConfig(),
@@ -110,6 +149,49 @@ describe("OrchestrationService", () => {
     mockTicketFetcher = (service as any).tickets;
     mockGitManager = (service as any).git;
     mockSessionStore = (service as any).sessions;
+  });
+
+  it("constructs EventStore without sink client when sink env is unset", () => {
+    expect(eventSinkCtor).not.toHaveBeenCalled();
+    expect(eventStoreCtor).toHaveBeenCalledTimes(1);
+    expect(eventStoreCtor.mock.calls[0][0]).toBe(makePlatformConfig().events_dir);
+    expect(eventStoreCtor.mock.calls[0][1]).toBeUndefined();
+  });
+
+  it("constructs EventStore with sink client when sink env is set", () => {
+    process.env.SPRINTFOUNDRY_EVENT_SINK_URL = "https://sink.example/events";
+    new OrchestrationService(makePlatformConfig(), makeProjectConfig());
+
+    expect(eventSinkCtor).toHaveBeenCalledWith("https://sink.example/events");
+    expect(eventStoreCtor).toHaveBeenCalledTimes(2);
+    expect(eventStoreCtor.mock.calls[1][1]).toBeDefined();
+  });
+
+  it("wires sink client into SessionManager persistence when sink env is set", async () => {
+    process.env.SPRINTFOUNDRY_EVENT_SINK_URL = "https://sink.example/events";
+    const sinkEnabledService = new OrchestrationService(makePlatformConfig(), makeProjectConfig());
+
+    const mockPlanner = (sinkEnabledService as any).plannerRuntime;
+    const mockRunner = (sinkEnabledService as any).agentRunner;
+
+    const plan = makeDevQaPlan();
+    mockPlanner.generatePlan.mockResolvedValue(plan);
+    mockRunner.run.mockResolvedValue({
+      agentResult: makeResult(),
+      tokens_used: 100,
+      cost_usd: 0.01,
+      duration_seconds: 5,
+      container_id: "local-1",
+    });
+
+    await sinkEnabledService.handleTask("p1", "prompt", "Build a thing");
+
+    await vi.waitFor(
+      () => {
+        expect(eventSinkUpsertRun).toHaveBeenCalled();
+      },
+      { timeout: 5000 }
+    );
   });
 
   it("handleTask with source=prompt creates ticket from prompt text", async () => {

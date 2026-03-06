@@ -12,6 +12,7 @@ import type {
   RunSessionMetadata,
   RunStatus,
 } from "../shared/types.js";
+import type { EventSinkClient } from "./event-sink-client.js";
 
 const SESSIONS_DIR = path.join(os.homedir(), ".sprintfoundry", "sessions");
 const ARCHIVE_DIR = path.join(SESSIONS_DIR, "archive");
@@ -19,10 +20,12 @@ const ARCHIVE_DIR = path.join(SESSIONS_DIR, "archive");
 export class SessionManager {
   private sessionsDir: string;
   private archiveDir: string;
+  private sinkClient?: Pick<EventSinkClient, "upsertRun">;
 
-  constructor(baseDir?: string) {
+  constructor(baseDir?: string, sinkClient?: Pick<EventSinkClient, "upsertRun">) {
     this.sessionsDir = baseDir ?? SESSIONS_DIR;
     this.archiveDir = path.join(this.sessionsDir, "archive");
+    this.sinkClient = sinkClient;
   }
 
   /**
@@ -61,8 +64,7 @@ export class SessionManager {
       error: run.error,
     };
 
-    const filePath = this.getSessionPath(run.run_id);
-    await fs.writeFile(filePath, JSON.stringify(metadata, null, 2), "utf-8");
+    await this.save(metadata);
   }
 
   /**
@@ -144,9 +146,40 @@ export class SessionManager {
     if (!session) return false;
     session.status = status;
     session.updated_at = new Date().toISOString();
-    const filePath = this.getSessionPath(runId);
-    await fs.writeFile(filePath, JSON.stringify(session, null, 2), "utf-8");
+    await this.update(session);
     return true;
+  }
+
+  private async save(session: RunSessionMetadata): Promise<void> {
+    const filePath = this.getSessionPath(session.run_id);
+    let writeError: unknown = null;
+    try {
+      await fs.writeFile(filePath, JSON.stringify(session, null, 2), "utf-8");
+    } catch (error) {
+      writeError = error;
+    }
+    await this.upsertToSink(session);
+    if (writeError) {
+      throw writeError;
+    }
+  }
+
+  private async update(session: RunSessionMetadata): Promise<void> {
+    await this.save(session);
+  }
+
+  private async upsertToSink(session: RunSessionMetadata): Promise<void> {
+    if (!this.sinkClient) return;
+
+    try {
+      await this.sinkClient.upsertRun(session);
+    } catch (error) {
+      console.warn(
+        `[session-sink] Failed to upsert run ${session.run_id}: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
   }
 
   private getSessionPath(runId: string): string {

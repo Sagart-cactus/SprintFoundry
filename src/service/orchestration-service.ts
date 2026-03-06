@@ -34,11 +34,13 @@ import { parse as parseYaml } from "yaml";
 import { PlanValidator } from "./plan-validator.js";
 import { AgentRunner } from "./agent-runner.js";
 import { EventStore } from "./event-store.js";
+import { EventSinkClient } from "./event-sink-client.js";
 import { WorkspaceManager } from "./workspace-manager.js";
 import { TicketFetcher } from "./ticket-fetcher.js";
 import { GitManager } from "./git-manager.js";
 import { NotificationService } from "./notification-service.js";
 import { RuntimeSessionStore } from "./runtime-session-store.js";
+import { ArtifactUploader } from "./artifact-uploader.js";
 import type { PlannerRuntime } from "./runtime/types.js";
 import { PlannerFactory } from "./runtime/planner-factory.js";
 import type { RuntimeActivityEvent } from "./runtime/types.js";
@@ -80,10 +82,12 @@ export class OrchestrationService {
   private notifications: NotificationService;
   private sessions: RuntimeSessionStore;
   private sessionManager: SessionManager;
+  private eventSinkClient?: EventSinkClient;
   private lifecycleManager: LifecycleManager | null = null;
   private notificationRouter: NotificationRouter | null = null;
   private registry: PluginRegistry | null;
   private metricsService: MetricsService;
+  private artifactUploader: ArtifactUploader;
   private tracer = trace.getTracer("sprintfoundry", "1.0.0");
 
   constructor(
@@ -93,16 +97,21 @@ export class OrchestrationService {
   ) {
     this.registry = registry ?? null;
     this.metricsService = new MetricsService(process.env.SPRINTFOUNDRY_OTEL_ENABLED === "1");
+    this.artifactUploader = new ArtifactUploader();
     this.validator = new PlanValidator(platformConfig, projectConfig);
     this.agentRunner = new AgentRunner(platformConfig, projectConfig);
     this.plannerRuntime = new PlannerFactory().create(platformConfig, projectConfig);
-    this.events = new EventStore(platformConfig.events_dir);
+    const eventSinkUrl = process.env.SPRINTFOUNDRY_EVENT_SINK_URL?.trim();
+    const internalApiToken = process.env.SPRINTFOUNDRY_INTERNAL_API_TOKEN?.trim();
+    const eventSinkClient = eventSinkUrl ? new EventSinkClient(eventSinkUrl, globalThis.fetch, internalApiToken) : undefined;
+    this.eventSinkClient = eventSinkClient;
+    this.events = new EventStore(platformConfig.events_dir, eventSinkClient);
     this.workspace = new WorkspaceManager(projectConfig);
     this.tickets = new TicketFetcher(projectConfig.integrations);
     this.git = new GitManager(projectConfig.repo, projectConfig.branch_strategy);
     this.notifications = new NotificationService(projectConfig.integrations);
     this.sessions = new RuntimeSessionStore();
-    this.sessionManager = new SessionManager();
+    this.sessionManager = new SessionManager(undefined, eventSinkClient);
 
     // Initialize lifecycle manager if an SCM plugin is available
     const scmPlugin = this.registry?.getFirst<SCMPlugin>("scm") ?? null;
@@ -137,6 +146,27 @@ export class OrchestrationService {
     this.sessionManager.persist(run, extra).catch((err) => {
       console.warn(`[session] Failed to persist session ${run.run_id}: ${err instanceof Error ? err.message : String(err)}`);
     });
+  }
+
+  private async persistSessionBlocking(run: TaskRun, extra?: { workspace_path?: string; branch?: string }): Promise<void> {
+    try {
+      await this.sessionManager.persist(run, extra);
+    } catch (err) {
+      console.warn(`[session] Failed to persist session ${run.run_id}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  private async uploadArtifactsIfConfigured(runId: string, workspacePath: string): Promise<void> {
+    try {
+      const summary = await this.artifactUploader.uploadRunArtifacts(runId, workspacePath);
+      if (!summary.skipped && summary.attempted > summary.uploaded) {
+        console.warn(
+          `[artifacts] Partial upload for run ${runId}: uploaded ${summary.uploaded}/${summary.attempted} to s3://${summary.bucket}/${summary.prefix}`
+        );
+      }
+    } catch (err) {
+      console.warn(`[artifacts] Upload skipped for run ${runId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   // ---- Lifecycle watch (non-blocking, only when SCM plugin is available) ----
@@ -423,10 +453,10 @@ export class OrchestrationService {
   ): Promise<TaskRun> {
     // 1. Create the run
     const run = this.createRun(ticketId);
+    let workspacePath: string | null = null;
     const triggerSource = process.env.SPRINTFOUNDRY_TRIGGER_SOURCE ?? null;
     span.setAttribute("run_id", run.run_id);
     const runStartMs = Date.now();
-    await this.emitEvent(run.run_id, "task.created", { ticketId, source, trigger_source: triggerSource });
     this.metricsService.recordRunStarted({ project_id: this.projectConfig.project_id, source, run_id: run.run_id });
 
     try {
@@ -436,6 +466,8 @@ export class OrchestrationService {
         : await this.fetchTicket(ticketId, source);
 
       run.ticket = ticket;
+      await this.persistSessionBlocking(run);
+      await this.emitEvent(run.run_id, "task.created", { ticketId, source, trigger_source: triggerSource });
       await this.emitEvent(run.run_id, "task.created", {
         ticket,
         source,
@@ -443,10 +475,8 @@ export class OrchestrationService {
         ticket_url: this.resolveTicketUrl(ticket),
         ticket_repo_url: this.resolveProjectRepoUrl(),
       });
-      this.persistSession(run);
 
       // 3. Prepare workspace (clone repo, create branch)
-      let workspacePath: string;
       const wsPlugin = this.getWorkspacePlugin();
 
       if (!opts?.dryRun && wsPlugin) {
@@ -571,9 +601,12 @@ export class OrchestrationService {
       await this.sendNotification(
         `Task ${run.ticket?.id ?? ticketId} failed: ${run.error}`
       );
-      this.persistSession(run);
+      this.persistSession(run, workspacePath ? { workspace_path: workspacePath } : undefined);
       return run;
     } finally {
+      if (workspacePath) {
+        await this.uploadArtifactsIfConfigured(run.run_id, workspacePath);
+      }
       await this.events.close();
     }
   }
@@ -1097,6 +1130,7 @@ export class OrchestrationService {
               break;
           }
         },
+        sinkClient: this.eventSinkClient,
       });
 
       console.log(`[step ${step.step_number}] Agent ${step.agent} finished: status=${result.agentResult.status}, tokens=${result.tokens_used}, cost=$${result.cost_usd.toFixed(2)}, duration=${result.duration_seconds.toFixed(1)}s`);
