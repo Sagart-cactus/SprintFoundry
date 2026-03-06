@@ -259,6 +259,55 @@ program
   });
 
 program
+  .command("resume <id>")
+  .description("Resume a failed/cancelled run from the last failed step or a specific step")
+  .option("--step <number>", "Step number to resume from")
+  .option("--prompt <text>", "Additional operator prompt for the resumed step")
+  .option("--config <dir>", "Config directory", "config")
+  .option("--project <name>", "Project name (loads <name>.yaml or project-<name>.yaml)")
+  .action(async (id, opts) => {
+    const step =
+      opts.step !== undefined
+        ? Number.parseInt(String(opts.step), 10)
+        : undefined;
+    if (opts.step !== undefined && (!Number.isInteger(step) || (step as number) <= 0)) {
+      console.error("Error: --step must be a positive integer");
+      process.exit(1);
+    }
+
+    const { platform, project } = await loadConfig(opts.config, opts.project);
+    const registry = buildPluginRegistry(platform, project);
+    const service = new OrchestrationService(platform, project, registry);
+
+    console.log(`Resuming run ${id}...`);
+    if (step !== undefined) {
+      console.log(`  Resume step: ${step}`);
+    }
+    if (opts.prompt) {
+      console.log("  Operator prompt: provided");
+    }
+
+    const run = await service.resumeTask(id, {
+      ...(step !== undefined ? { step } : {}),
+      ...(opts.prompt ? { prompt: String(opts.prompt) } : {}),
+    });
+
+    console.log("");
+    console.log(`Resume complete.`);
+    console.log(`  Status: ${run.status}`);
+    console.log(`  Steps executed: ${run.steps.length}`);
+    console.log(`  Total tokens: ${run.total_tokens_used.toLocaleString()}`);
+    console.log(`  Total cost: $${run.total_cost_usd.toFixed(2)}`);
+    if (run.pr_url) {
+      console.log(`  PR: ${run.pr_url}`);
+    }
+    if (run.error) {
+      console.error(`  Error: ${run.error}`);
+      process.exit(1);
+    }
+  });
+
+program
   .command("monitor")
   .description("Start the monitor web UI")
   .option("--port <port>", "Port to listen on", "4310")

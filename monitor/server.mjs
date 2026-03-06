@@ -4,7 +4,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promises as fs, watchFile, unwatchFile, statSync, openSync, readSync, closeSync } from "node:fs";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { parse as parseYaml } from "yaml";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -15,6 +15,7 @@ const runsRoot = process.env.SPRINTFOUNDRY_RUNS_ROOT ?? process.env.AGENTSDLC_RU
 const sessionsRoot = process.env.SPRINTFOUNDRY_SESSIONS_DIR ?? path.join(os.homedir(), ".sprintfoundry", "sessions");
 const configRoot = process.env.SPRINTFOUNDRY_CONFIG_DIR ?? path.join(repoRoot, "config");
 const autoexecuteDryRun = process.env.SPRINTFOUNDRY_AUTORUN_DRY_RUN === "1";
+const monitorAuthRequired = process.env.SPRINTFOUNDRY_MONITOR_AUTH_REQUIRED !== "0";
 const monitorReadToken = String(process.env.SPRINTFOUNDRY_MONITOR_API_TOKEN ?? "").trim();
 const monitorWriteToken = String(process.env.SPRINTFOUNDRY_MONITOR_WRITE_TOKEN ?? "").trim();
 const databaseUrl = String(process.env.SPRINTFOUNDRY_DATABASE_URL ?? "").trim();
@@ -31,14 +32,27 @@ const webhookPortEnv = process.env.SPRINTFOUNDRY_WEBHOOK_PORT;
 const webhookPortCandidate = Number(webhookPortEnv ?? "");
 const webhookSplitEnabled = Number.isFinite(webhookPortCandidate) && webhookPortCandidate > 0 && webhookPortCandidate !== port;
 const webhookPort = webhookSplitEnabled ? webhookPortCandidate : port;
+const monitorApiMaxBodyBytes = toPositiveInt(process.env.SPRINTFOUNDRY_MONITOR_API_MAX_BODY_BYTES, 262_144);
+const monitorWebhookMaxBodyBytes = toPositiveInt(process.env.SPRINTFOUNDRY_MONITOR_WEBHOOK_MAX_BODY_BYTES, 1_048_576);
+const monitorBodyReadTimeoutMs = toPositiveInt(process.env.SPRINTFOUNDRY_MONITOR_BODY_TIMEOUT_MS, 10_000);
+const autoexecuteSeenStorePath = path.join(sessionsRoot, ".monitor-autoexecute-seen.json");
 
 let autoexecuteCache = { loadedAt: 0, projects: [] };
 let projectRepoUrlCache = { loadedAt: 0, byProjectId: new Map() };
+let projectArgCache = { loadedAt: 0, byProjectId: new Map() };
 let workspaceRepoUrlCache = { loadedAt: 0, byWorkspacePath: new Map() };
 const autoexecuteQueue = [];
 const autoexecuteHistory = [];
 let autoexecuteRunning = false;
 const autoexecuteSeen = new Map();
+let autoexecuteSeenLoaded = false;
+let autoexecuteSeenWritePromise = Promise.resolve();
+
+function toPositiveInt(value, fallback) {
+  const n = Number(value ?? "");
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.floor(n);
+}
 
 function isProjectConfigFileName(name) {
   if (!/\.ya?ml$/i.test(name)) return false;
@@ -129,12 +143,48 @@ async function readStepResult(runPath, stepNumber, maxCompletedStep = null) {
   return { result: null, source: "none" };
 }
 
-function readBody(req) {
+function readBody(req, options = {}) {
+  const maxBytes = toPositiveInt(options.maxBytes, monitorApiMaxBodyBytes);
+  const timeoutMs = toPositiveInt(options.timeoutMs, monitorBodyReadTimeoutMs);
+
   return new Promise((resolve, reject) => {
     const chunks = [];
-    req.on("data", (chunk) => chunks.push(chunk));
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
-    req.on("error", reject);
+    let totalBytes = 0;
+    let settled = false;
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      const err = new Error("Request body read timeout");
+      err.code = "BODY_TIMEOUT";
+      reject(err);
+    }, timeoutMs);
+
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      fn(value);
+    };
+
+    req.on("data", (chunk) => {
+      if (settled) return;
+      totalBytes += chunk.length;
+      if (totalBytes > maxBytes) {
+        const err = new Error("Request body too large");
+        err.code = "BODY_TOO_LARGE";
+        finish(reject, err);
+        return;
+      }
+      chunks.push(chunk);
+    });
+
+    req.on("end", () => {
+      finish(resolve, Buffer.concat(chunks).toString("utf-8"));
+    });
+
+    req.on("error", (err) => {
+      finish(reject, err);
+    });
   });
 }
 
@@ -148,24 +198,45 @@ function sendText(res, status, body) {
   res.end(body);
 }
 
+function sendBodyReadError(res, err) {
+  const code = err?.code;
+  if (code === "BODY_TOO_LARGE") {
+    sendJson(res, 413, { error: "Payload too large" });
+    return;
+  }
+  if (code === "BODY_TIMEOUT") {
+    sendJson(res, 408, { error: "Request timeout" });
+    return;
+  }
+  sendJson(res, 400, { error: "Invalid request body" });
+}
+
 function extractRequestToken(req, reqUrl) {
   const authHeader = req.headers.authorization;
   const authValue = Array.isArray(authHeader) ? authHeader[0] : authHeader;
   const bearer = String(authValue ?? "");
   if (bearer.toLowerCase().startsWith("bearer ")) {
-    return bearer.slice(7).trim();
+    const token = bearer.slice(7).trim();
+    if (token) return token;
   }
-  return String(reqUrl.searchParams.get("token") ?? "").trim();
+  const queryToken =
+    String(reqUrl.searchParams.get("token") ?? "").trim() ||
+    String(reqUrl.searchParams.get("access_token") ?? "").trim();
+  return queryToken;
 }
 
 function authorizeApiRequest(req, reqUrl, scope) {
+  if (!monitorAuthRequired) {
+    return { ok: true };
+  }
+
   if (!monitorReadToken && !monitorWriteToken) {
     return { ok: true };
   }
 
   const provided = extractRequestToken(req, reqUrl);
   if (!provided) {
-    return { ok: false, status: 401, error: "Authentication required" };
+    return { ok: false, status: 401, error: "Unauthorized" };
   }
 
   const accepted = new Set();
@@ -178,7 +249,7 @@ function authorizeApiRequest(req, reqUrl, scope) {
   }
 
   if (!accepted.has(provided)) {
-    return { ok: false, status: 403, error: "Invalid token" };
+    return { ok: false, status: 403, error: "Forbidden" };
   }
 
   return { ok: true };
@@ -194,10 +265,15 @@ async function loadYamlFile(filePath) {
 }
 
 function projectArgFromFileName(fileName) {
-  if (fileName === "project.yaml") return null;
-  const match = fileName.match(/^project-(.+)\.ya?ml$/);
+  const lower = fileName.toLowerCase();
+  if (lower === "project.yaml" || lower === "project.yml") return null;
+  const prefixed = fileName.match(/^project-(.+)\.ya?ml$/i);
+  if (prefixed) return prefixed[1];
+  const match = fileName.match(/^(.+)\.ya?ml$/i);
   if (!match) return null;
-  return match[1];
+  const baseName = match[1];
+  if (!baseName) return null;
+  return baseName;
 }
 
 function normalizeRepoUrlForDisplay(rawUrl) {
@@ -264,6 +340,42 @@ async function getProjectRepoUrl(projectId) {
   return map.get(projectId) ?? null;
 }
 
+async function loadProjectArgMap() {
+  const now = Date.now();
+  if (now - projectArgCache.loadedAt < 15_000) {
+    return projectArgCache.byProjectId;
+  }
+
+  const entries = await fs.readdir(configRoot, { withFileTypes: true }).catch(() => []);
+  const projectFiles = entries
+    .filter((entry) => entry.isFile())
+    .map((entry) => entry.name)
+    .filter((name) => isProjectConfigFileName(name))
+    .sort();
+
+  const byProjectId = new Map();
+  for (const fileName of projectFiles) {
+    const filePath = path.join(configRoot, fileName);
+    let project;
+    try {
+      project = await loadYamlFile(filePath);
+    } catch {
+      continue;
+    }
+    const projectId = String(project?.project_id ?? "").trim();
+    if (!projectId) continue;
+    byProjectId.set(projectId, projectArgFromFileName(fileName));
+  }
+
+  projectArgCache = { loadedAt: now, byProjectId };
+  return byProjectId;
+}
+
+async function getProjectArgForProjectId(projectId) {
+  const map = await loadProjectArgMap();
+  return map.get(projectId) ?? null;
+}
+
 async function getWorkspaceRepoUrl(runPath) {
   const now = Date.now();
   const cached = workspaceRepoUrlCache.byWorkspacePath.get(runPath);
@@ -297,15 +409,15 @@ function normalizeGitHubAutoexecuteConfig(raw) {
   const enabled = (github.enabled ?? topEnabled) === true;
   const allowedEvents = Array.isArray(github.allowed_events) && github.allowed_events.length
     ? github.allowed_events.map((v) => String(v))
-    : ["issues.opened", "issues.labeled", "issue_comment.created"];
+    : ["issue_comment.created"];
   return {
     enabled,
     webhookSecret: String(github.webhook_secret ?? "").trim(),
     allowedEvents: new Set(allowedEvents),
     labelTrigger: String(github.label_trigger ?? "sf:auto-run"),
     commandTrigger: String(github.command_trigger ?? "/sf-run"),
-    requireCommand: github.require_command === true,
-    dedupeWindowMinutes: Number(github.dedupe_window_minutes ?? 30),
+    requireCommand: github.require_command == null ? true : github.require_command === true,
+    dedupeWindowMinutes: Number(github.dedupe_window_minutes ?? 1440),
   };
 }
 
@@ -378,6 +490,12 @@ async function loadAutoexecuteProjects() {
 
       const teamId = String(ticketSource?.config?.team_id ?? "").trim().toLowerCase();
       const teamKey = String(ticketSource?.config?.team_key ?? "").trim().toLowerCase();
+      if (!teamId && !teamKey) {
+        console.warn(
+          `[monitor] Skipping linear autoexecute for ${fileName}: team_id/team_key required to avoid ambiguous routing`
+        );
+        continue;
+      }
       projects.push({
         fileName,
         projectId: String(project.project_id ?? ""),
@@ -419,13 +537,13 @@ function findLinearAutoexecuteProject(payload, projects) {
   ].filter(Boolean));
 
   const matches = linearProjects.filter((project) => {
-    if (!project.teamId && !project.teamKey) return true;
     if (project.teamId && candidates.has(project.teamId)) return true;
     if (project.teamKey && candidates.has(project.teamKey)) return true;
     return false;
   });
 
-  return matches[0] ?? null;
+  if (matches.length !== 1) return null;
+  return matches[0];
 }
 
 function verifyGitHubSignature(rawBody, signatureHeader, secret) {
@@ -514,6 +632,83 @@ function extractLinearTrigger(payload, config) {
   return { allowed: true, ticketId };
 }
 
+function pruneAutoexecuteSeen(nowMs) {
+  for (const [key, seen] of autoexecuteSeen.entries()) {
+    if (nowMs - seen.seenAt > seen.windowMs * 2) {
+      autoexecuteSeen.delete(key);
+    }
+  }
+}
+
+async function loadAutoexecuteSeen() {
+  if (autoexecuteSeenLoaded) return;
+  autoexecuteSeenLoaded = true;
+  const raw = await fs.readFile(autoexecuteSeenStorePath, "utf-8").catch(() => "");
+  if (!raw) return;
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return;
+  }
+
+  const entries = Array.isArray(parsed?.entries) ? parsed.entries : [];
+  for (const entry of entries) {
+    const key = String(entry?.key ?? "");
+    const seenAt = Number(entry?.seenAt ?? NaN);
+    const windowMs = Number(entry?.windowMs ?? NaN);
+    if (!key || !Number.isFinite(seenAt) || !Number.isFinite(windowMs) || windowMs <= 0) continue;
+    autoexecuteSeen.set(key, { seenAt, windowMs });
+  }
+
+  pruneAutoexecuteSeen(Date.now());
+}
+
+async function persistAutoexecuteSeen() {
+  const entries = [...autoexecuteSeen.entries()].map(([key, seen]) => ({
+    key,
+    seenAt: seen.seenAt,
+    windowMs: seen.windowMs,
+  }));
+  const payload = JSON.stringify(
+    {
+      updated_at: new Date().toISOString(),
+      entries,
+    },
+    null,
+    2
+  );
+
+  await fs.mkdir(path.dirname(autoexecuteSeenStorePath), { recursive: true });
+  const tmpPath = `${autoexecuteSeenStorePath}.tmp`;
+  await fs.writeFile(tmpPath, payload, "utf-8");
+  await fs.rename(tmpPath, autoexecuteSeenStorePath);
+}
+
+async function flushAutoexecuteSeenToDisk() {
+  autoexecuteSeenWritePromise = autoexecuteSeenWritePromise
+    .then(async () => {
+      await persistAutoexecuteSeen();
+    })
+    .catch((err) => {
+      console.warn(`[monitor] Failed to persist webhook dedupe state: ${err?.message ?? err}`);
+    });
+  await autoexecuteSeenWritePromise;
+}
+
+async function shouldDedupeRun(dedupeKey, dedupeWindowMinutes) {
+  await loadAutoexecuteSeen();
+  const now = Date.now();
+  const windowMs = Math.max(1, dedupeWindowMinutes) * 60_000;
+  const prev = autoexecuteSeen.get(dedupeKey);
+  if (prev && now - prev.seenAt < windowMs) return true;
+  autoexecuteSeen.set(dedupeKey, { seenAt: now, windowMs });
+  pruneAutoexecuteSeen(now);
+  await flushAutoexecuteSeenToDisk();
+  return false;
+}
+
 async function loadSharedWebhookHandlerModule() {
   const compiledPath = path.join(repoRoot, "dist", "service", "webhook-handler.js");
   try {
@@ -539,21 +734,6 @@ const webhookHandlerApi = {
   extractGitHubTrigger: sharedWebhookModule?.extractGitHubTrigger ?? extractGitHubTrigger,
   extractLinearTrigger: sharedWebhookModule?.extractLinearTrigger ?? extractLinearTrigger,
 };
-
-function shouldDedupeRun(dedupeKey, dedupeWindowMinutes) {
-  const now = Date.now();
-  const windowMs = Math.max(1, dedupeWindowMinutes) * 60_000;
-  const prev = autoexecuteSeen.get(dedupeKey);
-  if (prev && now - prev.seenAt < windowMs) return true;
-  autoexecuteSeen.set(dedupeKey, { seenAt: now, windowMs });
-
-  for (const [key, seen] of autoexecuteSeen.entries()) {
-    if (now - seen.seenAt > seen.windowMs * 2) {
-      autoexecuteSeen.delete(key);
-    }
-  }
-  return false;
-}
 
 function enqueueAutoexecuteTask(task) {
   autoexecuteQueue.push(task);
@@ -622,7 +802,16 @@ async function processAutoexecuteQueue() {
 }
 
 async function handleGitHubWebhookRequest(req, res) {
-  const rawBody = await readBody(req);
+  let rawBody = "";
+  try {
+    rawBody = await readBody(req, {
+      maxBytes: monitorWebhookMaxBodyBytes,
+      timeoutMs: monitorBodyReadTimeoutMs,
+    });
+  } catch (err) {
+    sendBodyReadError(res, err);
+    return;
+  }
   const signature = String(req.headers["x-hub-signature-256"] ?? "");
   const delivery = String(req.headers["x-github-delivery"] ?? "");
   const event = String(req.headers["x-github-event"] ?? "");
@@ -645,55 +834,35 @@ async function handleGitHubWebhookRequest(req, res) {
   const projects = await loadAutoexecuteProjects();
   const matched = findAutoexecuteProject(owner, repo, projects);
   if (!matched) {
-    sendJson(res, 202, {
-      accepted: false,
-      ignored: true,
-      reason: "no_matching_project",
-      owner: String(owner),
-      repo: String(repo),
-    });
+    sendJson(res, 202, { accepted: false, ignored: true });
     return;
   }
 
   if (!matched.autoCfg.webhookSecret) {
-    sendJson(res, 403, {
-      accepted: false,
-      error: "Webhook secret not configured for matched project",
-      project_id: matched.projectId,
-    });
+    sendJson(res, 403, { accepted: false, error: "Forbidden" });
     return;
   }
 
   if (!webhookHandlerApi.verifyGitHubSignature(rawBody, signature, matched.autoCfg.webhookSecret)) {
-    sendJson(res, 401, { accepted: false, error: "Invalid webhook signature" });
+    sendJson(res, 401, { accepted: false, error: "Unauthorized" });
+    return;
+  }
+
+  if (!delivery) {
+    sendJson(res, 400, { accepted: false, error: "Bad Request" });
     return;
   }
 
   const action = String(payload?.action ?? "");
   const trigger = webhookHandlerApi.extractGitHubTrigger(payload, event, action, matched.autoCfg);
   if (!trigger.allowed) {
-    sendJson(res, 202, {
-      accepted: false,
-      ignored: true,
-      reason: trigger.reason,
-      project_id: matched.projectId,
-      event,
-      action,
-    });
+    sendJson(res, 202, { accepted: false, ignored: true });
     return;
   }
 
-  const dedupeKey = delivery
-    ? `${matched.projectId}:${delivery}`
-    : `${matched.projectId}:${event}:${action}:${trigger.ticketId}:${payload?.issue?.updated_at ?? payload?.comment?.updated_at ?? ""}`;
-  if (shouldDedupeRun(dedupeKey, matched.autoCfg.dedupeWindowMinutes)) {
-    sendJson(res, 202, {
-      accepted: false,
-      ignored: true,
-      reason: "duplicate_event",
-      project_id: matched.projectId,
-      ticket_id: trigger.ticketId,
-    });
+  const dedupeKey = `${matched.projectId}:${delivery}`;
+  if (await shouldDedupeRun(dedupeKey, matched.autoCfg.dedupeWindowMinutes)) {
+    sendJson(res, 202, { accepted: false, ignored: true });
     return;
   }
 
@@ -713,14 +882,21 @@ async function handleGitHubWebhookRequest(req, res) {
     accepted: true,
     queued: true,
     queue_depth: autoexecuteQueue.length,
-    project_id: matched.projectId,
-    ticket_id: trigger.ticketId,
     dry_run: autoexecuteDryRun,
   });
 }
 
 async function handleLinearWebhookRequest(req, res) {
-  const rawBody = await readBody(req);
+  let rawBody = "";
+  try {
+    rawBody = await readBody(req, {
+      maxBytes: monitorWebhookMaxBodyBytes,
+      timeoutMs: monitorBodyReadTimeoutMs,
+    });
+  } catch (err) {
+    sendBodyReadError(res, err);
+    return;
+  }
   const signature = String(req.headers["linear-signature"] ?? "");
 
   let payload;
@@ -734,27 +910,17 @@ async function handleLinearWebhookRequest(req, res) {
   const projects = await loadAutoexecuteProjects();
   const matched = findLinearAutoexecuteProject(payload, projects);
   if (!matched) {
-    sendJson(res, 202, {
-      accepted: false,
-      ignored: true,
-      reason: "no_matching_project",
-      type: String(payload?.type ?? ""),
-      action: String(payload?.action ?? ""),
-    });
+    sendJson(res, 202, { accepted: false, ignored: true });
     return;
   }
 
   if (!matched.autoCfg.webhookSecret) {
-    sendJson(res, 403, {
-      accepted: false,
-      error: "Webhook secret not configured for matched project",
-      project_id: matched.projectId,
-    });
+    sendJson(res, 403, { accepted: false, error: "Forbidden" });
     return;
   }
 
   if (!webhookHandlerApi.verifyLinearSignature(rawBody, signature, matched.autoCfg.webhookSecret)) {
-    sendJson(res, 401, { accepted: false, error: "Invalid webhook signature" });
+    sendJson(res, 401, { accepted: false, error: "Unauthorized" });
     return;
   }
 
@@ -762,36 +928,25 @@ async function handleLinearWebhookRequest(req, res) {
   if (Number.isFinite(webhookTimestamp) && matched.autoCfg.maxTimestampAgeSeconds > 0) {
     const ageSeconds = Math.abs(Date.now() - webhookTimestamp) / 1000;
     if (ageSeconds > matched.autoCfg.maxTimestampAgeSeconds) {
-      sendJson(res, 401, { accepted: false, error: "Webhook timestamp outside accepted window" });
+      sendJson(res, 401, { accepted: false, error: "Unauthorized" });
       return;
     }
   }
 
   const trigger = webhookHandlerApi.extractLinearTrigger(payload, matched.autoCfg);
   if (!trigger.allowed) {
-    sendJson(res, 202, {
-      accepted: false,
-      ignored: true,
-      reason: trigger.reason,
-      project_id: matched.projectId,
-      type: String(payload?.type ?? ""),
-      action: String(payload?.action ?? ""),
-    });
+    sendJson(res, 202, { accepted: false, ignored: true });
     return;
   }
 
   const delivery = String(payload?.webhookId ?? "");
-  const dedupeKey = delivery
-    ? `${matched.projectId}:${delivery}`
-    : `${matched.projectId}:${payload?.type ?? ""}:${payload?.action ?? ""}:${trigger.ticketId}:${payload?.createdAt ?? ""}`;
-  if (shouldDedupeRun(dedupeKey, matched.autoCfg.dedupeWindowMinutes)) {
-    sendJson(res, 202, {
-      accepted: false,
-      ignored: true,
-      reason: "duplicate_event",
-      project_id: matched.projectId,
-      ticket_id: trigger.ticketId,
-    });
+  if (!delivery) {
+    sendJson(res, 400, { accepted: false, error: "Bad Request" });
+    return;
+  }
+  const dedupeKey = `${matched.projectId}:${delivery}`;
+  if (await shouldDedupeRun(dedupeKey, matched.autoCfg.dedupeWindowMinutes)) {
+    sendJson(res, 202, { accepted: false, ignored: true });
     return;
   }
 
@@ -809,8 +964,6 @@ async function handleLinearWebhookRequest(req, res) {
     accepted: true,
     queued: true,
     queue_depth: autoexecuteQueue.length,
-    project_id: matched.projectId,
-    ticket_id: trigger.ticketId,
     dry_run: autoexecuteDryRun,
   });
 }
@@ -837,6 +990,55 @@ function safeJoin(base, ...parts) {
     throw new Error("Invalid path traversal attempt");
   }
   return resolved;
+}
+
+function canonicalizeRunId(rawRunId) {
+  let runId = String(rawRunId ?? "").trim();
+  if (!runId) return "";
+  while (runId.startsWith("run-run-")) {
+    runId = `run-${runId.slice("run-run-".length)}`;
+  }
+  return runId;
+}
+
+function buildRunIdCandidates(rawRunId) {
+  const provided = String(rawRunId ?? "").trim();
+  const canonical = canonicalizeRunId(provided);
+  const candidates = [];
+  const seen = new Set();
+
+  const push = (value) => {
+    const runId = String(value ?? "").trim();
+    if (!runId || seen.has(runId)) return;
+    seen.add(runId);
+    candidates.push(runId);
+  };
+
+  push(provided);
+  push(canonical);
+
+  if (canonical.startsWith("run-")) {
+    // Worktree directories are typically prefixed as run-${run_id}.
+    push(`run-${canonical}`);
+  }
+  if (provided.startsWith("run-run-")) {
+    push(provided.slice(4));
+  }
+
+  return candidates;
+}
+
+function resolveCanonicalRunId(runId, events = [], session = null) {
+  const eventRunId =
+    events.find((evt) => typeof evt?.run_id === "string" && evt.run_id.trim())?.run_id ?? "";
+  const sessionRunId =
+    typeof session?.run_id === "string" && session.run_id.trim() ? session.run_id : "";
+
+  return (
+    canonicalizeRunId(eventRunId) ||
+    canonicalizeRunId(sessionRunId) ||
+    canonicalizeRunId(runId)
+  );
 }
 
 let databasePoolPromise = null;
@@ -1224,7 +1426,11 @@ async function listRuns() {
       if (!runId.startsWith("run-")) continue;
       const runPath = path.join(projectPath, runId);
       const summary = await loadRunSummary(projectId, runId, runPath);
-      byKey.set(`${projectId}/${runId}`, summary);
+      const key = `${projectId}/${summary.run_id}`;
+      const existing = byKey.get(key);
+      if (!existing || Number(summary.last_event_ts ?? 0) >= Number(existing.last_event_ts ?? 0)) {
+        byKey.set(key, summary);
+      }
     }
   }
 
@@ -1234,10 +1440,11 @@ async function listRuns() {
     const projectId = session?.project_id;
     const workspacePath = session?.workspace_path;
     if (!runId || !projectId || !workspacePath) continue;
-    const key = `${projectId}/${runId}`;
-    if (byKey.has(key)) continue;
     const summary = await loadRunSummary(projectId, runId, workspacePath, session);
-    byKey.set(key, summary);
+    const key = `${projectId}/${summary.run_id}`;
+    if (!byKey.has(key)) {
+      byKey.set(key, summary);
+    }
   }
 
   const runs = Array.from(byKey.values());
@@ -1263,15 +1470,22 @@ async function listSessionMetadata() {
 }
 
 async function resolveRunPath(projectId, runId) {
-  const runPath = safeJoin(runsRoot, projectId, runId);
-  const exists = await fs.stat(runPath).then((s) => s.isDirectory(), () => false);
-  if (exists) return runPath;
+  const runIdCandidates = buildRunIdCandidates(runId);
+  for (const runIdCandidate of runIdCandidates) {
+    const runPath = safeJoin(runsRoot, projectId, runIdCandidate);
+    const exists = await fs.stat(runPath).then((s) => s.isDirectory(), () => false);
+    if (exists) return runPath;
+  }
 
   const sessions = await listSessionMetadata();
+  const canonicalRunId = canonicalizeRunId(runId);
   const match = sessions.find(
     (s) =>
       s?.project_id === projectId &&
-      s?.run_id === runId &&
+      (
+        runIdCandidates.includes(String(s?.run_id ?? "")) ||
+        canonicalizeRunId(s?.run_id) === canonicalRunId
+      ) &&
       typeof s?.workspace_path === "string" &&
       s.workspace_path.length > 0
   );
@@ -1296,6 +1510,7 @@ function inferStatus(events) {
     const t = events[i]?.event_type;
     if (t === "task.completed") return "completed";
     if (t === "task.failed") return "failed";
+    if (t === "step.failed") return "failed";
     if (t === "human_gate.requested") return "waiting_human_review";
     if (t === "human_gate.approved" || t === "human_gate.rejected") return "executing";
     if (t === "step.started") return "executing";
@@ -1336,7 +1551,8 @@ function extractRuntimeSkills(runtimeMetadata) {
   };
 }
 
-function buildStepStatus(plan, events) {
+function buildStepStatus(plan, events, options = {}) {
+  const resumeSteps = options?.resumeSteps instanceof Set ? options.resumeSteps : new Set();
   const byStep = new Map();
   for (const step of plan?.steps ?? []) {
     byStep.set(step.step_number, {
@@ -1348,6 +1564,8 @@ function buildStepStatus(plan, events) {
       completed_at: null,
       tokens: null,
       runtime_skills: null,
+      resumed: resumeSteps.has(step.step_number),
+      resume_with_prompt: false,
     });
   }
 
@@ -1368,12 +1586,18 @@ function buildStepStatus(plan, events) {
         tokens: null,
         runtime_skills: null,
         is_rework: stepNum >= 900,
+        resumed: resumeSteps.has(stepNum),
+        resume_with_prompt: false,
       });
     }
     const st = byStep.get(stepNum);
     const runtimeSkills = extractRuntimeSkills(data.runtime_metadata);
     if (runtimeSkills) {
       st.runtime_skills = runtimeSkills;
+    }
+    if (typeof data.operator_prompt === "string" && data.operator_prompt.trim()) {
+      st.resumed = true;
+      st.resume_with_prompt = true;
     }
     if (evt.event_type === "step.started") {
       st.status = "running";
@@ -1389,6 +1613,26 @@ function buildStepStatus(plan, events) {
   }
 
   return Array.from(byStep.values()).sort((a, b) => a.step_number - b.step_number);
+}
+
+function extractRunResumeMetadata(events) {
+  const resumedStartEvents = events.filter(
+    (evt) =>
+      evt?.event_type === "task.started" &&
+      evt?.data &&
+      typeof evt.data === "object" &&
+      evt.data.resumed === true
+  );
+  const resumeSteps = resumedStartEvents
+    .map((evt) => Number(evt?.data?.resume_step))
+    .filter((step) => Number.isInteger(step) && step > 0);
+  const uniqueResumeSteps = [...new Set(resumeSteps)];
+  return {
+    resumed: resumedStartEvents.length > 0,
+    resumed_count: resumedStartEvents.length,
+    resume_step: uniqueResumeSteps.length ? uniqueResumeSteps[uniqueResumeSteps.length - 1] : null,
+    resume_steps: uniqueResumeSteps,
+  };
 }
 
 function extractTicketUrl(ticket) {
@@ -1471,9 +1715,11 @@ function extractRunSourceMetadata(events, session = null, projectRepoUrl = null)
 
 async function loadRunSummary(projectId, runId, runPath, session = null) {
   const events = await readEvents(runPath);
+  const canonicalRunId = resolveCanonicalRunId(runId, events, session);
   const planEvent = events.find((e) => e.event_type === "task.plan_generated");
   const plan = planEvent?.data?.plan ?? null;
-  const steps = buildStepStatus(plan, events);
+  const resumeMeta = extractRunResumeMetadata(events);
+  const steps = buildStepStatus(plan, events, { resumeSteps: new Set(resumeMeta.resume_steps) });
   const last = events.at(-1);
   const hasEvents = events.length > 0;
   const projectRepoUrl = await getProjectRepoUrl(projectId);
@@ -1481,7 +1727,7 @@ async function loadRunSummary(projectId, runId, runPath, session = null) {
   const fallbackRepoUrl = sourceMeta.ticket_repo_url ?? await getWorkspaceRepoUrl(runPath);
   return {
     project_id: projectId,
-    run_id: runId,
+    run_id: canonicalRunId,
     status: hasEvents ? inferStatus(events) : (session?.status ?? "unknown"),
     classification: plan?.classification ?? session?.plan_classification ?? null,
     step_count: hasEvents ? (plan?.steps?.length ?? 0) : (session?.total_steps ?? 0),
@@ -1492,6 +1738,7 @@ async function loadRunSummary(projectId, runId, runPath, session = null) {
       ? Date.parse(last.timestamp)
       : (session?.updated_at ? Date.parse(session.updated_at) : null),
     workspace_path: runPath,
+    ...resumeMeta,
     ...sourceMeta,
     ticket_repo_url: fallbackRepoUrl,
   };
@@ -2141,7 +2388,16 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === "/api/review/decide" && req.method === "POST") {
-      const body = await readBody(req);
+      let body = "";
+      try {
+        body = await readBody(req, {
+          maxBytes: monitorApiMaxBodyBytes,
+          timeoutMs: monitorBodyReadTimeoutMs,
+        });
+      } catch (err) {
+        sendBodyReadError(res, err);
+        return;
+      }
       let payload;
       try {
         payload = JSON.parse(body);
@@ -2176,6 +2432,105 @@ const server = http.createServer(async (req, res) => {
         "utf-8"
       );
       sendJson(res, 200, { ok: true, path: decisionPath });
+      return;
+    }
+
+    if (pathname === "/api/run/resume" && req.method === "POST") {
+      let body = "";
+      try {
+        body = await readBody(req, {
+          maxBytes: monitorApiMaxBodyBytes,
+          timeoutMs: monitorBodyReadTimeoutMs,
+        });
+      } catch (err) {
+        sendBodyReadError(res, err);
+        return;
+      }
+
+      let payload;
+      try {
+        payload = JSON.parse(body);
+      } catch {
+        sendJson(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+
+      const project = String(payload?.project ?? "").trim();
+      const runId = String(payload?.run ?? "").trim();
+      if (!project || !runId) {
+        sendJson(res, 400, { error: "Missing project or run" });
+        return;
+      }
+
+      let step = null;
+      if (payload?.step != null && String(payload.step).trim() !== "") {
+        const parsedStep = Number(payload.step);
+        if (!Number.isInteger(parsedStep) || parsedStep <= 0) {
+          sendJson(res, 400, { error: "step must be a positive integer" });
+          return;
+        }
+        step = parsedStep;
+      }
+
+      const prompt =
+        typeof payload?.prompt === "string"
+          ? payload.prompt.trim()
+          : "";
+      if (payload?.prompt != null && typeof payload.prompt !== "string") {
+        sendJson(res, 400, { error: "prompt must be a string" });
+        return;
+      }
+
+      let canonicalRunId = canonicalizeRunId(runId) || runId;
+      // Validate the run exists before spawning the command.
+      try {
+        const runPath = await resolveRunPath(project, runId);
+        const summary = await loadRunSummary(project, runId, runPath);
+        if (typeof summary?.run_id === "string" && summary.run_id.trim()) {
+          canonicalRunId = summary.run_id.trim();
+        }
+      } catch {
+        sendJson(res, 404, { error: "Run not found" });
+        return;
+      }
+      const projectArg = await getProjectArgForProjectId(project);
+      const args = ["dev", "--", "resume", canonicalRunId, "--config", configRoot];
+      if (projectArg) {
+        args.push("--project", projectArg);
+      }
+      if (step != null) {
+        args.push("--step", String(step));
+      }
+      if (prompt) {
+        args.push("--prompt", prompt);
+      }
+
+      let pid = null;
+      await new Promise((resolve, reject) => {
+        const child = spawn("pnpm", args, {
+          cwd: repoRoot,
+          env: process.env,
+          detached: true,
+          stdio: "ignore",
+        });
+        child.once("error", reject);
+        child.once("spawn", () => {
+          child.unref();
+          pid = child.pid ?? null;
+          resolve(null);
+        });
+      });
+
+      sendJson(res, 202, {
+        ok: true,
+        queued: true,
+        pid,
+        command: `pnpm ${args.join(" ")}`,
+        project,
+        run: canonicalRunId,
+        ...(step != null ? { step } : {}),
+        ...(prompt ? { prompt_provided: true } : {}),
+      });
       return;
     }
 
@@ -2255,6 +2610,11 @@ server.listen(port, "127.0.0.1", () => {
   console.log(`[monitor] Run Monitor listening at http://127.0.0.1:${actualPort}`);
   console.log(`[monitor] Data source: ${selectedDataSourceLabel}`);
   console.log(`[monitor] Watching runs under: ${runsRoot}`);
+  if (monitorAuthRequired) {
+    console.log("[monitor] API authentication enabled");
+  } else {
+    console.warn("[monitor] API authentication disabled (SPRINTFOUNDRY_MONITOR_AUTH_REQUIRED=0)");
+  }
 });
 
 if (webhookServer) {

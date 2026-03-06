@@ -425,6 +425,7 @@ export interface TaskRun {
 export interface StepExecution {
   step_number: number;
   agent: AgentType;
+  task?: string;
   status: StepStatus;
   container_id: string | null;
   tokens_used: number;

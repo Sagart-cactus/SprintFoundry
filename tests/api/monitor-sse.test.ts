@@ -25,6 +25,7 @@ const serverMjs = path.resolve(__dirname, "../../monitor/server.mjs");
 let BASE = "";
 let serverProcess: ChildProcess;
 let tmpRunsRoot: string;
+const MONITOR_API_TOKEN = "monitor-read-token";
 
 // Create a temp runs directory with a fake project/run
 function setupFixtureRun(projectId: string, runId: string, events: object[]) {
@@ -109,6 +110,12 @@ function collectSSE(
   });
 }
 
+function withAccessToken(rawUrl: string): string {
+  const url = new URL(rawUrl);
+  url.searchParams.set("access_token", MONITOR_API_TOKEN);
+  return url.toString();
+}
+
 beforeAll(async () => {
   // Create temp runs root
   tmpRunsRoot = mkdtempSync(path.join(os.tmpdir(), "sf-sse-test-"));
@@ -119,6 +126,7 @@ beforeAll(async () => {
         ...process.env,
         MONITOR_PORT: "0",
         SPRINTFOUNDRY_RUNS_ROOT: tmpRunsRoot,
+        SPRINTFOUNDRY_MONITOR_API_TOKEN: MONITOR_API_TOKEN,
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -158,14 +166,14 @@ afterAll(() => {
 
 describe("GET /api/events/stream — SSE endpoint", () => {
   it("returns correct SSE headers", async () => {
-    const { headers } = await collectSSE(`${BASE}/api/events/stream`, 1000, 1);
+    const { headers } = await collectSSE(withAccessToken(`${BASE}/api/events/stream`), 1000, 1);
     expect(headers["content-type"]).toBe("text/event-stream");
     expect(headers["cache-control"]).toBe("no-cache");
     expect(headers["connection"]).toBe("keep-alive");
   });
 
   it("sends 'connected' event immediately", async () => {
-    const { messages } = await collectSSE(`${BASE}/api/events/stream`, 2000, 1);
+    const { messages } = await collectSSE(withAccessToken(`${BASE}/api/events/stream`), 2000, 1);
     expect(messages.length).toBeGreaterThanOrEqual(1);
     const connected = messages.find((m) => m.event === "connected");
     expect(connected).toBeDefined();
@@ -182,7 +190,7 @@ describe("GET /api/events/stream — SSE endpoint", () => {
     ]);
 
     // Wait long enough for at least one periodic summary (5s interval + buffer)
-    const { messages } = await collectSSE(`${BASE}/api/events/stream`, 7000, 2);
+    const { messages } = await collectSSE(withAccessToken(`${BASE}/api/events/stream`), 7000, 2);
     const runsEvents = messages.filter((m) => m.event === "runs");
     expect(runsEvents.length).toBeGreaterThanOrEqual(1);
     const data = JSON.parse(runsEvents[0].data);
@@ -197,7 +205,7 @@ describe("GET /api/events/stream — SSE endpoint", () => {
 
     // Start SSE connection for this specific run
     const ssePromise = collectSSE(
-      `${BASE}/api/events/stream?project=test-project&run=run-sse-append`,
+      withAccessToken(`${BASE}/api/events/stream?project=test-project&run=run-sse-append`),
       4000,
       2,
     );
@@ -222,7 +230,7 @@ describe("GET /api/events/stream — SSE endpoint", () => {
     // Heartbeat is every 15s — we'll check the raw stream for the comment format
     // Since we can't wait 15s in tests, just verify the format works by checking
     // that the SSE endpoint stays open for the requested duration
-    const { raw } = await collectSSE(`${BASE}/api/events/stream`, 2000, 1);
+    const { raw } = await collectSSE(withAccessToken(`${BASE}/api/events/stream`), 2000, 1);
     // At minimum the raw stream should have the connected event
     expect(raw).toContain("event: connected");
     expect(raw).toContain("data:");
@@ -235,7 +243,7 @@ describe("GET /api/events/stream — SSE endpoint", () => {
     ]);
 
     const { messages } = await collectSSE(
-      `${BASE}/api/events/stream?project=targeted-proj&run=run-targeted`,
+      withAccessToken(`${BASE}/api/events/stream?project=targeted-proj&run=run-targeted`),
       2000,
       1,
     );
@@ -246,7 +254,7 @@ describe("GET /api/events/stream — SSE endpoint", () => {
 
   it("handles missing/nonexistent run gracefully", async () => {
     const { messages } = await collectSSE(
-      `${BASE}/api/events/stream?project=nonexistent&run=run-fake`,
+      withAccessToken(`${BASE}/api/events/stream?project=nonexistent&run=run-fake`),
       2000,
       1,
     );

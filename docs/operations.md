@@ -47,6 +47,20 @@ pnpm dev -- run --project mixed-smoke --source prompt --prompt "..."
 pnpm dev -- review --workspace <run_workspace_path> --review-id <review-id> --decision approved
 ```
 
+## Resume Failed Run
+
+Resume from latest failed step:
+
+```bash
+pnpm dev -- resume <run-id>
+```
+
+Resume from a specific failed step with additional operator guidance:
+
+```bash
+pnpm dev -- resume <run-id> --step 2 --prompt "Focus on flaky tests and stabilize snapshots."
+```
+
 ## Monitor
 
 Start monitor server:
