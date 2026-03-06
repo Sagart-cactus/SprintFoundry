@@ -32,6 +32,7 @@ export interface RuntimeActivityEvent {
 }
 
 export interface RuntimeStepContext {
+  runId: string;
   stepNumber: number;
   stepAttempt: number;
   agent: AgentType;

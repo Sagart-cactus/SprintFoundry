@@ -628,6 +628,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
         bufferBytes = 0;
         clearTimer();
         const payload: RuntimeLogChunk = {
+          run_id: config.runId,
           step_number: config.stepNumber,
           step_attempt: config.stepAttempt,
           agent: config.agent,

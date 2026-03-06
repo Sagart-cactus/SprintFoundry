@@ -84,6 +84,37 @@ Webhook routes:
 - `POST http://127.0.0.1:4310/api/webhooks/linear`
 - in split mode (`SPRINTFOUNDRY_WEBHOOK_PORT` set): use webhook port instead of monitor port
 
+## Local Distributed Dev Loop
+
+Run Postgres/Redis in Docker and run `dispatch`, `event-api`, and `monitor` from local code:
+
+```bash
+# one-time
+pnpm install
+
+# start infra only
+pnpm infra:up
+pnpm infra:migrate
+
+# or start infra + event-api + dispatch + monitor together
+pnpm dev:distributed
+```
+
+Default local endpoints/tokens in this mode:
+
+- Event API: `http://127.0.0.1:3001` (`Authorization: Bearer dev-internal-token`)
+- Dispatch API: `http://127.0.0.1:4320` (`Authorization: Bearer dev-dispatch-write`)
+- Monitor UI: `http://127.0.0.1:4310/?token=dev-monitor-read`
+
+Queue a prompt run through dispatch:
+
+```bash
+curl -X POST http://127.0.0.1:4320/api/dispatch/run \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer dev-dispatch-write' \
+  -d '{"project_id":"live-gaps-worktree","source":"prompt","prompt":"Create a tiny test artifact"}'
+```
+
 ## Tests
 
 ```bash

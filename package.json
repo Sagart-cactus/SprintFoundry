@@ -20,6 +20,12 @@
     "dev": "tsx src/index.ts",
     "event-api": "tsx src/service/event-ingestion-server.ts",
     "monitor": "node monitor/server.mjs",
+    "infra:up": "./scripts/dev-infra.sh up",
+    "infra:down": "./scripts/dev-infra.sh down",
+    "infra:reset": "./scripts/dev-infra.sh reset",
+    "infra:status": "./scripts/dev-infra.sh status",
+    "infra:migrate": "./scripts/dev-infra.sh migrate",
+    "dev:distributed": "./scripts/dev-distributed-local.sh",
     "start": "node dist/index.js",
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
@@ -55,7 +61,7 @@
     "commander": "^13.1.0",
     "dockerode": "^4.0.4",
     "pg": "^8.16.3",
-    "redis": "^5.8.2",
+    "redis": "5.11.0",
     "yaml": "^2.7.0"
   },
   "devDependencies": {

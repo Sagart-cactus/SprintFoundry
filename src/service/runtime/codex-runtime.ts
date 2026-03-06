@@ -147,6 +147,36 @@ export class CodexRuntime implements AgentRuntime {
     );
 
     const command = config.runtime.command ?? "codex";
+    let liveLogSequence = 0;
+    let liveLogChain: Promise<void> = Promise.resolve();
+    const queueLiveStdoutChunk = (chunk: string) => {
+      if (!config.sinkClient || !chunk) return;
+      const payload: RuntimeLogChunk = {
+        run_id: config.runId,
+        step_number: config.stepNumber,
+        step_attempt: config.stepAttempt,
+        agent: config.agent,
+        runtime_provider: config.runtime.provider,
+        sequence: liveLogSequence,
+        chunk,
+        byte_length: Buffer.byteLength(chunk, "utf-8"),
+        stream: "activity",
+        is_final: false,
+        timestamp: new Date().toISOString(),
+      };
+      liveLogSequence += 1;
+      liveLogChain = liveLogChain
+        .then(async () => {
+          await config.sinkClient?.postLog(payload);
+        })
+        .catch((error) => {
+          console.warn(
+            `[codex-runtime] Failed to stream activity log chunk step=${config.stepNumber} attempt=${config.stepAttempt}: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
+        });
+    };
     const baseOutputFiles = {
       stdoutPath: stepPaths.stdoutPath,
       stderrPath: stepPaths.stderrPath,
@@ -171,6 +201,7 @@ export class CodexRuntime implements AgentRuntime {
           stepDebugPath: stepPaths.debugPath,
           legacyDebugPath: legacyPaths.debugPath,
         },
+        onStdoutData: queueLiveStdoutChunk,
       });
       await this.copyLogPair(
         processResult.usedOutputPaths.stdoutPath,
@@ -231,6 +262,7 @@ export class CodexRuntime implements AgentRuntime {
     }
 
     const usage = this.extractProcessUsage(result.stdout);
+    await liveLogChain.catch(() => undefined);
     const tokenSavings = usage ? this.extractTokenSavings(usage) : undefined;
     const runtimeMetadata = this.buildRuntimeMetadata(config, result.runtimeId, {
       usage,
@@ -603,6 +635,7 @@ export class CodexRuntime implements AgentRuntime {
       stepDebugPath: string;
       legacyDebugPath: string;
     };
+    onStdoutData?: (chunk: string) => void;
   }): Promise<{
     result: ProcessRunResult;
     usedOutputPaths: { stdoutPath: string; stderrPath: string };
@@ -620,6 +653,7 @@ export class CodexRuntime implements AgentRuntime {
             stdoutPath: params.outputPaths.firstStdoutPath,
             stderrPath: params.outputPaths.firstStderrPath,
           },
+          onStdoutData: params.onStdoutData,
         }
       );
       return {
@@ -674,6 +708,7 @@ export class CodexRuntime implements AgentRuntime {
               stdoutPath: params.outputPaths.retryStdoutPath,
               stderrPath: params.outputPaths.retryStderrPath,
             },
+            onStdoutData: params.onStdoutData,
           }
         );
         return {
@@ -1046,6 +1081,7 @@ export class CodexRuntime implements AgentRuntime {
         bufferBytes = 0;
         clearTimer();
         const payload: RuntimeLogChunk = {
+          run_id: config.runId,
           step_number: config.stepNumber,
           step_attempt: config.stepAttempt,
           agent: config.agent,

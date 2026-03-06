@@ -27,6 +27,7 @@ import type { RuntimeActivityEvent } from "./runtime/types.js";
 import type { EventSinkClient } from "./event-sink-client.js";
 
 export interface AgentRunConfig {
+  runId: string;
   stepNumber: number;
   stepAttempt: number;
   agent: AgentType;
@@ -113,6 +114,7 @@ export class AgentRunner {
     const runtimeImpl = this.runtimeFactory.create(runtime);
     console.log(`[agent-runner] Spawning ${runtime.provider} runtime for ${config.agent}...`);
     const result = await runtimeImpl.runStep({
+      runId: config.runId,
       stepNumber: config.stepNumber,
       stepAttempt: config.stepAttempt,
       agent: config.agent,
