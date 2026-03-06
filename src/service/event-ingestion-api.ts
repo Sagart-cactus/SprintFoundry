@@ -73,7 +73,7 @@ interface RunPayload {
   status: string;
   current_step: number;
   total_steps: number;
-  plan_classification: string;
+  plan_classification: string | null;
   workspace_path: string | null;
   branch: string | null;
   pr_url: string | null;
@@ -340,7 +340,7 @@ function parseRunPayload(body: unknown, limits: IngestionLimits): { value?: RunP
   const status = asString(body.status);
   const current_step = asInteger(body.current_step, 0);
   const total_steps = asInteger(body.total_steps, 0);
-  const plan_classification = asString(body.plan_classification);
+  const plan_classification = asNullableString(body.plan_classification);
   const workspace_path = asNullableString(body.workspace_path);
   const branch = asNullableString(body.branch);
   const pr_url = asNullableString(body.pr_url);
@@ -362,7 +362,6 @@ function parseRunPayload(body: unknown, limits: IngestionLimits): { value?: RunP
   if (!status) errors.push("status is required");
   if (current_step === null) errors.push("current_step must be an integer >= 0");
   if (total_steps === null) errors.push("total_steps must be an integer >= 0");
-  if (!plan_classification) errors.push("plan_classification is required");
   if (total_tokens === null) errors.push("total_tokens must be an integer >= 0");
   if (total_cost_usd === null) errors.push("total_cost_usd must be a number >= 0");
   if (!created_at) errors.push("created_at must be a valid ISO date-time string");
@@ -392,7 +391,6 @@ function parseRunPayload(body: unknown, limits: IngestionLimits): { value?: RunP
     !status ||
     current_step === null ||
     total_steps === null ||
-    !plan_classification ||
     total_tokens === null ||
     total_cost_usd === null ||
     !created_at ||

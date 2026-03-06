@@ -659,7 +659,15 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       hasConsumer: true,
       emit: async (event: RuntimeActivityEvent) => {
         if (callback) {
-          await callback(event);
+          try {
+            await callback(event);
+          } catch (error) {
+            console.warn(
+              `[claude-runtime] Activity callback failed for ${event.type}: ${
+                error instanceof Error ? error.message : String(error)
+              }`
+            );
+          }
         }
         if (!sinkClient) return;
         const line = `${JSON.stringify({

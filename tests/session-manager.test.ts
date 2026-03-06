@@ -125,6 +125,24 @@ describe("SessionManager", () => {
     warnSpy.mockRestore();
   });
 
+  it("attempts sink upsert even when local session file write fails", async () => {
+    const sinkClient: Pick<EventSinkClient, "upsertRun"> = {
+      upsertRun: vi.fn().mockResolvedValue(undefined),
+    };
+    const readOnlyDir = path.join(testDir, "read-only");
+    await fs.mkdir(readOnlyDir, { recursive: true });
+    await fs.chmod(readOnlyDir, 0o500);
+    const mgr = new SessionManager(readOnlyDir, sinkClient);
+    const run = makeRun({ run_id: "run-write-failure" });
+
+    try {
+      await expect(mgr.persist(run)).rejects.toThrow();
+      expect(sinkClient.upsertRun).toHaveBeenCalledTimes(1);
+    } finally {
+      await fs.chmod(readOnlyDir, 0o700);
+    }
+  });
+
   it("updates an existing session on re-persist", async () => {
     const mgr = new SessionManager(testDir);
     const run = makeRun({ run_id: "run-update" });

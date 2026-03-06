@@ -1127,8 +1127,9 @@ async function readLogTextFromDb(projectId, runId, kind, lines = 400, stepNumber
   const isPlanner = kind.startsWith("planner_");
   const where = ["run_id = $1", "stream = 'activity'"];
   const params = [runRecord.run_id];
+  const hasStepFilter = Number.isFinite(stepNumber);
 
-  if (Number.isFinite(stepNumber)) {
+  if (hasStepFilter) {
     params.push(stepNumber);
     where.push(`step_number = $${params.length}`);
   }
@@ -1139,12 +1140,32 @@ async function readLogTextFromDb(projectId, runId, kind, lines = 400, stepNumber
     where.push("agent <> 'planner'");
   }
 
+  if (hasStepFilter) {
+    const attemptRows = await db.query(
+      `
+        SELECT MAX(step_attempt) AS step_attempt
+        FROM run_logs
+        WHERE run_id = $1
+          AND stream = 'activity'
+          AND step_number = $2
+          AND ${isPlanner ? "agent = 'planner'" : "agent <> 'planner'"}
+      `,
+      [runRecord.run_id, stepNumber]
+    );
+    const latestAttempt = Number(attemptRows.rows?.[0]?.step_attempt ?? 0);
+    if (!Number.isFinite(latestAttempt) || latestAttempt <= 0) {
+      return "";
+    }
+    params.push(latestAttempt);
+    where.push(`step_attempt = $${params.length}`);
+  }
+
   const chunks = await db.query(
     `
       SELECT chunk
       FROM run_logs
       WHERE ${where.join(" AND ")}
-      ORDER BY step_number ASC, step_attempt ASC, sequence ASC
+      ORDER BY ${hasStepFilter ? "sequence ASC" : "step_number ASC, step_attempt ASC, sequence ASC"}
       LIMIT 50000
     `,
     params
@@ -1153,21 +1174,23 @@ async function readLogTextFromDb(projectId, runId, kind, lines = 400, stepNumber
   return trimToLineCount(text, lines);
 }
 
-async function readNewEventsFromDbSince(runIdOrNull, cursorIso) {
+async function readNewEventsFromDbSince(runIdOrNull, cursor) {
   const db = await getDatabasePool();
-  if (!db) return { events: [], cursorIso };
-  const where = ["received_at > $1"];
-  const params = [cursorIso];
+  if (!db) return { events: [], cursor };
+  const cursorReceivedAt = toIsoTimestamp(cursor?.receivedAtIso) ?? new Date(0).toISOString();
+  const cursorEventId = String(cursor?.eventId ?? "");
+  const where = ["(received_at > $1 OR (received_at = $1 AND event_id > $2))"];
+  const params = [cursorReceivedAt, cursorEventId];
   if (runIdOrNull) {
     params.push(runIdOrNull);
     where.push(`run_id = $${params.length}`);
   }
   const result = await db.query(
     `
-      SELECT event_type, timestamp, data, received_at
+      SELECT event_type, timestamp, data, received_at, event_id
       FROM events
       WHERE ${where.join(" AND ")}
-      ORDER BY received_at ASC, timestamp ASC, event_type ASC
+      ORDER BY received_at ASC, event_id ASC
       LIMIT 500
     `,
     params
@@ -1175,10 +1198,13 @@ async function readNewEventsFromDbSince(runIdOrNull, cursorIso) {
   const events = result.rows
     .map((row) => normalizeMonitorEvent(row))
     .filter(Boolean);
-  const lastReceived = result.rows.at(-1)?.received_at;
+  const lastRow = result.rows.at(-1);
   return {
     events,
-    cursorIso: toIsoTimestamp(lastReceived) ?? cursorIso,
+    cursor: {
+      receivedAtIso: toIsoTimestamp(lastRow?.received_at) ?? cursorReceivedAt,
+      eventId: String(lastRow?.event_id ?? cursorEventId),
+    },
   };
 }
 
@@ -1829,13 +1855,13 @@ async function startDatabaseSSEFeed(project, run, res) {
 
   if (!redisAttached) {
     let polling = false;
-    let cursorIso = new Date().toISOString();
+    let cursor = { receivedAtIso: new Date().toISOString(), eventId: "" };
     const pollHandle = setInterval(async () => {
       if (polling) return;
       polling = true;
       try {
-        const { events, cursorIso: nextCursor } = await readNewEventsFromDbSince(targetRunId, cursorIso);
-        cursorIso = nextCursor;
+        const { events, cursor: nextCursor } = await readNewEventsFromDbSince(targetRunId, cursor);
+        cursor = nextCursor;
         for (const event of events) {
           sseWrite(res, "event", event);
         }

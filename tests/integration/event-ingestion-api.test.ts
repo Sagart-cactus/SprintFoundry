@@ -85,6 +85,7 @@ interface RunRow {
   run_id: string;
   status: string;
   current_step: number;
+  plan_classification: string | null;
   workspace_path: string | null;
   branch: string | null;
 }
@@ -141,6 +142,7 @@ class InMemoryDatabase {
       const runId = String(params[0]);
       const status = String(params[5]);
       const currentStep = Number(params[6]);
+      const planClassification = params[8] === null || params[8] === undefined ? null : String(params[8]);
       const workspacePath = params[9] === null || params[9] === undefined ? null : String(params[9]);
       const branch = params[10] === null || params[10] === undefined ? null : String(params[10]);
       const existed = this.runs.has(runId);
@@ -148,6 +150,7 @@ class InMemoryDatabase {
         run_id: runId,
         status,
         current_step: currentStep,
+        plan_classification: planClassification,
         workspace_path: workspacePath,
         branch,
       });
@@ -390,12 +393,14 @@ describe("event-ingestion-api integration", () => {
       path: "/runs",
       headers: authHeader(),
       body: runPayload({
+        plan_classification: null,
         workspace_path: null,
         branch: null,
       }),
     });
 
     expect(response.status).toBe(200);
+    expect(db.runs.get("run-1")?.plan_classification).toBeNull();
     expect(db.runs.get("run-1")?.workspace_path).toBeNull();
     expect(db.runs.get("run-1")?.branch).toBeNull();
   });

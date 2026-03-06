@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS runs (
   status TEXT NOT NULL,
   current_step INTEGER NOT NULL DEFAULT 0,
   total_steps INTEGER NOT NULL DEFAULT 0,
-  plan_classification TEXT NOT NULL,
+  plan_classification TEXT,
   workspace_path TEXT,
   branch TEXT,
   pr_url TEXT,

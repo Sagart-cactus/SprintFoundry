@@ -347,6 +347,29 @@ describe("CodexRuntime local_sdk mode", () => {
     expect(payload.chunk).toContain("\"type\":\"agent_command_run\"");
   });
 
+  it("still posts sink log chunks when onActivity callback throws", async () => {
+    const postLog = vi.fn().mockResolvedValue(undefined);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const runtime = new CodexRuntime();
+    const activityDispatcher = (runtime as any).createActivityDispatcher(
+      makeContext(tmpDir, {
+        onActivity: async () => {
+          throw new Error("callback failed");
+        },
+        sinkClient: { postLog },
+      })
+    );
+    await activityDispatcher.emit({
+      type: "agent_command_run",
+      data: { command: "npm run test" },
+    });
+    await activityDispatcher.flushFinal();
+
+    expect(postLog).toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Activity callback failed"));
+    warnSpy.mockRestore();
+  });
+
   it("blocks command executions that violate guardrails", async () => {
     mockRunStreamedFn.mockResolvedValueOnce(
       buildStreamedTurn({

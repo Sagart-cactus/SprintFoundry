@@ -1076,7 +1076,15 @@ export class CodexRuntime implements AgentRuntime {
     return {
       emit: async (event: RuntimeActivityEvent) => {
         if (callback) {
-          await callback(event);
+          try {
+            await callback(event);
+          } catch (error) {
+            console.warn(
+              `[codex-runtime] Activity callback failed for ${event.type}: ${
+                error instanceof Error ? error.message : String(error)
+              }`
+            );
+          }
         }
         if (!sinkClient) return;
         const line = `${JSON.stringify({
