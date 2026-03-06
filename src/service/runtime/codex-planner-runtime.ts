@@ -1,5 +1,6 @@
 import * as fs from "fs/promises";
 import * as path from "path";
+import * as os from "os";
 import type {
   AgentDefinition,
   AgentResult,
@@ -52,6 +53,11 @@ Set "model" for each step to the agent model that should run that step.`;
 
     const runtime = this.resolvePlannerRuntime();
     const apiKey = this.resolveOpenAiKey(runtime.mode);
+
+    // Seed Codex auth state for local_process runs when only an API key is available.
+    if (apiKey) {
+      await writeCodexConfigToml(apiKey);
+    }
     const runtimeArgs = runtime.args ?? [];
     const hasSandboxFlag = runtimeArgs.includes("--sandbox") || runtimeArgs.includes("-s");
     const hasBypassFlag = runtimeArgs.includes("--dangerously-bypass-approvals-and-sandbox");
@@ -63,9 +69,14 @@ Set "model" for each step to the agent model that should run that step.`;
     const hasReasoningEffortArg = runtimeArgs.some(
       (arg) => arg.includes("model_reasoning_effort")
     );
+    const hasModelArg = runtimeArgs.some((arg) => arg.includes("model="));
     await runProcess(runtime.command ?? "codex", [
       ...runtimeArgs,
       "exec",
+      "--skip-git-repo-check",
+      ...(runtime.model && !hasModelArg
+        ? ["--config", `model="${runtime.model}"`]
+        : []),
       ...(reasoningEffort && !hasReasoningEffortArg
         ? ["--config", `model_reasoning_effort=\"${reasoningEffort}\"`]
         : []),
@@ -92,6 +103,12 @@ Set "model" for each step to the agent model that should run that step.`;
     const planRaw = await fs.readFile(outputPath, "utf-8");
     const cleaned = planRaw.replace(/```json\n?|```/g, "").trim();
     const parsed = JSON.parse(cleaned);
+    if (!parsed || typeof parsed !== "object" || !Array.isArray((parsed as { steps?: unknown }).steps)) {
+      const hint = cleaned.slice(0, 500).replace(/\s+/g, " ");
+      throw new Error(
+        `Planner returned invalid JSON schema (missing steps array). Raw output starts with: ${hint}`
+      );
+    }
     const steps = (parsed.steps as PlanStep[]).map((step) => ({
       ...step,
       model: this.resolveModelForAgent(step.agent),
@@ -177,4 +194,37 @@ Set "model" for each step to the agent model that should run that step.`;
     if (!effort) return undefined;
     return /codex/i.test(model) ? effort : undefined;
   }
+}
+
+type CodexAuthState = {
+  OPENAI_API_KEY?: string | null;
+  [key: string]: unknown;
+};
+
+/**
+ * Seed Codex CLI auth state before spawning a local process.
+ * Keep both files for compatibility:
+ * - ~/.codex/config.toml (legacy key path)
+ * - ~/.codex/auth.json with OPENAI_API_KEY (current CLI key path)
+ */
+export async function writeCodexConfigToml(apiKey: string): Promise<void> {
+  const configDir = path.join(os.homedir(), ".codex");
+  const configPath = path.join(configDir, "config.toml");
+  const authPath = path.join(configDir, "auth.json");
+  await fs.mkdir(configDir, { recursive: true });
+  const content = `[openai]\napi_key = "${apiKey}"\n`;
+  await fs.writeFile(configPath, content, { encoding: "utf-8", mode: 0o600 });
+
+  const existingAuth = await fs
+    .readFile(authPath, "utf-8")
+    .then((raw) => JSON.parse(raw) as CodexAuthState)
+    .catch(() => ({} as CodexAuthState));
+  const nextAuth: CodexAuthState = {
+    ...existingAuth,
+    OPENAI_API_KEY: apiKey,
+  };
+  await fs.writeFile(authPath, `${JSON.stringify(nextAuth, null, 2)}\n`, {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
 }

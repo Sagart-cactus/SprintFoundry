@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
@@ -344,6 +344,57 @@ describe("dispatch-controller", () => {
     expect(executed[0]?.ticket_id).toBe("42");
     expect(await redis.lLen(queueKey("acme"))).toBe(0);
 
+    await runtime.close();
+  });
+
+  it("loads project configs from symlinked files (k8s ConfigMap layout)", async () => {
+    const configDir = mkdtempSync(path.join(os.tmpdir(), "sf-dispatch-config-symlink-"));
+    tempDirs.push(configDir);
+    const dataDir = path.join(configDir, "..data");
+    mkdirSync(dataDir);
+
+    const target = path.join(dataDir, "project-live-gaps-worktree.yaml");
+    writeFileSync(
+      target,
+      [
+        "project_id: live-gaps-worktree",
+        "name: Live Gaps Worktree",
+        "repo:",
+        "  url: https://github.com/Sagart-cactus/sprintfoundry-dryrun.git",
+        "  default_branch: main",
+        "integrations:",
+        "  ticket_source:",
+        "    type: prompt",
+        "    config: {}",
+        "rules: []",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    symlinkSync(target, path.join(configDir, "project-live-gaps-worktree.yaml"));
+
+    const redis = new FakeRedisClient();
+    const app = new FakeExpressApp();
+    const runtime = await registerDispatchRoutes(app, {
+      configDir,
+      redisClient: redis,
+      autoStartConsumer: false,
+      idGenerator: () => "symlink01",
+      now: () => 1_750_000_000_000,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      path: "/api/dispatch/run",
+      body: {
+        project_id: "live-gaps-worktree",
+        source: "prompt",
+        prompt: "smoke",
+      },
+    });
+
+    expect(response.status).toBe(202);
+    expect(await redis.lLen(queueKey("live-gaps-worktree"))).toBe(1);
     await runtime.close();
   });
 

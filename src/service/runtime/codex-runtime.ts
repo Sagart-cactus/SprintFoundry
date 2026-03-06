@@ -6,6 +6,7 @@ import type {
 } from "./types.js";
 import { runProcess } from "./process-utils.js";
 import { evaluateGuardrail, type GuardrailToolCall } from "./agent-hooks.js";
+import { writeCodexConfigToml } from "./codex-planner-runtime.js";
 import { Codex } from "@openai/codex-sdk";
 import * as path from "path";
 import * as fs from "fs/promises";
@@ -84,8 +85,13 @@ export class CodexRuntime implements AgentRuntime {
     const hasReasoningEffortArg = runtimeArgs.some(
       (arg) => arg.includes("model_reasoning_effort")
     );
+    const hasModelArg = runtimeArgs.some((arg) => arg.includes("model="));
     const args = [
       "exec",
+      "--skip-git-repo-check",
+      ...(config.runtime.model && !hasModelArg
+        ? ["--config", `model="${config.runtime.model}"`]
+        : []),
       ...(reasoningEffort && !hasReasoningEffortArg
         ? ["--config", `model_reasoning_effort=\"${reasoningEffort}\"`]
         : []),
@@ -94,6 +100,12 @@ export class CodexRuntime implements AgentRuntime {
       ...(hasSandboxFlag || hasBypassFlag ? [] : ["--sandbox", "workspace-write"]),
     ];
     const env = this.buildRuntimeEnv(config);
+
+    // Codex v0.110+ reads credentials from ~/.codex/config.toml, not OPENAI_API_KEY env var.
+    if (config.apiKey) {
+      await writeCodexConfigToml(config.apiKey);
+    }
+
     const codexHomeFallbackEnabled =
       process.env[CODEX_HOME_FALLBACK_ENV_FLAG] === "1" ||
       config.runtime.env?.[CODEX_HOME_FALLBACK_ENV_FLAG] === "1";
@@ -172,6 +184,7 @@ export class CodexRuntime implements AgentRuntime {
     const resumeArgs = config.resumeSessionId
       ? [
         "exec",
+        "--skip-git-repo-check",
         "resume",
         config.resumeSessionId,
         ...(reasoningEffort && !hasReasoningEffortArg

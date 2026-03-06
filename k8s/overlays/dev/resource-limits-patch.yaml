@@ -7,6 +7,7 @@ spec:
     spec:
       containers:
         - name: dispatch-controller
+          imagePullPolicy: Never
           resources:
             requests:
               cpu: 100m
@@ -24,6 +25,7 @@ spec:
     spec:
       containers:
         - name: monitor
+          imagePullPolicy: Never
           resources:
             requests:
               cpu: 100m
@@ -41,6 +43,7 @@ spec:
     spec:
       containers:
         - name: event-api
+          imagePullPolicy: Never
           resources:
             requests:
               cpu: 100m
