@@ -1086,7 +1086,9 @@ export class OrchestrationService {
       console.log(`[step ${step.step_number}] Spawning agent ${step.agent} (runtime: ${runtime.provider}/${runtime.mode})...`);
 
       // Spawn the agent container and run
+      let runtimeActivityCount = 0;
       const result = await this.agentRunner.run({
+        runId: run.run_id,
         stepNumber: step.step_number,
         stepAttempt: currentRework + 1,
         agent: step.agent,
@@ -1104,6 +1106,7 @@ export class OrchestrationService {
         resumeSessionId,
         resumeReason,
         onRuntimeActivity: async (activity: RuntimeActivityEvent) => {
+          runtimeActivityCount += 1;
           await this.emitEvent(run.run_id, activity.type, {
             step: step.step_number,
             agent: step.agent,
@@ -1143,6 +1146,16 @@ export class OrchestrationService {
       stepExec.container_id = result.container_id;
       stepExec.result = result.agentResult;
       stepExec.completed_at = new Date();
+      if (runtimeActivityCount === 0) {
+        await this.postFallbackActivityLog(
+          run.run_id,
+          workspacePath,
+          step.step_number,
+          currentRework + 1,
+          step.agent,
+          runtime.provider
+        );
+      }
       finalResumeTelemetry = {
         resume_used: result.resume_used ?? initialResumeTelemetry.resume_used,
         resume_failed: result.resume_failed ?? initialResumeTelemetry.resume_failed,
@@ -1210,6 +1223,7 @@ export class OrchestrationService {
         }
 
         stepExec.status = "completed";
+        await this.upsertStepResultToSink(run.run_id, stepExec, currentRework + 1);
         await this.emitEvent(run.run_id, "step.completed", {
           step: step.step_number,
           tokens: result.tokens_used,
@@ -1276,6 +1290,7 @@ export class OrchestrationService {
 
       if (result.agentResult.status === "needs_rework") {
         stepExec.status = "needs_rework";
+        await this.upsertStepResultToSink(run.run_id, stepExec, currentRework + 1);
 
         // Defer rework handling to parallel group coordinator
         if (parallelReworkSignals) {
@@ -2245,6 +2260,125 @@ export class OrchestrationService {
     };
     await fs.rm(pendingPath, { force: true });
     return timedOut;
+  }
+
+  private async upsertStepResultToSink(
+    runId: string,
+    step: StepExecution,
+    stepAttempt: number
+  ): Promise<void> {
+    if (!this.eventSinkClient) return;
+    if (!(step.started_at instanceof Date) || !(step.completed_at instanceof Date)) return;
+
+    const fallbackResult: Record<string, unknown> = {
+      status: step.status,
+      summary: "",
+      artifacts_created: [],
+      artifacts_modified: [],
+      issues: [],
+    };
+    const resultPayload =
+      step.result && typeof step.result === "object"
+        ? (step.result as unknown as Record<string, unknown>)
+        : fallbackResult;
+
+    try {
+      await this.eventSinkClient.upsertStepResult({
+        run_id: runId,
+        step_number: step.step_number,
+        step_attempt: stepAttempt,
+        agent: step.agent,
+        status: step.status,
+        started_at: step.started_at.toISOString(),
+        completed_at: step.completed_at.toISOString(),
+        result: resultPayload,
+      });
+    } catch (error) {
+      console.warn(
+        `[event-sink] Failed to upsert step result run=${runId} step=${step.step_number} attempt=${stepAttempt}: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+  }
+
+  private async postFallbackActivityLog(
+    runId: string,
+    workspacePath: string,
+    stepNumber: number,
+    stepAttempt: number,
+    agent: AgentType,
+    runtimeProvider: RuntimeConfig["provider"]
+  ): Promise<void> {
+    if (!this.eventSinkClient) return;
+
+    const stdoutPath = path.join(
+      workspacePath,
+      `.${runtimeProvider}-runtime.step-${stepNumber}.attempt-${stepAttempt}.stdout.log`
+    );
+    const raw = await fs.readFile(stdoutPath, "utf-8").catch(() => "");
+    if (!raw.trim()) return;
+
+    const chunks = this.chunkUtf8(raw, 4 * 1024);
+    if (chunks.length === 0) return;
+
+    for (let i = 0; i < chunks.length; i += 1) {
+      const chunk = chunks[i];
+      try {
+        await this.eventSinkClient.postLog({
+          run_id: runId,
+          step_number: stepNumber,
+          step_attempt: stepAttempt,
+          agent,
+          runtime_provider: runtimeProvider,
+          sequence: i,
+          chunk,
+          byte_length: Buffer.byteLength(chunk, "utf-8"),
+          stream: "activity",
+          is_final: i === chunks.length - 1,
+          timestamp: new Date().toISOString(),
+        });
+      } catch (error) {
+        console.warn(
+          `[event-sink] Failed fallback activity log run=${runId} step=${stepNumber} attempt=${stepAttempt}: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+        break;
+      }
+    }
+  }
+
+  private chunkUtf8(text: string, maxBytes: number): string[] {
+    if (!text) return [];
+
+    const chunks: string[] = [];
+    let start = 0;
+    let currentBytes = 0;
+    let index = 0;
+
+    while (index < text.length) {
+      const codePoint = text.codePointAt(index);
+      if (codePoint === undefined) break;
+      const char = String.fromCodePoint(codePoint);
+      const charBytes = Buffer.byteLength(char, "utf-8");
+
+      if (currentBytes + charBytes > maxBytes && index > start) {
+        chunks.push(text.slice(start, index));
+        start = index;
+        currentBytes = 0;
+        continue;
+      }
+
+      currentBytes += charBytes;
+      index += char.length;
+    }
+
+    if (start < text.length) {
+      chunks.push(text.slice(start));
+    }
+
+    return chunks;
   }
 
   private async emitEvent(runId: string, type: EventType, data: Record<string, unknown>) {

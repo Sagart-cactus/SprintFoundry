@@ -15,6 +15,8 @@ export async function runProcess(
     timeoutMs: number;
     parseTokensFromStdout?: boolean;
     outputFiles?: ProcessOutputFiles;
+    onStdoutData?: (chunk: string) => void;
+    onStderrData?: (chunk: string) => void;
   }
 ): Promise<{ tokensUsed: number; runtimeId: string; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
@@ -79,10 +81,26 @@ export async function runProcess(
     };
 
     proc.stdout?.on("data", (data) => {
-      stdout += data.toString();
+      const chunk = data.toString();
+      stdout += chunk;
+      if (options.onStdoutData) {
+        try {
+          options.onStdoutData(chunk);
+        } catch {
+          // Streaming taps must never crash the process runner.
+        }
+      }
     });
     proc.stderr?.on("data", (data) => {
-      stderr += data.toString();
+      const chunk = data.toString();
+      stderr += chunk;
+      if (options.onStderrData) {
+        try {
+          options.onStderrData(chunk);
+        } catch {
+          // Streaming taps must never crash the process runner.
+        }
+      }
     });
 
     const timeout = setTimeout(() => {

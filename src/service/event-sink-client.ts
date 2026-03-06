@@ -8,8 +8,10 @@ const EVENT_SINK_TIMEOUT_MS = 2_000;
 const EVENT_SINK_RETRY_COUNT = 1;
 const RUN_UPSERT_PATH = "/v1/runs/upsert";
 const LOG_CHUNK_PATH = "/v1/logs/chunk";
+const STEP_RESULT_PATH = "/step-results";
 
 export interface RuntimeLogChunk {
+  run_id: string;
   step_number: number;
   step_attempt: number;
   agent: string;
@@ -20,6 +22,17 @@ export interface RuntimeLogChunk {
   stream: "activity";
   is_final: boolean;
   timestamp: string;
+}
+
+export interface StepResultUpsertPayload {
+  run_id: string;
+  step_number: number;
+  step_attempt: number;
+  agent: string;
+  status: string;
+  started_at: string;
+  completed_at: string;
+  result: Record<string, unknown>;
 }
 
 type FetchFn = typeof fetch;
@@ -65,6 +78,15 @@ export class EventSinkClient {
     }
   }
 
+  async upsertStepResult(payload: StepResultUpsertPayload): Promise<void> {
+    if (!this.url) return;
+
+    const delivered = await this.postWithRetry(this.resolveStepResultUrl(), payload);
+    if (!delivered) {
+      throw new Error("Failed to upsert step result to sink");
+    }
+  }
+
   private async postWithRetry(url: string, body: unknown): Promise<boolean> {
     for (let attempt = 0; attempt <= EVENT_SINK_RETRY_COUNT; attempt += 1) {
       const delivered = await this.postOnce(url, body);
@@ -106,6 +128,10 @@ export class EventSinkClient {
 
   private resolveLogChunkUrl(): string {
     return this.resolveDerivedUrl(LOG_CHUNK_PATH);
+  }
+
+  private resolveStepResultUrl(): string {
+    return this.resolveDerivedUrl(STEP_RESULT_PATH);
   }
 
   private resolveDerivedUrl(targetPath: string): string {

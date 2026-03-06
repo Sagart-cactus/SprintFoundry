@@ -120,6 +120,33 @@ function parseJsonLines(raw) {
     .filter((item) => item && typeof item === "object");
 }
 
+function parseAgentItems(raw) {
+  const text = String(raw || "");
+  const lines = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (!lines.length) return [];
+
+  const items = [];
+  let buffer = "";
+  for (const line of lines) {
+    const candidate = buffer ? `${buffer}\n${line}` : line;
+    const parsed = parseJsonSafe(candidate);
+    if (parsed && typeof parsed === "object") {
+      items.push(parsed);
+      buffer = "";
+      continue;
+    }
+    buffer = candidate;
+  }
+  if (buffer) {
+    const parsed = parseJsonSafe(buffer);
+    if (parsed && typeof parsed === "object") items.push(parsed);
+  }
+  return items;
+}
+
 function pickString(obj, keys) {
   for (const key of keys) {
     const value = obj?.[key];
@@ -466,14 +493,8 @@ function classifyAgentItem(item) {
 }
 
 function renderAgentOut(raw, stepNumber) {
-  const lines = String(raw || "")
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-  if (!lines.length) return '<div class="empty">No output</div>';
-
-  const parsed = lines.map((line) => parseJsonSafe(line)).filter((item) => item && typeof item === "object");
-  const candidates = parsed.length ? parsed : [];
+  const candidates = parseAgentItems(raw);
+  if (!candidates.length) return '<div class="empty">No output</div>';
   const filtered = candidates.filter((item) => (typeof stepNumber === "number" ? getStepNumber(item) === stepNumber : true));
   const target = filtered.length ? filtered : candidates;
 
@@ -515,25 +536,56 @@ function renderAgentOut(raw, stepNumber) {
     .join("");
 }
 
-function groupErrByStep(raw) {
-  const lines = String(raw || "")
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const map = new Map();
+function isErrorLike(item, fallbackText = "") {
+  const topError = pickString(item, ["error", "reason"]);
+  const dataError = pickString(item?.data, ["error", "reason"]);
+  if (topError || dataError) return true;
 
-  for (const line of lines) {
-    const parsed = parseJsonSafe(line);
+  const topType = pickString(item, ["type", "event_type"]).toLowerCase();
+  if (topType && /(error|failed|exception|denied|blocked)/i.test(topType)) return true;
+
+  const nested = item?.item ?? {};
+  const nestedType = pickString(nested, ["type"]).toLowerCase();
+  if (nestedType && /(error|failed|exception|denied|blocked)/i.test(nestedType)) return true;
+
+  const nestedExit = nested?.exit_code;
+  const nestedStatus = String(nested?.status || "").toLowerCase();
+  const nestedCommand = pickString(nested, ["command", "cmd"]).toLowerCase();
+  const nestedOutput = String(nested?.aggregated_output || "").trim();
+  // ripgrep/grep "no matches" commonly returns 1; treat as non-error noise.
+  if (
+    nestedType === "command_execution" &&
+    nestedStatus === "failed" &&
+    nestedExit === 1 &&
+    !nestedOutput &&
+    (/\brg\b/.test(nestedCommand) || /\bgrep\b/.test(nestedCommand))
+  ) {
+    return false;
+  }
+  if (typeof nestedExit === "number" && nestedExit !== 0) return true;
+  if (nestedStatus === "failed") return true;
+  const topExit = item?.exit_code;
+  if (typeof topExit === "number" && topExit !== 0) return true;
+  if (String(item?.status || "").toLowerCase() === "failed") return true;
+
+  return false;
+}
+
+function groupErrByStep(raw) {
+  const map = new Map();
+  const items = parseAgentItems(raw);
+  if (!items.length) return map;
+
+  for (const parsed of items) {
     let step = null;
-    let text = line;
-    if (parsed) {
-      step = getStepNumber(parsed);
-      text =
-        pickString(parsed, ["error", "message", "reason"]) ||
-        pickString(parsed?.data, ["error", "message", "reason"]) ||
-        textFromContent(parsed?.content) ||
-        line;
-    }
+    step = getStepNumber(parsed);
+    const text =
+      pickString(parsed, ["error", "message", "reason"]) ||
+      pickString(parsed?.data, ["error", "message", "reason"]) ||
+      textFromContent(parsed?.content) ||
+      textFromContent(parsed?.item?.content) ||
+      JSON.stringify(parsed);
+    if (!isErrorLike(parsed, text)) continue;
     const key = typeof step === "number" ? `step ${step}` : "unscoped";
     if (!map.has(key)) map.set(key, []);
     map.get(key).push(text);
@@ -606,11 +658,7 @@ function errorCountForStep(raw, stepNumber) {
 }
 
 function agentOutCountForStep(raw, stepNumber) {
-  const lines = String(raw || "")
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const parsed = lines.map((line) => parseJsonSafe(line)).filter((item) => item && typeof item === "object");
+  const parsed = parseAgentItems(raw);
   if (typeof stepNumber !== "number") return parsed.length;
   return parsed.filter((item) => getStepNumber(item) === stepNumber).length;
 }
