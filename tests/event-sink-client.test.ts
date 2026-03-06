@@ -120,6 +120,18 @@ describe("EventSinkClient", () => {
     );
   });
 
+  it("preserves URL base path prefix when resolving /v1/runs/upsert", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 200 }));
+    const client = new EventSinkClient("https://sink.example/prefix/events", fetchMock);
+
+    await client.upsertRun(baseRun);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://sink.example/prefix/v1/runs/upsert",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
   it("upsertRun is a no-op when event sink URL is unset", async () => {
     const fetchMock = vi.fn<typeof fetch>();
     const client = new EventSinkClient(undefined, fetchMock);
@@ -143,6 +155,18 @@ describe("EventSinkClient", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(baseChunk),
       }),
+    );
+  });
+
+  it("preserves URL base path prefix when resolving /v1/logs/chunk", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 200 }));
+    const client = new EventSinkClient("https://sink.example/prefix/events", fetchMock);
+
+    await client.postLog(baseChunk);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://sink.example/prefix/v1/logs/chunk",
+      expect.objectContaining({ method: "POST" }),
     );
   });
 

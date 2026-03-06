@@ -152,8 +152,16 @@ export class SessionManager {
 
   private async save(session: RunSessionMetadata): Promise<void> {
     const filePath = this.getSessionPath(session.run_id);
-    await fs.writeFile(filePath, JSON.stringify(session, null, 2), "utf-8");
+    let writeError: unknown = null;
+    try {
+      await fs.writeFile(filePath, JSON.stringify(session, null, 2), "utf-8");
+    } catch (error) {
+      writeError = error;
+    }
     await this.upsertToSink(session);
+    if (writeError) {
+      throw writeError;
+    }
   }
 
   private async update(session: RunSessionMetadata): Promise<void> {

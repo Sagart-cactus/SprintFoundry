@@ -54,15 +54,23 @@ function installMockDbModules() {
   writeFileSync(
     path.join(pgModuleDir, "index.js"),
     `import { readFileSync, appendFileSync } from "node:fs";
-const fixturePath = process.env.SF_MOCK_DB_FIXTURE_PATH;
-const queryLogPath = process.env.SF_MOCK_DB_QUERY_LOG_PATH;
+
+function getFixturePath() {
+  return process.env.SF_MOCK_DB_FIXTURE_PATH;
+}
+
+function getQueryLogPath() {
+  return process.env.SF_MOCK_DB_QUERY_LOG_PATH;
+}
 
 function loadFixture() {
+  const fixturePath = getFixturePath();
   if (!fixturePath) return { runs: [], events: [], step_results: [], run_logs: [] };
   return JSON.parse(readFileSync(fixturePath, "utf-8"));
 }
 
 function logQuery(sql, params) {
+  const queryLogPath = getQueryLogPath();
   if (!queryLogPath) return;
   appendFileSync(queryLogPath, JSON.stringify({ sql: String(sql), params }) + "\\n", "utf-8");
 }
@@ -101,14 +109,20 @@ export class Pool {
       return { rows: fixture.runs.slice() };
     }
 
-    if (norm.includes("from events") && norm.includes("where received_at > $1")) {
+    if (norm.includes("from events") && norm.includes("received_at > $1")) {
       const cursor = String(params[0] ?? "");
-      const runId = params[1] != null ? String(params[1]) : null;
+      const cursorEventId = String(params[1] ?? "");
+      const runId = params.length > 2 && params[2] != null ? String(params[2]) : null;
       const rows = fixture.events
         .filter((e) => !runId || e.run_id === runId)
-        .filter((e) => String(e.received_at ?? "") > cursor)
+        .filter((e) => {
+          const receivedAt = String(e.received_at ?? "");
+          const eventId = String(e.event_id ?? "");
+          return receivedAt > cursor || (receivedAt === cursor && eventId > cursorEventId);
+        })
         .sort(cmpEventsAsc)
-        .map((e) => ({ event_type: e.event_type, timestamp: e.timestamp, data: e.data, received_at: e.received_at }));
+        .map((e) => ({ event_type: e.event_type, timestamp: e.timestamp, data: e.data, received_at: e.received_at, event_id: e.event_id }))
+        .slice(0, 500);
       return { rows };
     }
 
@@ -159,11 +173,31 @@ export class Pool {
       const runId = String(params[0] ?? "");
       const plannerOnly = norm.includes("agent = 'planner'");
       const nonPlannerOnly = norm.includes("agent <> 'planner'");
+      if (norm.includes("select max(step_attempt) as step_attempt")) {
+        const stepNumber = Number(params[1] ?? 0);
+        const attempts = fixture.run_logs
+          .filter((r) => r.run_id === runId)
+          .filter((r) => String(r.stream) === "activity")
+          .filter((r) => Number(r.step_number) === stepNumber)
+          .filter((r) => !plannerOnly || String(r.agent) === "planner")
+          .filter((r) => !nonPlannerOnly || String(r.agent) !== "planner")
+          .map((r) => Number(r.step_attempt ?? 0));
+        const maxAttempt = attempts.length > 0 ? Math.max(...attempts) : null;
+        return { rows: [{ step_attempt: maxAttempt }] };
+      }
       let stepNumber = null;
       const stepMatch = norm.match(/step_number = \$(\d+)/);
       if (stepMatch) {
         const idx = Number(stepMatch[1]) - 1;
         stepNumber = Number(params[idx]);
+      }
+      let stepAttempt = null;
+      const stepAttemptMatch = norm.match(/step_attempt = \$(\d+)/);
+      if (stepAttemptMatch) {
+        const idx = Number(stepAttemptMatch[1]) - 1;
+        stepAttempt = Number(params[idx]);
+      } else if (stepNumber != null && params.length >= 3) {
+        stepAttempt = Number(params[params.length - 1]);
       }
 
       const rows = fixture.run_logs
@@ -172,6 +206,7 @@ export class Pool {
         .filter((r) => !plannerOnly || String(r.agent) === "planner")
         .filter((r) => !nonPlannerOnly || String(r.agent) !== "planner")
         .filter((r) => stepNumber == null || Number(r.step_number) === stepNumber)
+        .filter((r) => stepAttempt == null || Number(r.step_attempt ?? 0) === stepAttempt)
         .sort((a, b) => {
           const stepCmp = Number(a.step_number) - Number(b.step_number);
           if (stepCmp !== 0) return stepCmp;
@@ -409,7 +444,16 @@ describe("monitor runtime modes", () => {
               sequence: 1,
               stream: "activity",
               agent: "developer",
-              chunk: "agent-db-log\\n",
+              chunk: "agent-db-log-attempt-1\\n",
+            },
+            {
+              run_id: "run-db-001",
+              step_number: 1,
+              step_attempt: 2,
+              sequence: 1,
+              stream: "activity",
+              agent: "developer",
+              chunk: "agent-db-log-attempt-2\\n",
             },
           ],
         },
@@ -471,6 +515,10 @@ describe("monitor runtime modes", () => {
     expect(plannerLogRes.res.statusCode).toBe(200);
     expect(plannerLogRes.res.body).toContain("planner-db-log");
 
+    const latestAttemptLogRes = await request(handler, "/api/log?project=db-project&run=run-db-001&kind=agent_stdout&step=1&lines=50");
+    expect(latestAttemptLogRes.res.statusCode).toBe(200);
+    expect(latestAttemptLogRes.res.body).toContain("agent-db-log-attempt-2");
+
     const agentResultRes = await request(handler, "/api/log?project=db-project&run=run-db-001&kind=agent_result&step=1");
     expect(agentResultRes.res.statusCode).toBe(200);
     expect(agentResultRes.res.body).toContain("DB-backed step summary");
@@ -497,6 +545,80 @@ describe("monitor runtime modes", () => {
     expect(queryLog).toContain("FROM run_logs");
     expect(queryLog).not.toContain("received_at > $1");
   }, 15_000);
+
+  it("uses a stable DB polling cursor in SSE fallback when redis is unavailable", async () => {
+    const pollingQueryLogPath = path.join(tempRoot, "pg-queries-polling.jsonl");
+    writeFileSync(pollingQueryLogPath, "", "utf-8");
+
+    const sharedReceivedAt = "2099-03-04T00:10:00.000Z";
+    const pollingFixturePath = path.join(tempRoot, "db-polling-fixture.json");
+    const pollingEvents = Array.from({ length: 501 }).map((_, index) => ({
+      event_id: String(index + 1).padStart(4, "0"),
+      run_id: "run-db-001",
+      event_type: index === 500 ? "step.completed" : "step.started",
+      timestamp: `2099-03-04T00:10:${String(Math.min(index, 59)).padStart(2, "0")}.000Z`,
+      received_at: sharedReceivedAt,
+      data: { idx: index + 1 },
+    }));
+
+    writeFileSync(
+      pollingFixturePath,
+      JSON.stringify(
+        {
+          runs: [
+            {
+              run_id: "run-db-001",
+              project_id: "db-project",
+              ticket_id: "DB-1",
+              ticket_source: "jira",
+              ticket_title: "Database mode run",
+              status: "running",
+              current_step: 1,
+              total_steps: 1,
+              plan_classification: "medium",
+              workspace_path: "/tmp/db-run",
+              branch: "feat/db",
+              pr_url: null,
+              total_tokens: 42,
+              total_cost_usd: 0.05,
+              created_at: "2026-03-04T00:00:00.000Z",
+              updated_at: "2026-03-04T00:01:00.000Z",
+              completed_at: null,
+              error: null,
+            },
+          ],
+          events: pollingEvents,
+          step_results: [],
+          run_logs: [],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const handler = await loadMonitorHandler({
+      MONITOR_PORT: "0",
+      SPRINTFOUNDRY_RUNS_ROOT: runsRoot,
+      SPRINTFOUNDRY_DATABASE_URL: "postgres://mock-db/sprintfoundry",
+      SPRINTFOUNDRY_REDIS_URL: "",
+      SF_MOCK_DB_FIXTURE_PATH: pollingFixturePath,
+      SF_MOCK_DB_QUERY_LOG_PATH: pollingQueryLogPath,
+    });
+
+    const sseRes = await request(handler, "/api/events/stream?project=db-project&run=run-db-001");
+    expect(sseRes.res.statusCode).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+
+    const sseMessages = parseSse(sseRes.res.body);
+    const connected = sseMessages.find((msg) => msg.event === "connected");
+    expect(connected).toBeDefined();
+
+    sseRes.req.emit("close");
+
+    const queryLog = readFileSync(pollingQueryLogPath, "utf-8");
+    expect(queryLog).toContain("received_at = $1 AND event_id > $2");
+  }, 20_000);
 
   it("keeps filesystem behavior unchanged when DB mode is disabled", async () => {
     truncateSync(queryLogPath, 0);
@@ -525,6 +647,6 @@ describe("monitor runtime modes", () => {
     expect(logRes.res.body).toContain("planner filesystem log");
 
     const queryLog = existsSync(queryLogPath) ? readFileSync(queryLogPath, "utf-8") : "";
-    expect(queryLog.trim()).toBe("");
+    expect(queryLog.includes("FROM runs")).toBe(false);
   }, 15_000);
 });

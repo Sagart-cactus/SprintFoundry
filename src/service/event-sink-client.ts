@@ -101,41 +101,46 @@ export class EventSinkClient {
   }
 
   private resolveRunUpsertUrl(): string {
-    if (!this.url) return RUN_UPSERT_PATH;
-
-    try {
-      const parsed = new URL(this.url);
-      parsed.pathname = RUN_UPSERT_PATH;
-      parsed.search = "";
-      parsed.hash = "";
-      return parsed.toString();
-    } catch {
-      const trimmed = this.url.replace(/\/+$/, "");
-      if (trimmed.endsWith(RUN_UPSERT_PATH)) return trimmed;
-      if (trimmed.endsWith("/events")) {
-        return `${trimmed.slice(0, -"/events".length)}${RUN_UPSERT_PATH}`;
-      }
-      return `${trimmed}${RUN_UPSERT_PATH}`;
-    }
+    return this.resolveDerivedUrl(RUN_UPSERT_PATH);
   }
 
   private resolveLogChunkUrl(): string {
-    if (!this.url) return LOG_CHUNK_PATH;
+    return this.resolveDerivedUrl(LOG_CHUNK_PATH);
+  }
+
+  private resolveDerivedUrl(targetPath: string): string {
+    if (!this.url) return targetPath;
 
     try {
       const parsed = new URL(this.url);
-      parsed.pathname = LOG_CHUNK_PATH;
+      parsed.pathname = this.resolveDerivedPathname(parsed.pathname, targetPath);
       parsed.search = "";
       parsed.hash = "";
       return parsed.toString();
     } catch {
       const trimmed = this.url.replace(/\/+$/, "");
-      if (trimmed.endsWith(LOG_CHUNK_PATH)) return trimmed;
+      if (trimmed.endsWith(targetPath)) return trimmed;
       if (trimmed.endsWith("/events")) {
-        return `${trimmed.slice(0, -"/events".length)}${LOG_CHUNK_PATH}`;
+        return `${trimmed.slice(0, -"/events".length)}${targetPath}`;
       }
-      return `${trimmed}${LOG_CHUNK_PATH}`;
+      return `${trimmed}${targetPath}`;
     }
+  }
+
+  private resolveDerivedPathname(pathname: string, targetPath: string): string {
+    const normalizedPath = pathname.replace(/\/+$/, "");
+
+    if (normalizedPath.endsWith(targetPath)) {
+      return normalizedPath;
+    }
+
+    if (normalizedPath.endsWith("/events")) {
+      const prefix = normalizedPath.slice(0, -"/events".length);
+      return prefix ? `${prefix}${targetPath}` : targetPath;
+    }
+
+    const base = normalizedPath && normalizedPath !== "/" ? normalizedPath : "";
+    return `${base}${targetPath}`;
   }
 }
 

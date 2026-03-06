@@ -126,6 +126,7 @@ describe("EventStore", () => {
 
     const event = makeEvent();
     await store.store(event);
+    await store.close();
 
     expect(sinkClient.postEvent).toHaveBeenCalledTimes(1);
     expect(sinkClient.postEvent).toHaveBeenCalledWith(event);
@@ -155,6 +156,7 @@ describe("EventStore", () => {
 
     const event = makeEvent();
     await expect(store.store(event)).resolves.toBeUndefined();
+    await store.close();
     expect(sinkClient.postEvent).toHaveBeenCalledTimes(1);
     expect(warnSpy).toHaveBeenCalledTimes(1);
 
