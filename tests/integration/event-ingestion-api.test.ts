@@ -85,6 +85,8 @@ interface RunRow {
   run_id: string;
   status: string;
   current_step: number;
+  workspace_path: string | null;
+  branch: string | null;
 }
 
 interface StepRow {
@@ -139,8 +141,16 @@ class InMemoryDatabase {
       const runId = String(params[0]);
       const status = String(params[5]);
       const currentStep = Number(params[6]);
+      const workspacePath = params[9] === null || params[9] === undefined ? null : String(params[9]);
+      const branch = params[10] === null || params[10] === undefined ? null : String(params[10]);
       const existed = this.runs.has(runId);
-      this.runs.set(runId, { run_id: runId, status, current_step: currentStep });
+      this.runs.set(runId, {
+        run_id: runId,
+        status,
+        current_step: currentStep,
+        workspace_path: workspacePath,
+        branch,
+      });
       return { rows: [{ inserted: !existed } as Row], rowCount: 1 };
     }
 
@@ -363,6 +373,31 @@ describe("event-ingestion-api integration", () => {
 
     expect(response.status).toBe(200);
     expect(db.runs.get("run-1")?.status).toBe("executing");
+  });
+
+  it("POST /runs accepts null workspace_path and branch", async () => {
+    const app = new FakeExpressApp();
+    const db = new InMemoryDatabase();
+
+    registerEventIngestionRoutes(app, {
+      internalApiToken: validToken,
+      database: db,
+      redisPublisher: null,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      path: "/runs",
+      headers: authHeader(),
+      body: runPayload({
+        workspace_path: null,
+        branch: null,
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(db.runs.get("run-1")?.workspace_path).toBeNull();
+    expect(db.runs.get("run-1")?.branch).toBeNull();
   });
 
   it("POST /step-results upserts by run_id/step_number/step_attempt", async () => {

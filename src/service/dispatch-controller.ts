@@ -1,5 +1,5 @@
 import http from "node:http";
-import { URL } from "node:url";
+import { URL, fileURLToPath } from "node:url";
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import { execFile } from "node:child_process";
@@ -505,12 +505,21 @@ async function defaultCreateK8sJob(manifest: K8sJobManifest, _task: DispatchQueu
   kc.loadFromDefault();
   const batchApi = kc.makeApiClient(k8sModule.BatchV1Api);
 
-  if (typeof batchApi.createNamespacedJob === "function") {
-    await batchApi.createNamespacedJob(namespace, manifest);
+  // Support both Kubernetes client signatures:
+  // - v1.x: createNamespacedJob({ namespace, body })
+  // - older: createNamespacedJob(namespace, body)
+  try {
+    await batchApi.createNamespacedJob({ namespace, body: manifest });
     return;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const expectsLegacyArgs = /namespace was null or undefined/i.test(message);
+    if (!expectsLegacyArgs) {
+      throw error;
+    }
   }
 
-  await batchApi.createNamespacedJob({ namespace, body: manifest });
+  await batchApi.createNamespacedJob(namespace, manifest);
 }
 
 class DispatchController implements DispatchControllerRuntime {
@@ -536,7 +545,7 @@ class DispatchController implements DispatchControllerRuntime {
   private consumerLoop: Promise<void> | null = null;
 
   constructor(private readonly options: DispatchControllerStartOptions) {
-    const repoRoot = path.resolve(__dirname, "..", "..");
+    const repoRoot = path.resolve(fileURLToPath(import.meta.url), "..", "..", "..");
     const resolvedConfigDir =
       asString(options.configDir) || process.env.SPRINTFOUNDRY_CONFIG_DIR || path.join(repoRoot, "config");
     this.configDir = path.isAbsolute(resolvedConfigDir)
@@ -627,7 +636,9 @@ class DispatchController implements DispatchControllerRuntime {
 
     const entries = await fs.readdir(this.configDir, { withFileTypes: true }).catch(() => []);
     const projectFiles = entries
-      .filter((entry) => entry.isFile())
+      // Kubernetes ConfigMap volumes expose keys as symlinks (..data/<key>).
+      // Accept symlink entries so dispatch can discover mounted project configs.
+      .filter((entry) => entry.isFile() || entry.isSymbolicLink())
       .map((entry) => entry.name)
       .filter((name) => isProjectConfigFileName(name))
       .sort();

@@ -1,0 +1,37 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: codex-auth-debug
+  namespace: live-gaps
+spec:
+  ttlSecondsAfterFinished: 600
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: sprintfoundry-runner
+      containers:
+        - name: debug
+          image: sprintfoundry-runner:latest
+          imagePullPolicy: Never
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -e
+              echo "=== ENV CHECK ==="
+              echo "HOME=$HOME"
+              echo "OPENAI_KEY_LEN=${#SPRINTFOUNDRY_OPENAI_KEY}"
+              echo "=== CONFIG.TOML (written by entrypoint) ==="
+              cat ~/.codex/config.toml 2>/dev/null | wc -c || echo "NOT FOUND"
+              echo "=== NODE os.homedir() ==="
+              node -e "console.log('nodehome:', require('os').homedir())"
+              echo "=== CODEX TEST ==="
+              mkdir -p /tmp/test && cd /tmp/test
+              codex exec --skip-git-repo-check -c model="o4-mini" "Say hello" --output-last-message /tmp/result.txt 2>/tmp/codex.err; echo EXIT:$?
+              echo "=== CODEX STDERR ==="
+              cat /tmp/codex.err
+              echo "=== CODEX RESULT ==="
+              cat /tmp/result.txt 2>/dev/null || echo EMPTY
+          envFrom:
+            - secretRef:
+                name: live-gaps-project-secrets

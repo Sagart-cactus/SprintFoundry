@@ -74,8 +74,8 @@ interface RunPayload {
   current_step: number;
   total_steps: number;
   plan_classification: string;
-  workspace_path: string;
-  branch: string;
+  workspace_path: string | null;
+  branch: string | null;
   pr_url: string | null;
   total_tokens: number;
   total_cost_usd: number;
@@ -341,8 +341,8 @@ function parseRunPayload(body: unknown, limits: IngestionLimits): { value?: RunP
   const current_step = asInteger(body.current_step, 0);
   const total_steps = asInteger(body.total_steps, 0);
   const plan_classification = asString(body.plan_classification);
-  const workspace_path = asString(body.workspace_path);
-  const branch = asString(body.branch);
+  const workspace_path = asNullableString(body.workspace_path);
+  const branch = asNullableString(body.branch);
   const pr_url = asNullableString(body.pr_url);
   const total_tokens = asInteger(body.total_tokens, 0);
   const total_cost_usd = asNumber(body.total_cost_usd, 0);
@@ -363,8 +363,6 @@ function parseRunPayload(body: unknown, limits: IngestionLimits): { value?: RunP
   if (current_step === null) errors.push("current_step must be an integer >= 0");
   if (total_steps === null) errors.push("total_steps must be an integer >= 0");
   if (!plan_classification) errors.push("plan_classification is required");
-  if (!workspace_path) errors.push("workspace_path is required");
-  if (!branch) errors.push("branch is required");
   if (total_tokens === null) errors.push("total_tokens must be an integer >= 0");
   if (total_cost_usd === null) errors.push("total_cost_usd must be a number >= 0");
   if (!created_at) errors.push("created_at must be a valid ISO date-time string");
@@ -395,8 +393,6 @@ function parseRunPayload(body: unknown, limits: IngestionLimits): { value?: RunP
     current_step === null ||
     total_steps === null ||
     !plan_classification ||
-    !workspace_path ||
-    !branch ||
     total_tokens === null ||
     total_cost_usd === null ||
     !created_at ||

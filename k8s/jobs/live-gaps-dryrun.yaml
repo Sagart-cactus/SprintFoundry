@@ -1,0 +1,60 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: live-gaps-dryrun-01
+  namespace: live-gaps
+  labels:
+    app.kubernetes.io/name: sprintfoundry-runner
+    sprintfoundry.io/project: live-gaps-worktree
+spec:
+  ttlSecondsAfterFinished: 3600
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sprintfoundry-runner
+        sprintfoundry.io/project: live-gaps-worktree
+    spec:
+      restartPolicy: Never
+      serviceAccountName: sprintfoundry-runner
+      containers:
+        - name: runner
+          image: sprintfoundry-runner:latest
+          imagePullPolicy: Never
+          args:
+            - run
+            - --source
+            - prompt
+            - --prompt
+            - "Add a /health endpoint that returns {status: ok, timestamp: <ISO date>}"
+            - --config
+            - /config
+            - --project
+            - live-gaps-worktree
+            - --dry-run
+          env:
+            - name: SPRINTFOUNDRY_EVENT_SINK_URL
+              value: http://event-api.sprintfoundry-system.svc.cluster.local:3001
+          envFrom:
+            - secretRef:
+                name: live-gaps-project-secrets
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 2Gi
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: project-config
+              mountPath: /config
+              readOnly: true
+      volumes:
+        - name: workspace
+          emptyDir:
+            sizeLimit: 5Gi
+        - name: project-config
+          configMap:
+            name: live-gaps-project-config

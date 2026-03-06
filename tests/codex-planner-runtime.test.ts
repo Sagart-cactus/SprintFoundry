@@ -9,7 +9,7 @@ vi.mock("../src/service/runtime/process-utils.js", () => ({
 }));
 
 const { runProcess } = await import("../src/service/runtime/process-utils.js");
-const { CodexPlannerRuntime } = await import("../src/service/runtime/codex-planner-runtime.js");
+const { CodexPlannerRuntime, writeCodexConfigToml } = await import("../src/service/runtime/codex-planner-runtime.js");
 
 describe("CodexPlannerRuntime", () => {
   let tmpDir: string;
@@ -133,5 +133,41 @@ describe("CodexPlannerRuntime", () => {
     const args = vi.mocked(runProcess).mock.calls[0][1] as string[];
     expect(args.some((arg) => arg.includes("model_reasoning_effort"))).toBe(false);
   });
-});
 
+  it("writes OPENAI_API_KEY into ~/.codex/auth.json while preserving existing auth fields", async () => {
+    const fakeHome = path.join(tmpDir, "home");
+    const codexDir = path.join(fakeHome, ".codex");
+    const authPath = path.join(codexDir, "auth.json");
+    const configPath = path.join(codexDir, "config.toml");
+    await fs.mkdir(codexDir, { recursive: true });
+    await fs.writeFile(
+      authPath,
+      JSON.stringify(
+        {
+          tokens: {
+            access_token: "existing-token",
+          },
+          OPENAI_API_KEY: null,
+        },
+        null,
+        2
+      ),
+      "utf-8"
+    );
+    const previousHome = process.env.HOME;
+    process.env.HOME = fakeHome;
+    try {
+      await writeCodexConfigToml("sk-test");
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+    }
+
+    const authRaw = JSON.parse(await fs.readFile(authPath, "utf-8")) as Record<string, unknown>;
+    expect(authRaw.OPENAI_API_KEY).toBe("sk-test");
+    expect((authRaw.tokens as Record<string, unknown>).access_token).toBe("existing-token");
+    const configRaw = await fs.readFile(configPath, "utf-8");
+    expect(configRaw).toContain("[openai]");
+    expect(configRaw).toContain('api_key = "sk-test"');
+  });
+});
