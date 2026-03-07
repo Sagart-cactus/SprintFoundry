@@ -199,7 +199,7 @@ export class DockerExecutionBackend implements ExecutionBackend {
       schema_version: 1,
       runtime: {
         provider: config.runtime!.provider,
-        mode: "container",
+        mode: "local_process",
         runtime_id: handle.sandbox_id,
         step_attempt: config.stepAttempt,
       },

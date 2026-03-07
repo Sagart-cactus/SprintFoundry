@@ -63,7 +63,7 @@ Step execution is process/CLI-driven, not SDK-driven:
 
 - Codex runtime: `codex exec ... --json`
 - Claude runtime: `claude -p ... --output-format json`
-- Optional container execution for `claude-code` runtime mode
+- Optional Docker execution via the `docker` execution backend
 
 Each step writes runtime debug/log artifacts in workspace, including per-step files such as:
 - `.codex-runtime.step-<n>.attempt-<m>.debug.json`

@@ -1506,7 +1506,7 @@ export class OrchestrationService {
   }
 
   private isResumableRuntime(runtime: RuntimeConfig): boolean {
-    if (runtime.mode === "container" || runtime.mode === "remote") return false;
+    if (runtime.mode === "remote") return false;
     return runtime.provider === "codex" || runtime.provider === "claude-code";
   }
 
@@ -2381,16 +2381,9 @@ export class OrchestrationService {
       return this.platformConfig.defaults.runtime_per_agent[role];
     }
 
-    const useContainer = process.env.SPRINTFOUNDRY_USE_CONTAINERS === "true";
-    if (useContainer) {
-      console.warn(
-        "[sprintfoundry] Container mode is deprecated and will be removed in v0.3.0. " +
-        "Use local_process instead."
-      );
-    }
     return {
       provider: "claude-code",
-      mode: useContainer ? "container" : "local_process",
+      mode: "local_process",
     };
   }
 

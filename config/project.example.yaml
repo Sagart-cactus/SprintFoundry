@@ -54,7 +54,7 @@ api_keys:
 # ----- Runtime Overrides (optional) -----
 # Override runtime provider per agent.
 # Supported providers: claude-code | codex
-# Supported modes: local_process | container | remote
+# Supported modes: local_process | local_sdk | remote
 #
 # runtime_overrides:
 #   developer:
