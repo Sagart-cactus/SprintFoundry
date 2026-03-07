@@ -26,6 +26,9 @@ Run-scoped egress policy uses `CiliumNetworkPolicy` with FQDN support. Vanilla K
 ### Resource and artifact governance
 SprintFoundry owns pod requests/limits and tenant/project/run artifact prefixes. Namespace `ResourceQuota` objects remain a cluster-admin concern; the runner records the configured quota scope in run metadata but does not try to create cluster quota policy itself.
 
+### Agent sandbox rollout
+The `agent-sandbox` backend is scaffolded behind an explicit feature flag or config gate. The default hosted backend remains the pod-scoped Kubernetes backend until the `SandboxClaim` lifecycle and execution protocol are proven out.
+
 ---
 
 ## ADR-001: Multi-Agent Orchestration Over Single Agent

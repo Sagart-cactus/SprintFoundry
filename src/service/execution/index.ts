@@ -9,6 +9,7 @@ export {
   createExecutionBackend,
   resolveExecutionBackendName,
 } from "./factory.js";
+export { AgentSandboxExecutionBackend } from "./agent-sandbox-backend.js";
 export { DockerExecutionBackend } from "./docker-backend.js";
 export { KubernetesPodExecutionBackend } from "./k8s-pod-backend.js";
 export { LocalExecutionBackend } from "./local-backend.js";
