@@ -1,9 +1,8 @@
 // ============================================================
 // SprintFoundry — Agent Runner
-// Spawns agent containers, manages execution, captures results
+// Prepares agent workspaces, delegates step execution, captures results
 // ============================================================
 
-import { spawn, type ChildProcess } from "child_process";
 import * as fs from "fs/promises";
 import * as path from "path";
 import { fileURLToPath } from "url";
@@ -22,7 +21,6 @@ import type {
 } from "../shared/types.js";
 import { RuntimeFactory } from "./runtime/runtime-factory.js";
 import { CodexSkillManager } from "./runtime/codex-skill-manager.js";
-import { parseTokenUsage as parseRuntimeTokenUsage } from "./runtime/process-utils.js";
 import type { RuntimeActivityEvent } from "./runtime/types.js";
 import type { EventSinkClient } from "./event-sink-client.js";
 import {
@@ -478,186 +476,10 @@ export class AgentRunner {
       return this.platformConfig.defaults.runtime_per_agent[role];
     }
 
-    const useContainer = process.env.SPRINTFOUNDRY_USE_CONTAINERS === "true";
     return {
       provider: "claude-code",
-      mode: useContainer ? "container" : "local_process",
+      mode: "local_process",
     };
-  }
-
-  // ---- Agent Spawning ----
-
-  private async spawnAgent(
-    config: AgentRunConfig,
-    taskPrompt: string
-  ): Promise<{ tokens_used: number; container_id: string }> {
-    // Determine execution mode: container or local
-    const useContainer = process.env.SPRINTFOUNDRY_USE_CONTAINERS === "true";
-
-    if (useContainer) {
-      return this.spawnContainer(config, taskPrompt);
-    } else {
-      return this.spawnLocalClaudeCode(config, taskPrompt);
-    }
-  }
-
-  // -- Local mode: run Claude Code directly --
-
-  private async spawnLocalClaudeCode(
-    config: AgentRunConfig,
-    taskPrompt: string
-  ): Promise<{ tokens_used: number; container_id: string }> {
-    return new Promise((resolve, reject) => {
-      const args = this.buildClaudeCliArgs(taskPrompt, config);
-
-      const proc = spawn("claude", args, {
-        cwd: config.workspacePath,
-        env: {
-          ...process.env,
-          ANTHROPIC_API_KEY: config.apiKey,
-          ANTHROPIC_MODEL: config.modelConfig.model,
-        },
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-
-      let stdout = "";
-      let stderr = "";
-
-      proc.stdout?.on("data", (data) => {
-        stdout += data.toString();
-      });
-      proc.stderr?.on("data", (data) => {
-        stderr += data.toString();
-      });
-
-      // Timeout enforcement
-      const timeout = setTimeout(() => {
-        proc.kill("SIGTERM");
-        reject(new Error(`Agent ${config.agent} timed out after ${config.timeoutMinutes} minutes`));
-      }, config.timeoutMinutes * 60 * 1000);
-
-      proc.on("close", (code) => {
-        clearTimeout(timeout);
-
-        if (code !== 0) {
-          reject(
-            new Error(
-              `Agent ${config.agent} exited with code ${code}. ${stderr.trim()}`
-            )
-          );
-          return;
-        }
-
-        // Parse token usage from Claude Code output if available
-        const tokensUsed = this.parseTokenUsage(stdout);
-
-        resolve({
-          tokens_used: tokensUsed,
-          container_id: `local-${proc.pid}`,
-        });
-      });
-
-      proc.on("error", (err) => {
-        clearTimeout(timeout);
-        reject(err);
-      });
-    });
-  }
-
-  // -- Container mode: run in Docker --
-
-  private async spawnContainer(
-    config: AgentRunConfig,
-    taskPrompt: string
-  ): Promise<{ tokens_used: number; container_id: string }> {
-    const agentDef = this.platformConfig.agent_definitions.find(
-      (d) => d.type === config.agent
-    );
-    if (!agentDef) {
-      throw new Error(`No agent definition found for: ${config.agent}`);
-    }
-
-    const containerName = `sprintfoundry-${config.agent}-${Date.now()}`;
-    const resources = config.containerResources ?? {};
-    const flags = config.cliFlags ?? {};
-
-    // Resolve plugin paths for volume mounts
-    const pluginPaths = this.resolvePluginPaths(config.plugins);
-
-    return new Promise((resolve, reject) => {
-      const dockerArgs: string[] = [
-        "run",
-        "--name", containerName,
-        "--rm",
-        // Mount workspace
-        "-v", `${config.workspacePath}:/workspace`,
-        // Pass environment
-        "-e", `ANTHROPIC_API_KEY=${config.apiKey}`,
-        "-e", `ANTHROPIC_MODEL=${config.modelConfig.model}`,
-        "-e", `AGENT_TYPE=${config.agent}`,
-        // Pass CLI config as env vars for entrypoint.sh
-        "-e", `AGENT_MAX_BUDGET=${flags.max_budget_usd ?? ""}`,
-        "-e", `AGENT_OUTPUT_FORMAT=${flags.output_format ?? "json"}`,
-        "-e", `AGENT_SKIP_PERMISSIONS=${flags.skip_permissions !== false ? "true" : "false"}`,
-        // Resource limits (configurable)
-        "--memory", resources.memory ?? "4g",
-        "--cpus", resources.cpus ?? "2",
-        // Network access
-        "--network", resources.network ?? "bridge",
-      ];
-
-      // Mount plugin directories and pass as env var
-      if (pluginPaths.length > 0) {
-        const containerPluginDirs: string[] = [];
-        for (const pluginPath of pluginPaths) {
-          const pluginName = path.basename(pluginPath);
-          const containerPath = `/plugins/${pluginName}`;
-          dockerArgs.push("-v", `${pluginPath}:${containerPath}:ro`);
-          containerPluginDirs.push(containerPath);
-        }
-        dockerArgs.push("-e", `AGENT_PLUGIN_DIRS=${containerPluginDirs.join(":")}`);
-      }
-
-      // Image
-      dockerArgs.push(agentDef.container_image);
-
-      const proc = spawn("docker", dockerArgs, {
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-
-      let stdout = "";
-
-      proc.stdout?.on("data", (data) => {
-        stdout += data.toString();
-      });
-
-      const timeout = setTimeout(() => {
-        spawn("docker", ["kill", containerName]);
-        reject(new Error(`Agent container ${config.agent} timed out`));
-      }, config.timeoutMinutes * 60 * 1000);
-
-      proc.on("close", (code) => {
-        clearTimeout(timeout);
-        if (code !== 0) {
-          reject(
-            new Error(
-              `Agent container ${config.agent} exited with code ${code}`
-            )
-          );
-          return;
-        }
-        const tokensUsed = this.parseTokenUsage(stdout);
-        resolve({
-          tokens_used: tokensUsed,
-          container_id: containerName,
-        });
-      });
-
-      proc.on("error", (err) => {
-        clearTimeout(timeout);
-        reject(err);
-      });
-    });
   }
 
   // ---- Result Reading ----
@@ -712,10 +534,6 @@ export class AgentRunner {
   }
 
   // ---- Utilities ----
-
-  private parseTokenUsage(output: string): number {
-    return parseRuntimeTokenUsage(output);
-  }
 
   private estimateCost(tokens: number, model: ModelConfig): number {
     // Rough cost estimation per 1M tokens

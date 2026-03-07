@@ -1142,7 +1142,7 @@ describe("OrchestrationService", () => {
     expect(mockRunner.run.mock.calls[0][0].apiKey).toBe("");
   });
 
-  it("still requires API key for non-local runtimes", async () => {
+  it("still requires API key for SDK runtimes", async () => {
     const serviceNoKeys = new OrchestrationService(
       makePlatformConfig({
         defaults: {
@@ -1162,7 +1162,7 @@ describe("OrchestrationService", () => {
           },
           max_rework_cycles: 3,
           runtime_per_agent: {
-            developer: { provider: "claude-code", mode: "container" },
+            developer: { provider: "claude-code", mode: "local_sdk" },
           },
         },
         rules: [],

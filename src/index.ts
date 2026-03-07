@@ -464,14 +464,10 @@ program
     let needsOpenaiKey = false;
     let needsDocker = false;
 
-    const useContainers =
-      String(process.env.SPRINTFOUNDRY_USE_CONTAINERS || "").toLowerCase() === "true";
-
     const applyRuntimeNeeds = (rt: RuntimeConfig) => {
       if (rt.provider === "claude-code") {
         if (rt.mode === "local_process") needsClaudeCli = true;
-        if (rt.mode === "local_sdk" || rt.mode === "container") needsAnthropicKey = true;
-        if (rt.mode === "container") needsDocker = true;
+        if (rt.mode === "local_sdk") needsAnthropicKey = true;
       } else if (rt.provider === "codex") {
         if (rt.mode === "local_process") needsCodexCli = true;
         if (rt.mode === "local_sdk") needsOpenaiKey = true;
@@ -479,13 +475,17 @@ program
     };
 
     if (platform && project) {
+      const executionBackendName = resolveExecutionBackendName(platform, project);
+      if (executionBackendName === "docker") {
+        needsDocker = true;
+      }
       const byAgent = platform.defaults.runtime_per_agent ?? {};
       const agentRoleById = new Map(
         platform.agent_definitions.map((a) => [a.type, a.role] as const)
       );
       const fallbackRuntime: RuntimeConfig = {
         provider: "claude-code",
-        mode: useContainers ? "container" : "local_process",
+        mode: "local_process",
       };
 
       const resolveRuntime = (agentId: string): RuntimeConfig => {
@@ -510,7 +510,7 @@ program
         project.planner_runtime_override ??
         platform.defaults.planner_runtime ?? {
           provider: "claude-code",
-          mode: useContainers ? "container" : "local_process",
+          mode: "local_process",
         }
       );
 
@@ -553,7 +553,7 @@ program
     if (needsDocker) {
       const dockerBin = await run("docker", ["--version"]);
       if (!dockerBin.ok) {
-        add("fail", "Docker", "required by container runtime but docker is not installed");
+        add("fail", "Docker", "required by docker execution backend but docker is not installed");
       } else {
         const dockerDaemon = await run("docker", ["info", "--format", "{{.ServerVersion}}"]);
         add(

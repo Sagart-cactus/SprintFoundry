@@ -17,7 +17,7 @@ export class PlannerFactory {
 
     // For claude-code in local_process mode, use the CLI-based planner
     // which relies on local Claude Code auth (no API key required).
-    // For container/remote modes, use the SDK-based OrchestratorAgent
+    // For other modes, use the SDK-based OrchestratorAgent
     // which needs an explicit API key.
     if (runtime.mode === "local_process") {
       return new ClaudeCodePlannerRuntime(platformConfig, projectConfig);

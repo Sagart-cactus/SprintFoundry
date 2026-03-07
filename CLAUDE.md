@@ -109,6 +109,6 @@ pnpm dev -- --source github --ticket 42
 # Run with a direct prompt
 pnpm dev -- --prompt "Add CSV export to the reports page"
 
-# Run in container mode (requires Docker)
-SPRINTFOUNDRY_USE_CONTAINERS=true pnpm dev -- --source linear --ticket LIN-423
+# Run with the Docker execution backend
+SPRINTFOUNDRY_EXECUTION_BACKEND=docker pnpm dev -- --source linear --ticket LIN-423
 ```

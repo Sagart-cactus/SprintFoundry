@@ -2,50 +2,20 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import * as fs from "fs/promises";
 import * as path from "path";
 import * as os from "os";
-import { EventEmitter } from "events";
 import { makePlatformConfig, makeProjectConfig, makeModelConfig } from "./fixtures/configs.js";
 import { makeResult } from "./fixtures/results.js";
 import type { AgentRunConfig } from "../src/service/agent-runner.js";
 import type { ExecutionBackend } from "../src/service/execution/index.js";
-
-// Mock child_process.spawn
-vi.mock("child_process", () => {
-  const actual = vi.importActual("child_process");
-  return {
-    ...actual,
-    spawn: vi.fn(),
-  };
-});
+import { parseTokenUsage } from "../src/service/runtime/process-utils.js";
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
   query: vi.fn(),
 }));
 
-const { spawn: mockSpawn } = await import("child_process");
 const { query: mockClaudeSdkQuery } = await import("@anthropic-ai/claude-agent-sdk");
 
 const { AgentRunner } = await import("../src/service/agent-runner.js");
 const { CodexRuntime } = await import("../src/service/runtime/codex-runtime.js");
-
-function makeFakeProcess(
-  stdout = "",
-  exitCode = 0,
-  options?: { delay?: number }
-) {
-  const proc = new EventEmitter() as any;
-  proc.stdout = new EventEmitter();
-  proc.stderr = new EventEmitter();
-  proc.stdin = { write: vi.fn(), end: vi.fn() };
-  proc.pid = 12345;
-  proc.kill = vi.fn();
-
-  setTimeout(() => {
-    if (stdout) proc.stdout.emit("data", Buffer.from(stdout));
-    proc.emit("close", exitCode);
-  }, options?.delay ?? 5);
-
-  return proc;
-}
 
 function makeRunConfig(overrides?: Partial<AgentRunConfig>): AgentRunConfig {
   return {
@@ -255,28 +225,25 @@ describe("AgentRunner", () => {
   });
 
   it("parseTokenUsage extracts from JSON output", () => {
-    const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig());
     const output = JSON.stringify({ usage: { total_tokens: 1234 } });
 
-    const tokens = (runner as any).parseTokenUsage(output);
+    const tokens = parseTokenUsage(output);
 
     expect(tokens).toBe(1234);
   });
 
   it("parseTokenUsage extracts from regex fallback", () => {
-    const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig());
     const output = "Process completed. Tokens: 5678\nDone.";
 
-    const tokens = (runner as any).parseTokenUsage(output);
+    const tokens = parseTokenUsage(output);
 
     expect(tokens).toBe(5678);
   });
 
   it("parseTokenUsage returns 0 for unrecognized output", () => {
-    const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig());
     const output = "no token info here";
 
-    const tokens = (runner as any).parseTokenUsage(output);
+    const tokens = parseTokenUsage(output);
 
     expect(tokens).toBe(0);
   });
@@ -327,7 +294,7 @@ describe("AgentRunner", () => {
     });
   });
 
-  it("passes container runtime selection through to the execution backend", async () => {
+  it("passes runtime selection through to the execution backend", async () => {
     const backend: ExecutionBackend = {
       prepareRunEnvironment: vi.fn(),
       executeStep: vi.fn().mockResolvedValue({
@@ -346,7 +313,7 @@ describe("AgentRunner", () => {
       makePlatformConfig(),
       makeProjectConfig({
         runtime_overrides: {
-          developer: { provider: "claude-code", mode: "container" },
+          developer: { provider: "claude-code", mode: "local_process" },
         },
       }),
       backend
@@ -362,7 +329,7 @@ describe("AgentRunner", () => {
     expect((backend.executeStep as any).mock.calls[0][2]).toMatchObject({
       runtime: {
         provider: "claude-code",
-        mode: "container",
+        mode: "local_process",
       },
       resolvedPluginPaths: [expect.stringContaining("plugins/js-nextjs")],
     });
@@ -420,7 +387,7 @@ describe("AgentRunner", () => {
     await expect(runner.run(makeRunConfig({ workspacePath }))).rejects.toThrow(/exited with code 1/);
   });
 
-  it("run rejects when docker exits with non-zero code", async () => {
+  it("run rejects when the execution backend returns a docker failure", async () => {
     const backend: ExecutionBackend = {
       prepareRunEnvironment: vi.fn(),
       executeStep: vi.fn().mockRejectedValue(
@@ -435,7 +402,7 @@ describe("AgentRunner", () => {
       makePlatformConfig(),
       makeProjectConfig({
         runtime_overrides: {
-          developer: { provider: "claude-code", mode: "container" },
+          developer: { provider: "claude-code", mode: "local_process" },
         },
       }),
       backend

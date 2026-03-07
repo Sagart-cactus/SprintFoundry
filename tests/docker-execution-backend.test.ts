@@ -133,7 +133,7 @@ describe("DockerExecutionBackend", () => {
       schema_version: 1,
       runtime: {
         provider: "claude-code",
-        mode: "container",
+        mode: "local_process",
         runtime_id: "sf-run-run-1",
         step_attempt: 2,
       },
