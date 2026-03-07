@@ -1,10 +1,12 @@
 import type { ExecutionBackendName, PlatformConfig, ProjectConfig } from "../../shared/types.js";
+import { AgentSandboxExecutionBackend } from "./agent-sandbox-backend.js";
 import type { ExecutionBackend } from "./backend.js";
 import { DockerExecutionBackend } from "./docker-backend.js";
 import { KubernetesPodExecutionBackend } from "./k8s-pod-backend.js";
 import { LocalExecutionBackend } from "./local-backend.js";
 
 const EXECUTION_BACKEND_ENV = "SPRINTFOUNDRY_EXECUTION_BACKEND";
+const AGENT_SANDBOX_ENV = "SPRINTFOUNDRY_AGENT_SANDBOX";
 
 export function resolveExecutionBackendName(
   platformConfig: PlatformConfig,
@@ -42,7 +44,12 @@ export function createExecutionBackend(
     case "k8s-pod":
       return new KubernetesPodExecutionBackend(platformConfig, projectConfig);
     case "agent-sandbox":
-      throw new Error("Execution backend 'agent-sandbox' is configured but not implemented yet. Complete issue #015 first.");
+      if (!isTruthy(env[AGENT_SANDBOX_ENV]) && !platformConfig.k8s?.agent_sandbox?.enabled) {
+        throw new Error(
+          "Execution backend 'agent-sandbox' is disabled. Set SPRINTFOUNDRY_AGENT_SANDBOX=true or enable k8s.agent_sandbox.enabled."
+        );
+      }
+      return new AgentSandboxExecutionBackend(platformConfig, projectConfig);
   }
 }
 
@@ -57,4 +64,9 @@ function normalizeExecutionBackendName(value: string | undefined): ExecutionBack
     return normalized;
   }
   return null;
+}
+
+function isTruthy(value: string | undefined): boolean {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
 }

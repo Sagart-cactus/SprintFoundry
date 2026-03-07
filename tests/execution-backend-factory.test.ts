@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  AgentSandboxExecutionBackend,
   createExecutionBackend,
   DockerExecutionBackend,
   KubernetesPodExecutionBackend,
@@ -56,6 +57,25 @@ describe("execution backend factory", () => {
 
     expect(createExecutionBackend(platform, project, {} as NodeJS.ProcessEnv)).toBeInstanceOf(
       KubernetesPodExecutionBackend
+    );
+  });
+
+  it("keeps agent-sandbox disabled unless the feature flag is enabled", () => {
+    const platform = makePlatformConfig();
+    const project = makeProjectConfig({ execution_backend_override: "agent-sandbox" });
+
+    expect(() => createExecutionBackend(platform, project, {} as NodeJS.ProcessEnv)).toThrow(
+      /disabled/
+    );
+  });
+
+  it("constructs the agent-sandbox backend when the feature flag is enabled", () => {
+    const platform = makePlatformConfig();
+    const project = makeProjectConfig({ execution_backend_override: "agent-sandbox" });
+    const env = { SPRINTFOUNDRY_AGENT_SANDBOX: "true" } as NodeJS.ProcessEnv;
+
+    expect(createExecutionBackend(platform, project, env)).toBeInstanceOf(
+      AgentSandboxExecutionBackend
     );
   });
 });

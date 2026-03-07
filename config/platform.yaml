@@ -168,6 +168,13 @@ k8s:
       cpu: "2"
       memory: 4Gi
   quota_scope: shared-namespace-admin-managed
+  agent_sandbox:
+    enabled: false
+    template_name: default
+    warm_pool_name: ""
+    api_group: agent-sandbox.dev
+    api_version: v1alpha1
+    claim_plural: sandboxclaims
     developer: [detect-project-type, code-quality, error-handling, performance-review]
     go-developer: [code-quality, error-handling, performance-review]
     qa: [detect-project-type, testing-standards]

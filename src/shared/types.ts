@@ -256,6 +256,14 @@ export interface PlatformConfig {
       limits?: ResourceQuantityPair;
     };
     quota_scope?: string;
+    agent_sandbox?: {
+      enabled?: boolean;
+      template_name?: string;
+      warm_pool_name?: string;
+      api_group?: string;
+      api_version?: string;
+      claim_plural?: string;
+    };
   };
 }
 
