@@ -73,6 +73,7 @@ api_key: "prefix-\${NONEXISTENT_VAR_FOR_TEST}-suffix"
 
   it("loadConfig loads platform.yaml + project.yaml", async () => {
     const platformYaml = `
+execution_backend: local
 defaults:
   model_per_agent:
     developer:
@@ -109,6 +110,7 @@ branch_strategy:
   prefix: "feat/"
   include_ticket_id: true
   naming: kebab-case
+execution_backend_override: local
 `;
 
     await fs.writeFile(path.join(tmpDir, "platform.yaml"), platformYaml, "utf-8");
@@ -117,8 +119,10 @@ branch_strategy:
     const { platform, project } = await loadConfig(tmpDir);
 
     expect(platform.defaults.max_rework_cycles).toBe(3);
+    expect(platform.execution_backend).toBe("local");
     expect(project.project_id).toBe("test-project");
     expect(project.name).toBe("Test Project");
+    expect(project.execution_backend_override).toBe("local");
   });
 
   it("loadConfig with --project tries name.yaml then project-name.yaml", async () => {

@@ -57,6 +57,7 @@ export async function loadConfig(configDir: string, projectName?: string) {
 
   const resolved = project!;
   // Ensure optional fields are never undefined
+  platform.k8s = platform.k8s ?? {};
   resolved.rules = resolved.rules ?? [];
   resolved.agents = resolved.agents ?? [];
   resolved.integrations = resolved.integrations ?? ({} as typeof resolved.integrations);
@@ -65,6 +66,7 @@ export async function loadConfig(configDir: string, projectName?: string) {
     include_ticket_id: true,
     naming: "kebab-case",
   };
+  resolved.workspace = resolved.workspace ?? {};
 
   // Merge custom agent definitions from config/agents/*.yaml
   // Each file defines a single AgentDefinition; types not already in platform.yaml are added.

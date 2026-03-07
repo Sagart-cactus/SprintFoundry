@@ -19,6 +19,7 @@ import { runAgentCreate } from "./commands/agent-create.js";
 import { SessionManager } from "./service/session-manager.js";
 import { getActivityState } from "./service/activity-detector.js";
 import { PluginRegistry } from "./service/plugin-registry.js";
+import { createExecutionBackend, resolveExecutionBackendName } from "./service/execution/index.js";
 import { tmpdirWorkspaceModule } from "./plugins/workspace-tmpdir/index.js";
 import { worktreeWorkspaceModule } from "./plugins/workspace-worktree/index.js";
 import { defaultTrackerModule } from "./plugins/tracker-default/index.js";
@@ -153,7 +154,9 @@ program
 
     const { platform, project } = await loadConfig(opts.config, opts.project);
     const registry = buildPluginRegistry(platform, project);
-    const service = new OrchestrationService(platform, project, registry);
+    const executionBackendName = resolveExecutionBackendName(platform, project);
+    const executionBackend = createExecutionBackend(platform, project);
+    const service = new OrchestrationService(platform, project, registry, executionBackend);
 
     const ticketId = opts.ticket ?? `prompt-${Date.now()}`;
 
@@ -161,6 +164,7 @@ program
     console.log(`  Source: ${source}`);
     console.log(`  Ticket: ${ticketId}`);
     console.log(`  Project: ${project.name} (${project.project_id})`);
+    console.log(`  Execution backend: ${executionBackendName}`);
     if (project.stack) console.log(`  Stack: ${project.stack}`);
     if (project.agents) console.log(`  Agents: ${project.agents.join(", ")}`);
     if (opts.dryRun) console.log(`  Mode: dry-run (plan only)`);
@@ -209,8 +213,10 @@ program
   .action(async (opts) => {
     try {
       const { platform, project } = await loadConfig(opts.config, opts.project);
+      const executionBackendName = resolveExecutionBackendName(platform, project);
       console.log("Configuration valid.");
       console.log(`  Project: ${project.name} (${project.project_id})`);
+      console.log(`  Execution backend: ${executionBackendName}`);
       console.log(`  Repo: ${project.repo.url}`);
       if (project.stack) console.log(`  Stack: ${project.stack}`);
       if (project.agents) console.log(`  Agents: ${project.agents.join(", ")}`);
@@ -277,7 +283,8 @@ program
 
     const { platform, project } = await loadConfig(opts.config, opts.project);
     const registry = buildPluginRegistry(platform, project);
-    const service = new OrchestrationService(platform, project, registry);
+    const executionBackend = createExecutionBackend(platform, project);
+    const service = new OrchestrationService(platform, project, registry, executionBackend);
 
     console.log(`Resuming run ${id}...`);
     if (step !== undefined) {
