@@ -5,10 +5,12 @@ import { KubernetesPodExecutionBackend } from "../src/service/execution/k8s-pod-
 
 describe("KubernetesPodExecutionBackend", () => {
   const client = {
+    createPvc: vi.fn(),
     createPod: vi.fn(),
     waitForPodReady: vi.fn(),
     exec: vi.fn(),
     deletePod: vi.fn(),
+    deletePvc: vi.fn(),
   };
 
   beforeEach(() => {
@@ -18,9 +20,16 @@ describe("KubernetesPodExecutionBackend", () => {
   it("creates one pod sandbox per run and waits for readiness", async () => {
     client.createPod.mockResolvedValue(undefined);
     client.waitForPodReady.mockResolvedValue(undefined);
+    client.createPvc.mockResolvedValue(undefined);
 
     const backend = new KubernetesPodExecutionBackend(
-      makePlatformConfig({ k8s: { namespace: "tenant-a" } }),
+      makePlatformConfig({
+        k8s: {
+          namespace: "tenant-a",
+          workspace_storage_class: "fast-ssd",
+          workspace_size: "25Gi",
+        },
+      }),
       makeProjectConfig(),
       client
     );
@@ -41,11 +50,25 @@ describe("KubernetesPodExecutionBackend", () => {
       sandbox_id: "sf-pod-run-1",
       execution_backend: "k8s-pod",
       workspace_path: "/tmp/workspace-run-1",
+      workspace_volume_ref: "sf-pod-run-1-workspace",
     });
 
+    expect(client.createPvc).toHaveBeenCalledTimes(1);
     expect(client.createPod).toHaveBeenCalledTimes(1);
     expect(client.waitForPodReady).toHaveBeenCalledWith("tenant-a", "sf-pod-run-1");
+    const pvcManifest = client.createPvc.mock.calls[0][1];
     const manifest = client.createPod.mock.calls[0][1];
+    expect(pvcManifest).toMatchObject({
+      metadata: {
+        name: "sf-pod-run-1-workspace",
+        namespace: "tenant-a",
+      },
+      spec: {
+        accessModes: ["ReadWriteOnce"],
+        resources: { requests: { storage: "25Gi" } },
+        storageClassName: "fast-ssd",
+      },
+    });
     expect(manifest.metadata).toMatchObject({
       name: "sf-pod-run-1",
       namespace: "tenant-a",
@@ -56,7 +79,12 @@ describe("KubernetesPodExecutionBackend", () => {
       },
     });
     expect(manifest.spec.volumes).toEqual(
-      expect.arrayContaining([expect.objectContaining({ name: "workspace", emptyDir: {} })])
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "workspace",
+          persistentVolumeClaim: { claimName: "sf-pod-run-1-workspace" },
+        }),
+      ])
     );
   });
 
@@ -124,6 +152,8 @@ describe("KubernetesPodExecutionBackend", () => {
 
   it("deletes the pod on teardown", async () => {
     client.deletePod.mockResolvedValue(undefined);
+    client.deletePvc.mockRejectedValue(new Error("storage api unavailable"));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const backend = new KubernetesPodExecutionBackend(
       makePlatformConfig({ k8s: { namespace: "tenant-a" } }),
@@ -138,6 +168,7 @@ describe("KubernetesPodExecutionBackend", () => {
         sandbox_id: "sf-pod-run-1",
         execution_backend: "k8s-pod",
         workspace_path: "/tmp/workspace-run-1",
+        workspace_volume_ref: "sf-pod-run-1-workspace",
         checkpoint_generation: 0,
         metadata: {},
       },
@@ -145,5 +176,9 @@ describe("KubernetesPodExecutionBackend", () => {
     );
 
     expect(client.deletePod).toHaveBeenCalledWith("tenant-a", "sf-pod-run-1");
+    expect(client.deletePvc).toHaveBeenCalledWith("tenant-a", "sf-pod-run-1-workspace");
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Failed to delete PVC sf-pod-run-1-workspace")
+    );
   });
 });

@@ -230,6 +230,8 @@ export interface PlatformConfig {
   k8s?: {
     enabled?: boolean;
     namespace?: string;
+    workspace_storage_class?: string;
+    workspace_size?: string;
   };
 }
 
