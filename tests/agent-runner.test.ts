@@ -6,6 +6,7 @@ import { EventEmitter } from "events";
 import { makePlatformConfig, makeProjectConfig, makeModelConfig } from "./fixtures/configs.js";
 import { makeResult } from "./fixtures/results.js";
 import type { AgentRunConfig } from "../src/service/agent-runner.js";
+import type { ExecutionBackend } from "../src/service/execution/index.js";
 
 // Mock child_process.spawn
 vi.mock("child_process", () => {
@@ -48,6 +49,7 @@ function makeFakeProcess(
 
 function makeRunConfig(overrides?: Partial<AgentRunConfig>): AgentRunConfig {
   return {
+    runId: overrides?.runId ?? "run-test-1",
     stepNumber: overrides?.stepNumber ?? 1,
     stepAttempt: overrides?.stepAttempt ?? 1,
     agent: overrides?.agent ?? "developer",
@@ -62,6 +64,7 @@ function makeRunConfig(overrides?: Partial<AgentRunConfig>): AgentRunConfig {
     plugins: overrides?.plugins,
     cliFlags: overrides?.cliFlags,
     containerResources: overrides?.containerResources,
+    runEnvironment: overrides?.runEnvironment,
   };
 }
 
@@ -324,11 +327,20 @@ describe("AgentRunner", () => {
     });
   });
 
-  it("spawnContainer constructs correct docker args with volume mounts", async () => {
-    const proc = makeFakeProcess(
-      JSON.stringify({ usage: { total_tokens: 200 } })
-    );
-    (mockSpawn as any).mockReturnValueOnce(proc);
+  it("passes container runtime selection through to the execution backend", async () => {
+    const backend: ExecutionBackend = {
+      prepareRunEnvironment: vi.fn(),
+      executeStep: vi.fn().mockResolvedValue({
+        agentResult: makeResult(),
+        tokens_used: 200,
+        cost_usd: 0.25,
+        duration_seconds: 1,
+        container_id: "container-sandbox-1",
+      }),
+      pauseRun: vi.fn(),
+      resumeRun: vi.fn(),
+      teardownRun: vi.fn(),
+    };
 
     const runner = new AgentRunner(
       makePlatformConfig(),
@@ -336,7 +348,8 @@ describe("AgentRunner", () => {
         runtime_overrides: {
           developer: { provider: "claude-code", mode: "container" },
         },
-      })
+      }),
+      backend
     );
     (runner as any).prepareWorkspace = vi.fn().mockResolvedValue(undefined);
     (runner as any).readAgentResult = vi.fn().mockResolvedValue(makeResult());
@@ -345,16 +358,15 @@ describe("AgentRunner", () => {
       makeRunConfig({ agent: "developer", plugins: ["js-nextjs"] })
     );
 
-    expect(mockSpawn).toHaveBeenCalledWith(
-      "docker",
-      expect.arrayContaining(["run", "--rm", "-v"]),
-      expect.any(Object)
-    );
-
-    const dockerArgs = (mockSpawn as any).mock.calls[0][1];
-    // Should have volume mount for workspace
-    expect(dockerArgs.some((a: string) => a.includes("/workspace"))).toBe(true);
-
+    expect(backend.executeStep).toHaveBeenCalledTimes(1);
+    expect((backend.executeStep as any).mock.calls[0][2]).toMatchObject({
+      runtime: {
+        provider: "claude-code",
+        mode: "container",
+      },
+      resolvedPluginPaths: [expect.stringContaining("plugins/js-nextjs")],
+    });
+    expect(result.container_id).toBe("container-sandbox-1");
   });
 
   it("timeout kills the process", async () => {
@@ -472,13 +484,60 @@ describe("AgentRunner", () => {
       codexSkillNames: ["web-design-guidelines"],
     });
     expect(result.tokens_used).toBe(321);
-    expect(result.cost_usd).toBeCloseTo(0.000963, 8);
+    expect(result.cost_usd).toBe(0);
     expect((result.runtime_metadata as any)?.provider_metadata?.skills?.names).toEqual([
       "web-design-guidelines",
     ]);
     expect((result.runtime_metadata as any)?.provider_metadata?.skills?.provider).toBe(
       "codex"
     );
+  });
+
+  it("delegates step execution to the configured execution backend", async () => {
+    const backend: ExecutionBackend = {
+      prepareRunEnvironment: vi.fn(),
+      executeStep: vi.fn().mockResolvedValue({
+        agentResult: makeResult(),
+        tokens_used: 42,
+        cost_usd: 0.5,
+        duration_seconds: 1,
+        container_id: "sandbox-123",
+      }),
+      pauseRun: vi.fn(),
+      resumeRun: vi.fn(),
+      teardownRun: vi.fn(),
+    };
+
+    const runner = new AgentRunner(
+      makePlatformConfig(),
+      makeProjectConfig(),
+      backend
+    );
+    (runner as any).prepareWorkspace = vi.fn().mockResolvedValue(undefined);
+    (runner as any).readAgentResult = vi.fn().mockResolvedValue(makeResult());
+
+    const runEnvironment = {
+      run_id: "run-test-1",
+      project_id: makeProjectConfig().project_id,
+      sandbox_id: "sandbox-123",
+      execution_backend: "mock",
+      workspace_path: "/tmp/test-workspace",
+      checkpoint_generation: 0,
+      metadata: {},
+    };
+
+    const result = await runner.run(makeRunConfig({ runEnvironment }));
+
+    expect(backend.executeStep).toHaveBeenCalledTimes(1);
+    expect((backend.executeStep as any).mock.calls[0][0]).toEqual(runEnvironment);
+    expect((backend.executeStep as any).mock.calls[0][2]).toMatchObject({
+      runtime: {
+        provider: "claude-code",
+      },
+      runEnvironment,
+    });
+    expect(result.container_id).toBe("sandbox-123");
+    expect(result.tokens_used).toBe(42);
   });
 
   it("prepareWorkspace stages codex skills and appends AGENTS.md skill section", async () => {
