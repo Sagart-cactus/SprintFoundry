@@ -17,6 +17,7 @@ import type { ExecutionBackend, RunEnvironmentHandle, SandboxTeardownReason } fr
 const require = createRequire(import.meta.url);
 
 interface K8sPodClient {
+  createPvc(namespace: string, manifest: Record<string, unknown>): Promise<void>;
   createPod(namespace: string, manifest: Record<string, unknown>): Promise<void>;
   waitForPodReady(namespace: string, podName: string): Promise<void>;
   exec(
@@ -26,6 +27,7 @@ interface K8sPodClient {
     command: string[]
   ): Promise<{ stdout: string; stderr: string; code: number }>;
   deletePod(namespace: string, podName: string): Promise<void>;
+  deletePvc(namespace: string, pvcName: string): Promise<void>;
 }
 
 export class KubernetesPodExecutionBackend implements ExecutionBackend {
@@ -51,7 +53,9 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
     workspacePath: string
   ): Promise<RunEnvironmentHandle> {
     const sandboxId = this.buildSandboxId(run.run_id);
+    const pvcName = `${sandboxId}-workspace`.slice(0, 63);
     const image = this.resolveSandboxImage(plan);
+    const pvcManifest = this.buildWorkspacePvcManifest(run, pvcName);
     const manifest = {
       apiVersion: "v1",
       kind: "Pod",
@@ -80,14 +84,25 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
           },
         ],
         volumes: [
-          { name: "workspace", emptyDir: {} },
+          {
+            name: "workspace",
+            persistentVolumeClaim: {
+              claimName: pvcName,
+            },
+          },
           ...(await this.buildPluginVolumes()),
         ],
       },
     };
 
-    await this.client.createPod(this.namespace, manifest);
-    await this.client.waitForPodReady(this.namespace, sandboxId);
+    await this.client.createPvc(this.namespace, pvcManifest);
+    try {
+      await this.client.createPod(this.namespace, manifest);
+      await this.client.waitForPodReady(this.namespace, sandboxId);
+    } catch (error) {
+      await this.safeDeletePvc(pvcName);
+      throw error;
+    }
 
     return {
       run_id: run.run_id,
@@ -96,11 +111,13 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
       sandbox_id: sandboxId,
       execution_backend: "k8s-pod",
       workspace_path: workspacePath,
+      workspace_volume_ref: pvcName,
       checkpoint_generation: 0,
       metadata: {
         namespace: this.namespace,
         image,
         pod_name: sandboxId,
+        pvc_name: pvcName,
       },
     };
   }
@@ -158,6 +175,9 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
     _reason: SandboxTeardownReason
   ): Promise<void> {
     await this.client.deletePod(this.namespace, handle.sandbox_id);
+    if (handle.workspace_volume_ref) {
+      await this.safeDeletePvc(handle.workspace_volume_ref);
+    }
   }
 
   private createClient(): K8sPodClient {
@@ -176,6 +196,9 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
     const execClient = new k8sModule.Exec(kc);
 
     return {
+      createPvc: async (namespace, manifest) => {
+        await coreApi.createNamespacedPersistentVolumeClaim({ namespace, body: manifest });
+      },
       createPod: async (namespace, manifest) => {
         await coreApi.createNamespacedPod({ namespace, body: manifest });
       },
@@ -238,6 +261,43 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
           if (/NotFound|404/i.test(message)) return;
           throw error;
         }
+      },
+      deletePvc: async (namespace, pvcName) => {
+        try {
+          await coreApi.deleteNamespacedPersistentVolumeClaim({ name: pvcName, namespace });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (/NotFound|404/i.test(message)) return;
+          throw error;
+        }
+      },
+    };
+  }
+
+  private buildWorkspacePvcManifest(run: TaskRun, pvcName: string): Record<string, unknown> {
+    const storageClassName = this.platformConfig.k8s?.workspace_storage_class?.trim();
+    const storageSize = this.platformConfig.k8s?.workspace_size?.trim() || "10Gi";
+    return {
+      apiVersion: "v1",
+      kind: "PersistentVolumeClaim",
+      metadata: {
+        name: pvcName,
+        namespace: this.namespace,
+        labels: {
+          "app.kubernetes.io/name": "sprintfoundry-run-workspace",
+          "sprintfoundry.io/project-id": run.project_id,
+          "sprintfoundry.io/run-id": run.run_id,
+          ...(run.tenant_id ? { "sprintfoundry.io/tenant-id": run.tenant_id } : {}),
+        },
+      },
+      spec: {
+        accessModes: ["ReadWriteOnce"],
+        resources: {
+          requests: {
+            storage: storageSize,
+          },
+        },
+        ...(storageClassName ? { storageClassName } : {}),
       },
     };
   }
@@ -344,5 +404,13 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
   private shellEscape(value: string): string {
     return `'${value.replace(/'/g, `'\"'\"'`)}'`;
   }
-}
 
+  private async safeDeletePvc(pvcName: string): Promise<void> {
+    try {
+      await this.client.deletePvc(this.namespace, pvcName);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[execution-backend] Failed to delete PVC ${pvcName}: ${message}`);
+    }
+  }
+}

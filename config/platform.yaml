@@ -118,6 +118,11 @@ defaults:
       path: plugins/code-review/skills/architecture-alignment
   codex_skills_per_agent:
     code-review: [code-quality, error-handling, performance-review, testing-standards, architecture-alignment]
+
+k8s:
+  namespace: default
+  workspace_storage_class: ""
+  workspace_size: 10Gi
     developer: [detect-project-type, code-quality, error-handling, performance-review]
     go-developer: [code-quality, error-handling, performance-review]
     qa: [detect-project-type, testing-standards]
