@@ -597,6 +597,72 @@ describe("OrchestrationService", () => {
     expect(mockAgentRunner.run).toHaveBeenCalledTimes(1);
   });
 
+  it("marks previously running steps as failed before resuming to avoid silent replay", async () => {
+    const workspacePath = await fs.mkdtemp(path.join(os.tmpdir(), "sf-resume-running-step-"));
+    const plan = makePlan({
+      steps: [makeStep({ step_number: 1, agent: "developer", task: "Finish interrupted work" })],
+    });
+    const runState = {
+      run_id: "run-resume-4",
+      project_id: "test-project",
+      ticket: makeTicket(),
+      plan,
+      validated_plan: plan,
+      status: "failed",
+      steps: [
+        {
+          step_number: 1,
+          agent: "developer",
+          task: "Finish interrupted work",
+          status: "running",
+          container_id: "session-dev-1",
+          tokens_used: 10,
+          cost_usd: 0.001,
+          started_at: new Date().toISOString(),
+          completed_at: null,
+          result: null,
+          rework_count: 0,
+          runtime_metadata: null,
+        },
+      ],
+      total_tokens_used: 10,
+      total_cost_usd: 0.001,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      completed_at: new Date().toISOString(),
+      pr_url: null,
+      error: "interrupted",
+    };
+    const stateDir = path.join(workspacePath, ".sprintfoundry");
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, "run-state.json"),
+      JSON.stringify(runState, null, 2),
+      "utf-8"
+    );
+
+    (service as any).sessionManager.get = vi.fn().mockResolvedValue({
+      run_id: "run-resume-4",
+      workspace_path: workspacePath,
+      status: "failed",
+    });
+
+    mockAgentRunner.run.mockResolvedValue({
+      agentResult: makeResult({ summary: "Recovered successfully" }),
+      tokens_used: 30,
+      cost_usd: 0.003,
+      duration_seconds: 3,
+      container_id: "session-dev-2",
+    });
+
+    const run = await service.resumeTask("run-resume-4");
+
+    expect(run.status).toBe("completed");
+    expect(run.steps.some((step) => step.status === "failed")).toBe(true);
+    expect(run.steps.some((step) => step.status === "completed")).toBe(true);
+    expect(mockAgentRunner.run).toHaveBeenCalledTimes(1);
+  });
+
   it("persists runtime activity events emitted by SDK runtimes", async () => {
     const plan = makePlan({
       steps: [makeStep({ step_number: 1, agent: "developer", task: "Implement feature" })],

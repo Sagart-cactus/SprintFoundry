@@ -25,28 +25,7 @@ export class DockerExecutionBackend implements ExecutionBackend {
   ): Promise<RunEnvironmentHandle> {
     const image = this.resolveSandboxImage(plan);
     const sandboxId = this.buildSandboxId(run.run_id);
-    const args = [
-      "run",
-      "-d",
-      "--name",
-      sandboxId,
-      "--rm",
-      "-w",
-      "/workspace",
-      "-v",
-      `${workspacePath}:/workspace`,
-      ...await this.buildSharedMountArgs(),
-      "--entrypoint",
-      "sh",
-      image,
-      "-lc",
-      "trap 'exit 0' TERM INT; while true; do sleep 3600; done",
-    ];
-    const result = await runProcess("docker", args, {
-      cwd: workspacePath,
-      env: process.env,
-      timeoutMs: 30_000,
-    });
+    const result = await this.runDetachedContainer(sandboxId, image, workspacePath);
     const containerId = result.stdout.trim() || sandboxId;
 
     return {
@@ -119,8 +98,33 @@ export class DockerExecutionBackend implements ExecutionBackend {
   }
 
   async resumeRun(handle: RunEnvironmentHandle): Promise<RunEnvironmentHandle> {
-    await this.runDockerCommand(["unpause", handle.sandbox_id], handle.workspace_path);
-    return handle;
+    const state = await this.inspectContainerState(handle);
+    if (state === "running") {
+      return {
+        ...handle,
+        checkpoint_generation: handle.checkpoint_generation + 1,
+        metadata: {
+          ...handle.metadata,
+          recovery_action: "reattached",
+        },
+      };
+    }
+
+    const image = String(handle.metadata["image"] ?? "").trim();
+    if (!image) {
+      throw new Error(`Docker sandbox ${handle.sandbox_id} cannot be resumed because no image metadata was persisted`);
+    }
+
+    const result = await this.runDetachedContainer(handle.sandbox_id, image, handle.workspace_path);
+    return {
+      ...handle,
+      checkpoint_generation: handle.checkpoint_generation + 1,
+      metadata: {
+        ...handle.metadata,
+        container_id: result.stdout.trim() || handle.sandbox_id,
+        recovery_action: "recreated",
+      },
+    };
   }
 
   async teardownRun(
@@ -211,6 +215,62 @@ export class DockerExecutionBackend implements ExecutionBackend {
   private buildSandboxId(runId: string): string {
     const normalized = runId.toLowerCase().replace(/[^a-z0-9_.-]+/g, "-");
     return `sf-run-${normalized}`.slice(0, 63);
+  }
+
+  private async runDetachedContainer(
+    sandboxId: string,
+    image: string,
+    workspacePath: string
+  ): Promise<{ stdout: string }> {
+    const args = [
+      "run",
+      "-d",
+      "--name",
+      sandboxId,
+      "--rm",
+      "-w",
+      "/workspace",
+      "-v",
+      `${workspacePath}:/workspace`,
+      ...await this.buildSharedMountArgs(),
+      "--entrypoint",
+      "sh",
+      image,
+      "-lc",
+      "trap 'exit 0' TERM INT; while true; do sleep 3600; done",
+    ];
+    return runProcess("docker", args, {
+      cwd: workspacePath,
+      env: process.env,
+      timeoutMs: 30_000,
+    });
+  }
+
+  private async inspectContainerState(handle: RunEnvironmentHandle): Promise<"running" | "paused" | "missing" | "other"> {
+    try {
+      const result = await runProcess(
+        "docker",
+        ["inspect", "-f", "{{.State.Status}}", handle.sandbox_id],
+        {
+          cwd: handle.workspace_path,
+          env: process.env,
+          timeoutMs: 30_000,
+        }
+      );
+      const state = result.stdout.trim().toLowerCase();
+      if (state === "running") return "running";
+      if (state === "paused") {
+        await this.runDockerCommand(["unpause", handle.sandbox_id], handle.workspace_path);
+        return "running";
+      }
+      return "other";
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/No such object|No such container|Error: No such/i.test(message)) {
+        return "missing";
+      }
+      throw error;
+    }
   }
 
   private async runDockerCommand(args: string[], cwd: string): Promise<void> {

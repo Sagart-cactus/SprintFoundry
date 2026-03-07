@@ -414,6 +414,7 @@ export class OrchestrationService {
       throw new Error(`Run ${runId} has no execution plan to resume.`);
     }
 
+    this.markInterruptedStepsForResume(run);
     await this.events.initialize(workspacePath);
 
     const resumeFromStep = this.resolveResumeStep(run, plan, options?.step);
@@ -2087,7 +2088,15 @@ export class OrchestrationService {
     if (!plan) return null;
 
     const stepExecutions: StepExecution[] = [];
+    let recoveredRunEnvironment: RunEnvironmentHandle | null = null;
     for (const event of events) {
+      if (
+        event.event_type === "sandbox.created" ||
+        event.event_type === "sandbox.resumed"
+      ) {
+        recoveredRunEnvironment = this.rebuildRunEnvironmentFromEvent(session, event, recoveredRunEnvironment);
+      }
+
       if (event.event_type === "step.started") {
         const stepNum = Number(event.data.step ?? 0);
         const agent = String(event.data.agent ?? "unknown");
@@ -2143,6 +2152,11 @@ export class OrchestrationService {
       validated_plan: plan,
       status: session.status,
       steps: stepExecutions,
+      sandbox_id: recoveredRunEnvironment?.sandbox_id,
+      execution_backend: recoveredRunEnvironment?.execution_backend,
+      workspace_volume_ref: recoveredRunEnvironment?.workspace_volume_ref,
+      checkpoint_generation: recoveredRunEnvironment?.checkpoint_generation,
+      run_environment: recoveredRunEnvironment,
       total_tokens_used: session.total_tokens,
       total_cost_usd: session.total_cost_usd,
       created_at: new Date(session.created_at),
@@ -2150,6 +2164,59 @@ export class OrchestrationService {
       completed_at: session.completed_at ? new Date(session.completed_at) : null,
       pr_url: session.pr_url,
       error: session.error,
+    };
+  }
+
+  private markInterruptedStepsForResume(run: TaskRun): void {
+    for (const step of run.steps) {
+      if (step.status !== "running") continue;
+      step.status = "failed";
+      step.completed_at = step.completed_at ?? new Date();
+      step.result = step.result ?? {
+        status: "failed",
+        summary: "Step interrupted before resume",
+        artifacts_created: [],
+        artifacts_modified: [],
+        issues: ["Run resumed after interruption; step marked failed for explicit replay."],
+        metadata: {
+          interrupted: true,
+        },
+      };
+    }
+  }
+
+  private rebuildRunEnvironmentFromEvent(
+    session: RunSessionMetadata,
+    event: TaskEvent,
+    previous: RunEnvironmentHandle | null
+  ): RunEnvironmentHandle {
+    return {
+      run_id: session.run_id,
+      project_id: session.project_id,
+      tenant_id: typeof event.data.tenant_id === "string" ? event.data.tenant_id : previous?.tenant_id,
+      sandbox_id: String(event.data.sandbox_id ?? previous?.sandbox_id ?? ""),
+      execution_backend: String(event.data.execution_backend ?? previous?.execution_backend ?? "local"),
+      workspace_path: session.workspace_path ?? previous?.workspace_path ?? "",
+      workspace_volume_ref:
+        typeof event.data.workspace_volume_ref === "string"
+          ? event.data.workspace_volume_ref
+          : previous?.workspace_volume_ref,
+      network_profile:
+        typeof event.data.network_profile === "string"
+          ? event.data.network_profile
+          : previous?.network_profile,
+      isolation_level:
+        typeof event.data.isolation_level === "string"
+          ? (event.data.isolation_level as RunEnvironmentHandle["isolation_level"])
+          : previous?.isolation_level,
+      checkpoint_generation:
+        typeof event.data.checkpoint_generation === "number"
+          ? event.data.checkpoint_generation
+          : previous?.checkpoint_generation ?? 0,
+      metadata: {
+        ...(previous?.metadata ?? {}),
+        recovered_from_events: true,
+      },
     };
   }
 
