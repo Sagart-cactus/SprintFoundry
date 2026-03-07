@@ -58,6 +58,11 @@ describe("KubernetesPodExecutionBackend", () => {
               cidr_allowlist: [],
             },
           },
+          pod_resources: {
+            requests: { cpu: "750m", memory: "2Gi" },
+            limits: { cpu: "3", memory: "6Gi" },
+          },
+          quota_scope: "tenant-a-build",
         },
       }),
       makeProjectConfig(),
@@ -134,6 +139,13 @@ describe("KubernetesPodExecutionBackend", () => {
         },
       },
     });
+    expect(handle.metadata).toMatchObject({
+      resource_policy: {
+        requests: { cpu: "750m", memory: "2Gi" },
+        limits: { cpu: "3", memory: "6Gi" },
+      },
+      quota_scope: "tenant-a-build",
+    });
     expect(manifest.spec.containers[0].env).toEqual([
       { name: "SPRINTFOUNDRY_SECRET_PROFILE", value: "github-only" },
       { name: "SPRINTFOUNDRY_ISOLATION_LEVEL", value: "hardened_isolated" },
@@ -144,6 +156,10 @@ describe("KubernetesPodExecutionBackend", () => {
       capabilities: {
         drop: ["ALL"],
       },
+    });
+    expect(manifest.spec.containers[0].resources).toEqual({
+      requests: { cpu: "750m", memory: "2Gi" },
+      limits: { cpu: "3", memory: "6Gi" },
     });
     expect(egressPolicy).toMatchObject({
       apiVersion: "cilium.io/v2",

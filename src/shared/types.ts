@@ -113,6 +113,11 @@ export interface ContainerResources {
   network?: string;  // default: "bridge"
 }
 
+export interface ResourceQuantityPair {
+  cpu?: string;
+  memory?: string;
+}
+
 export type RuntimeProvider = "claude-code" | "codex";
 export type RuntimeMode = "local_process" | "local_sdk" | "container" | "remote";
 
@@ -246,6 +251,11 @@ export interface PlatformConfig {
       cidr_allowlist?: string[];
     }>;
     policy_prerequisites?: string[];
+    pod_resources?: {
+      requests?: ResourceQuantityPair;
+      limits?: ResourceQuantityPair;
+    };
+    quota_scope?: string;
   };
 }
 

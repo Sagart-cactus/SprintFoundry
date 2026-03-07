@@ -114,6 +114,8 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
         pvc_name: pvcName,
         service_account_name: serviceAccountName,
         egress_policy_name: egressPolicy ? this.buildEgressPolicyName(sandboxId) : undefined,
+        resource_policy: this.resolvePodResources(),
+        quota_scope: this.platformConfig.k8s?.quota_scope,
       },
     };
   }
@@ -487,6 +489,7 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
                 drop: ["ALL"],
               },
             },
+            resources: this.resolvePodResources(),
             volumeMounts: [
               { name: "workspace", mountPath: "/workspace" },
               ...(projectedSecrets.length > 0
@@ -772,5 +775,23 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
       default:
         return undefined;
     }
+  }
+
+  private resolvePodResources(): {
+    requests: { cpu: string; memory: string };
+    limits: { cpu: string; memory: string };
+  } {
+    const requests = this.platformConfig.k8s?.pod_resources?.requests ?? {};
+    const limits = this.platformConfig.k8s?.pod_resources?.limits ?? {};
+    return {
+      requests: {
+        cpu: requests.cpu?.trim() || "500m",
+        memory: requests.memory?.trim() || "1Gi",
+      },
+      limits: {
+        cpu: limits.cpu?.trim() || "2",
+        memory: limits.memory?.trim() || "4Gi",
+      },
+    };
   }
 }

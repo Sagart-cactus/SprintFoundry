@@ -65,7 +65,7 @@ describe("ArtifactUploader", () => {
     expect(fakeS3.uploads).toHaveLength(0);
   });
 
-  it("uploads step-results, runtime logs, and artifacts to runs/{run_id}/", async () => {
+  it("uploads step-results, runtime logs, and artifacts to tenant/project/run prefixes", async () => {
     const workspace = createWorkspaceFixture();
     const fakeS3 = new FakeS3Client();
 
@@ -75,7 +75,10 @@ describe("ArtifactUploader", () => {
       commandFactory: (input) => ({ input }),
     });
 
-    const summary = await uploader.uploadRunArtifacts("run-xyz", workspace);
+    const summary = await uploader.uploadRunArtifacts(
+      { run_id: "run-xyz", project_id: "project-a", tenant_id: "tenant-1" },
+      workspace
+    );
 
     expect(summary.skipped).toBe(false);
     expect(summary.bucket).toBe("sf-artifacts");
@@ -84,9 +87,9 @@ describe("ArtifactUploader", () => {
 
     const keys = fakeS3.uploads.map((entry) => entry.input.Key).sort();
     expect(keys).toEqual([
-      "runs/run-xyz/artifacts/reports/summary.txt",
-      "runs/run-xyz/runtime-logs/.codex-runtime.stdout.log",
-      "runs/run-xyz/step-results/step-1.attempt-1.qa.json",
+      "tenants/tenant-1/projects/project-a/runs/run-xyz/artifacts/reports/summary.txt",
+      "tenants/tenant-1/projects/project-a/runs/run-xyz/runtime-logs/.codex-runtime.stdout.log",
+      "tenants/tenant-1/projects/project-a/runs/run-xyz/step-results/step-1.attempt-1.qa.json",
     ]);
 
     for (const upload of fakeS3.uploads) {
@@ -97,7 +100,7 @@ describe("ArtifactUploader", () => {
 
   it("logs warnings and continues when individual uploads fail", async () => {
     const workspace = createWorkspaceFixture();
-    const failingKey = "runs/run-fail/step-results/step-1.attempt-1.qa.json";
+    const failingKey = "tenants/shared/projects/unknown-project/runs/run-fail/step-results/step-1.attempt-1.qa.json";
     const fakeS3 = new FakeS3Client(new Set([failingKey]));
     const warn = vi.fn<(message?: unknown) => void>();
 
@@ -114,5 +117,20 @@ describe("ArtifactUploader", () => {
     expect(summary.uploaded).toBe(2);
     expect(warn).toHaveBeenCalled();
     expect(fakeS3.uploads).toHaveLength(2);
+  });
+
+  it("falls back to shared tenant and unknown project when identity is partial", async () => {
+    const workspace = createWorkspaceFixture();
+    const fakeS3 = new FakeS3Client();
+
+    const uploader = new ArtifactUploader({
+      bucket: "sf-artifacts",
+      s3Client: fakeS3,
+      commandFactory: (input) => ({ input }),
+    });
+
+    const summary = await uploader.uploadRunArtifacts({ run_id: "run-2" }, workspace);
+
+    expect(summary.prefix).toBe("tenants/shared/projects/unknown-project/runs/run-2");
   });
 });

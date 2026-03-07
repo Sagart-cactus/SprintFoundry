@@ -160,6 +160,14 @@ k8s:
       cidr_allowlist: []
   policy_prerequisites:
     - Cilium CNI with CiliumNetworkPolicy FQDN enforcement enabled
+  pod_resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+  quota_scope: shared-namespace-admin-managed
     developer: [detect-project-type, code-quality, error-handling, performance-review]
     go-developer: [code-quality, error-handling, performance-review]
     qa: [detect-project-type, testing-standards]
