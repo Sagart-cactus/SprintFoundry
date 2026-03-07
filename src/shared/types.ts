@@ -505,6 +505,9 @@ export interface HumanReview {
 // ----- Events (audit log) -----
 
 export type EventType =
+  | "sandbox.created"
+  | "sandbox.resumed"
+  | "sandbox.destroyed"
   | "task.created"
   | "task.plan_generated"
   | "task.plan_validated"
