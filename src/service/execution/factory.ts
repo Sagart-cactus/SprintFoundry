@@ -1,5 +1,6 @@
 import type { ExecutionBackendName, PlatformConfig, ProjectConfig } from "../../shared/types.js";
 import type { ExecutionBackend } from "./backend.js";
+import { DockerExecutionBackend } from "./docker-backend.js";
 import { LocalExecutionBackend } from "./local-backend.js";
 
 const EXECUTION_BACKEND_ENV = "SPRINTFOUNDRY_EXECUTION_BACKEND";
@@ -36,7 +37,7 @@ export function createExecutionBackend(
     case "local":
       return new LocalExecutionBackend();
     case "docker":
-      throw new Error("Execution backend 'docker' is configured but not implemented yet. Complete issue #007 first.");
+      return new DockerExecutionBackend(platformConfig, projectConfig);
     case "k8s-pod":
       throw new Error("Execution backend 'k8s-pod' is configured but not implemented yet. Complete issue #008 first.");
     case "agent-sandbox":

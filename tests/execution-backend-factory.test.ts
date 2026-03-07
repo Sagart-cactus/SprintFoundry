@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createExecutionBackend,
+  DockerExecutionBackend,
   LocalExecutionBackend,
   resolveExecutionBackendName,
 } from "../src/service/execution/index.js";
@@ -39,12 +40,12 @@ describe("execution backend factory", () => {
     expect(resolveExecutionBackendName(platform, project, env)).toBe("local");
   });
 
-  it("fails fast for configured backends that are not implemented yet", () => {
+  it("constructs the docker backend when configured", () => {
     const platform = makePlatformConfig();
     const project = makeProjectConfig({ execution_backend_override: "docker" });
 
-    expect(() => createExecutionBackend(platform, project, {} as NodeJS.ProcessEnv)).toThrow(
-      /not implemented yet/
+    expect(createExecutionBackend(platform, project, {} as NodeJS.ProcessEnv)).toBeInstanceOf(
+      DockerExecutionBackend
     );
   });
 });

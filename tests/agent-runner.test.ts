@@ -421,8 +421,15 @@ describe("AgentRunner", () => {
   });
 
   it("run rejects when docker exits with non-zero code", async () => {
-    const proc = makeFakeProcess("container error", 2);
-    (mockSpawn as any).mockReturnValueOnce(proc);
+    const backend: ExecutionBackend = {
+      prepareRunEnvironment: vi.fn(),
+      executeStep: vi.fn().mockRejectedValue(
+        new Error("Agent container developer exited with code 2")
+      ),
+      pauseRun: vi.fn(),
+      resumeRun: vi.fn(),
+      teardownRun: vi.fn(),
+    };
 
     const runner = new AgentRunner(
       makePlatformConfig(),
@@ -430,7 +437,8 @@ describe("AgentRunner", () => {
         runtime_overrides: {
           developer: { provider: "claude-code", mode: "container" },
         },
-      })
+      }),
+      backend
     );
     (runner as any).prepareWorkspace = vi.fn().mockResolvedValue(undefined);
 
