@@ -133,6 +133,33 @@ k8s:
     standard_isolated: ""
     hardened_isolated: gvisor
     strong_isolated: kata
+  network_policy_provider: cilium-fqdn
+  default_network_profile: github-plus-registries
+  network_profiles:
+    internal-only:
+      allow_internet: false
+      fqdn_allowlist: []
+      cidr_allowlist: []
+    github-only:
+      allow_internet: false
+      fqdn_allowlist:
+        - github.com
+        - api.github.com
+      cidr_allowlist: []
+    github-plus-registries:
+      allow_internet: false
+      fqdn_allowlist:
+        - github.com
+        - api.github.com
+        - registry.npmjs.org
+        - ghcr.io
+      cidr_allowlist: []
+    full-internet:
+      allow_internet: true
+      fqdn_allowlist: []
+      cidr_allowlist: []
+  policy_prerequisites:
+    - Cilium CNI with CiliumNetworkPolicy FQDN enforcement enabled
     developer: [detect-project-type, code-quality, error-handling, performance-review]
     go-developer: [code-quality, error-handling, performance-review]
     qa: [detect-project-type, testing-standards]
