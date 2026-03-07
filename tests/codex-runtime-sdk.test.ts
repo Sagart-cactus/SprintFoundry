@@ -826,8 +826,8 @@ describe("CodexRuntime local_process mode (unchanged behavior)", () => {
 
     const args = vi.mocked(runProcess).mock.calls[0][1] as string[];
     expect(args[0]).toBe("exec");
-    expect(args[1]).toContain("Primary task: Process mode task contract");
-    expect(args[1]).toContain("Read .agent-task.md and AGENTS.md");
+    expect(args.some((a) => a.includes("Primary task: Process mode task contract"))).toBe(true);
+    expect(args.some((a) => a.includes("Read .agent-task.md and AGENTS.md"))).toBe(true);
   });
 
   it("uses CLI resume path in local_process mode when resumeSessionId is present", async () => {
@@ -841,8 +841,8 @@ describe("CodexRuntime local_process mode (unchanged behavior)", () => {
 
     const args = vi.mocked(runProcess).mock.calls[0][1] as string[];
     expect(args[0]).toBe("exec");
-    expect(args[1]).toBe("resume");
-    expect(args[2]).toBe("process-session-123");
+    expect(args[2]).toBe("resume");
+    expect(args[3]).toBe("process-session-123");
   });
 
   it("falls back to one fresh local_process run when resume command fails with invalid session", async () => {
@@ -866,7 +866,7 @@ describe("CodexRuntime local_process mode (unchanged behavior)", () => {
     expect(vi.mocked(runProcess)).toHaveBeenCalledTimes(2);
     const resumeArgs = vi.mocked(runProcess).mock.calls[0][1] as string[];
     const fallbackArgs = vi.mocked(runProcess).mock.calls[1][1] as string[];
-    expect(resumeArgs.slice(0, 3)).toEqual(["exec", "resume", "process-session-999"]);
+    expect(resumeArgs.slice(0, 4)).toEqual(["exec", "--skip-git-repo-check", "resume", "process-session-999"]);
     expect(fallbackArgs[0]).toBe("exec");
     expect(fallbackArgs[1]).not.toBe("resume");
     expect(result.runtime_id).toBe("local-codex-process-fresh-1");

@@ -6,6 +6,18 @@ import { SessionManager } from "../src/service/session-manager.js";
 import type { TaskRun, RunSessionMetadata } from "../src/shared/types.js";
 import type { EventSinkClient } from "../src/service/event-sink-client.js";
 
+// ESM modules are non-configurable, so vi.spyOn cannot be used on them.
+// We mock the module here to make writeFile interceptable per-test.
+vi.mock("fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("fs/promises")>();
+  return {
+    ...actual,
+    writeFile: vi.fn((...args: Parameters<typeof actual.writeFile>) =>
+      (actual.writeFile as (...a: unknown[]) => Promise<void>)(...args)
+    ),
+  };
+});
+
 // ---------- Helpers ----------
 
 let testDir: string;
@@ -129,18 +141,18 @@ describe("SessionManager", () => {
     const sinkClient: Pick<EventSinkClient, "upsertRun"> = {
       upsertRun: vi.fn().mockResolvedValue(undefined),
     };
-    const readOnlyDir = path.join(testDir, "read-only");
-    await fs.mkdir(readOnlyDir, { recursive: true });
-    await fs.chmod(readOnlyDir, 0o500);
-    const mgr = new SessionManager(readOnlyDir, sinkClient);
+    const mgr = new SessionManager(testDir, sinkClient);
     const run = makeRun({ run_id: "run-write-failure" });
 
-    try {
-      await expect(mgr.persist(run)).rejects.toThrow();
-      expect(sinkClient.upsertRun).toHaveBeenCalledTimes(1);
-    } finally {
-      await fs.chmod(readOnlyDir, 0o700);
-    }
+    // Simulate a permission error on the first writeFile call (the session file write).
+    // vi.spyOn cannot be used on ESM modules; the vi.mock at the top makes writeFile
+    // interceptable via vi.mocked().
+    vi.mocked(fs.writeFile).mockRejectedValueOnce(
+      Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" })
+    );
+
+    await expect(mgr.persist(run)).rejects.toThrow();
+    expect(sinkClient.upsertRun).toHaveBeenCalledTimes(1);
   });
 
   it("updates an existing session on re-persist", async () => {

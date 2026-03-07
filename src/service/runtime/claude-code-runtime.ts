@@ -877,7 +877,10 @@ export class ClaudeCodeRuntime implements AgentRuntime {
 
     dockerArgs.push(image);
     const paths = this.buildLogPaths(config);
-    await this.writeDebugFiles(paths, {
+
+    // Initiate debug file write concurrently — do NOT await before spawning so
+    // that event listeners are attached synchronously with no async gap in between.
+    const debugWritePromise = this.writeDebugFiles(paths, {
       timestamp: new Date().toISOString(),
       step_number: config.stepNumber,
       step_attempt: config.stepAttempt,
@@ -904,14 +907,18 @@ export class ClaudeCodeRuntime implements AgentRuntime {
 
       const timeout = setTimeout(() => {
         spawn("docker", ["kill", containerName]);
-        void this.persistContainerLogs(paths, stdout, stderr).finally(() => {
+        void debugWritePromise.catch(() => {}).then(() =>
+          this.persistContainerLogs(paths, stdout, stderr)
+        ).finally(() => {
           reject(new Error(`Agent container ${config.agent} timed out`));
         });
       }, config.timeoutMinutes * 60 * 1000);
 
       proc.on("close", (code) => {
         clearTimeout(timeout);
-        void this.persistContainerLogs(paths, stdout, stderr).finally(() => {
+        void debugWritePromise.catch(() => {}).then(() =>
+          this.persistContainerLogs(paths, stdout, stderr)
+        ).finally(() => {
           if (code !== 0) {
             reject(new Error(`Agent container ${config.agent} exited with code ${code}`));
             return;
@@ -931,7 +938,9 @@ export class ClaudeCodeRuntime implements AgentRuntime {
 
       proc.on("error", (err) => {
         clearTimeout(timeout);
-        void this.persistContainerLogs(paths, stdout, stderr).finally(() => {
+        void debugWritePromise.catch(() => {}).then(() =>
+          this.persistContainerLogs(paths, stdout, stderr)
+        ).finally(() => {
           reject(err);
         });
       });

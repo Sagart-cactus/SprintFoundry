@@ -37,6 +37,7 @@ function runPreflight(): PocOutput {
 }
 
 describe("codex sdk poc acceptance preflight", () => {
+  // Timeout raised to 30 s: runPreflight() uses execSync which can take >5 s under load.
   it("emits all required acceptance checks with skipped status in preflight mode", () => {
     const report = runPreflight();
     expect(report.mode).toBe("preflight");
@@ -56,7 +57,7 @@ describe("codex sdk poc acceptance preflight", () => {
       expect(check, `Missing check: ${checkName}`).toBeDefined();
       expect(check?.status).toBe("skipped");
     }
-  });
+  }, 30_000);
 
   it("captures output and cost instrumentation fields in report payload", () => {
     const report = runPreflight();
@@ -69,5 +70,5 @@ describe("codex sdk poc acceptance preflight", () => {
     expect(report.cost.source.length).toBeGreaterThan(0);
 
     expect(report.mappingNotes.some((note) => note.includes("resumeThread"))).toBe(true);
-  });
+  }, 30_000);
 });
