@@ -173,6 +173,7 @@ export interface SkillDefinition {
 }
 
 export type CodexSkillDefinition = SkillDefinition;
+export type ExecutionBackendName = "local" | "docker" | "k8s-pod" | "agent-sandbox";
 
 export type SkillSource =
   | {
@@ -197,6 +198,7 @@ export interface SkillGuardrails {
 }
 
 export interface PlatformConfig {
+  execution_backend?: ExecutionBackendName;
   defaults: {
     model_per_agent: Record<string, ModelConfig>;
     budgets: BudgetConfig;
@@ -225,6 +227,10 @@ export interface PlatformConfig {
     strategy?: "tmpdir" | "worktree";
     base_repo_dir?: string;
   };
+  k8s?: {
+    enabled?: boolean;
+    namespace?: string;
+  };
 }
 
 export interface ProjectConfig {
@@ -239,6 +245,7 @@ export interface ProjectConfig {
   branch_strategy: BranchStrategy;
   stack?: string;       // e.g. "js", "go", "python"
   agents?: string[];    // agent IDs this project uses (filters the catalog)
+  execution_backend_override?: ExecutionBackendName;
   runtime_overrides?: Partial<Record<string, RuntimeConfig>>;
   planner_runtime_override?: RuntimeConfig;
   workspace?: {
