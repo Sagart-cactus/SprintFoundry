@@ -9,4 +9,5 @@ export {
   createExecutionBackend,
   resolveExecutionBackendName,
 } from "./factory.js";
+export { DockerExecutionBackend } from "./docker-backend.js";
 export { LocalExecutionBackend } from "./local-backend.js";
