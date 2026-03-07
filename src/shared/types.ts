@@ -412,13 +412,44 @@ export type StepStatus =
   | "needs_rework"
   | "skipped";
 
+export type IsolationLevel =
+  | "standard_isolated"
+  | "hardened_isolated"
+  | "strong_isolated";
+
+export interface RunEnvironmentRecord {
+  run_id: string;
+  project_id: string;
+  tenant_id?: string;
+  sandbox_id: string;
+  execution_backend: ExecutionBackendName | string;
+  workspace_path: string;
+  workspace_volume_ref?: string;
+  network_profile?: string;
+  secret_profile?: string;
+  isolation_level?: IsolationLevel;
+  resume_token?: string;
+  checkpoint_generation: number;
+  metadata: Record<string, unknown>;
+}
+
 export interface TaskRun {
   run_id: string;
   project_id: string;
+  tenant_id?: string;
   ticket: TicketDetails;
   plan: ExecutionPlan | null;
   validated_plan: ExecutionPlan | null; // plan after service validation
   status: RunStatus;
+  sandbox_id?: string;
+  execution_backend?: ExecutionBackendName | string;
+  workspace_volume_ref?: string;
+  network_profile?: string;
+  secret_profile?: string;
+  isolation_level?: IsolationLevel;
+  resume_token?: string;
+  checkpoint_generation?: number;
+  run_environment?: RunEnvironmentRecord | null;
   steps: StepExecution[];
   total_tokens_used: number;
   total_cost_usd: number;
@@ -434,6 +465,9 @@ export interface StepExecution {
   agent: AgentType;
   task?: string;
   status: StepStatus;
+  sandbox_id?: string;
+  execution_backend?: ExecutionBackendName | string;
+  attempted_with_resume?: boolean;
   container_id: string | null;
   tokens_used: number;
   cost_usd: number;
