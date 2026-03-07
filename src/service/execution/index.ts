@@ -10,4 +10,5 @@ export {
   resolveExecutionBackendName,
 } from "./factory.js";
 export { DockerExecutionBackend } from "./docker-backend.js";
+export { KubernetesPodExecutionBackend } from "./k8s-pod-backend.js";
 export { LocalExecutionBackend } from "./local-backend.js";

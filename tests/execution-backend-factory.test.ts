@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createExecutionBackend,
   DockerExecutionBackend,
+  KubernetesPodExecutionBackend,
   LocalExecutionBackend,
   resolveExecutionBackendName,
 } from "../src/service/execution/index.js";
@@ -46,6 +47,15 @@ describe("execution backend factory", () => {
 
     expect(createExecutionBackend(platform, project, {} as NodeJS.ProcessEnv)).toBeInstanceOf(
       DockerExecutionBackend
+    );
+  });
+
+  it("constructs the k8s pod backend when configured", () => {
+    const platform = makePlatformConfig();
+    const project = makeProjectConfig({ execution_backend_override: "k8s-pod" });
+
+    expect(createExecutionBackend(platform, project, {} as NodeJS.ProcessEnv)).toBeInstanceOf(
+      KubernetesPodExecutionBackend
     );
   });
 });
