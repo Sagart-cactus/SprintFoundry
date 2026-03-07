@@ -19,6 +19,7 @@ const require = createRequire(import.meta.url);
 interface K8sPodClient {
   createServiceAccount(namespace: string, manifest: Record<string, unknown>): Promise<void>;
   createPvc(namespace: string, manifest: Record<string, unknown>): Promise<void>;
+  createEgressPolicy(namespace: string, manifest: Record<string, unknown>): Promise<void>;
   createPod(namespace: string, manifest: Record<string, unknown>): Promise<void>;
   waitForPodReady(namespace: string, podName: string): Promise<void>;
   getPod(namespace: string, podName: string): Promise<Record<string, unknown> | null>;
@@ -32,6 +33,7 @@ interface K8sPodClient {
   deletePod(namespace: string, podName: string): Promise<void>;
   deletePvc(namespace: string, pvcName: string): Promise<void>;
   deleteServiceAccount(namespace: string, serviceAccountName: string): Promise<void>;
+  deleteEgressPolicy(namespace: string, policyName: string): Promise<void>;
 }
 
 export class KubernetesPodExecutionBackend implements ExecutionBackend {
@@ -61,11 +63,13 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
     const image = this.resolveSandboxImage(plan);
     const serviceAccountName = this.buildServiceAccountName(run.run_id);
     const secretProfile = run.secret_profile ?? this.platformConfig.k8s?.default_secret_profile ?? "default";
+    const networkProfile = run.network_profile ?? this.platformConfig.k8s?.default_network_profile ?? "full-internet";
     const isolationLevel = run.isolation_level
       ?? this.platformConfig.k8s?.default_isolation_level
       ?? "hardened_isolated";
     const serviceAccountManifest = this.buildServiceAccountManifest(serviceAccountName);
     const pvcManifest = this.buildWorkspacePvcManifest(run, pvcName);
+    const egressPolicy = this.buildEgressPolicyManifest(run, sandboxId, networkProfile);
     const manifest = await this.buildPodManifest(
       run,
       sandboxId,
@@ -79,9 +83,13 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
     await this.client.createServiceAccount(this.namespace, serviceAccountManifest);
     await this.client.createPvc(this.namespace, pvcManifest);
     try {
+      if (egressPolicy) {
+        await this.client.createEgressPolicy(this.namespace, egressPolicy);
+      }
       await this.client.createPod(this.namespace, manifest);
       await this.client.waitForPodReady(this.namespace, sandboxId);
     } catch (error) {
+      await this.safeDeleteEgressPolicy(this.buildEgressPolicyName(sandboxId));
       await this.safeDeleteServiceAccount(serviceAccountName);
       await this.safeDeletePvc(pvcName);
       throw error;
@@ -95,6 +103,7 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
       execution_backend: "k8s-pod",
       workspace_path: workspacePath,
       workspace_volume_ref: pvcName,
+      network_profile: networkProfile,
       secret_profile: secretProfile,
       isolation_level: isolationLevel,
       checkpoint_generation: 0,
@@ -104,6 +113,7 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
         pod_name: sandboxId,
         pvc_name: pvcName,
         service_account_name: serviceAccountName,
+        egress_policy_name: egressPolicy ? this.buildEgressPolicyName(sandboxId) : undefined,
       },
     };
   }
@@ -193,6 +203,7 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
         run_id: handle.run_id,
         project_id: handle.project_id,
         tenant_id: handle.tenant_id,
+        network_profile: handle.network_profile,
         secret_profile: handle.secret_profile,
         isolation_level: handle.isolation_level,
       } as TaskRun,
@@ -205,6 +216,19 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
         ?? this.platformConfig.k8s?.default_isolation_level
         ?? "hardened_isolated"
     );
+    const egressPolicy = this.buildEgressPolicyManifest(
+      {
+        run_id: handle.run_id,
+        project_id: handle.project_id,
+        tenant_id: handle.tenant_id,
+        network_profile: handle.network_profile,
+      } as TaskRun,
+      handle.sandbox_id,
+      handle.network_profile ?? this.platformConfig.k8s?.default_network_profile ?? "full-internet"
+    );
+    if (egressPolicy) {
+      await this.client.createEgressPolicy(this.namespace, egressPolicy);
+    }
     await this.client.createPod(this.namespace, manifest);
     await this.client.waitForPodReady(this.namespace, handle.sandbox_id);
     return {
@@ -224,6 +248,10 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
     await this.client.deletePod(this.namespace, handle.sandbox_id);
     if (handle.workspace_volume_ref) {
       await this.safeDeletePvc(handle.workspace_volume_ref);
+    }
+    const egressPolicyName = String(handle.metadata["egress_policy_name"] ?? "");
+    if (egressPolicyName) {
+      await this.safeDeleteEgressPolicy(egressPolicyName);
     }
     const serviceAccountName = String(handle.metadata["service_account_name"] ?? "");
     if (serviceAccountName) {
@@ -252,6 +280,16 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
       },
       createPvc: async (namespace, manifest) => {
         await coreApi.createNamespacedPersistentVolumeClaim({ namespace, body: manifest });
+      },
+      createEgressPolicy: async (namespace, manifest) => {
+        const customObjectsApi = kc.makeApiClient(k8sModule.CustomObjectsApi);
+        await customObjectsApi.createNamespacedCustomObject({
+          group: "cilium.io",
+          version: "v2",
+          namespace,
+          plural: "ciliumnetworkpolicies",
+          body: manifest,
+        });
       },
       createPod: async (namespace, manifest) => {
         await coreApi.createNamespacedPod({ namespace, body: manifest });
@@ -344,6 +382,22 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
       deleteServiceAccount: async (namespace, serviceAccountName) => {
         try {
           await coreApi.deleteNamespacedServiceAccount({ name: serviceAccountName, namespace });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (/NotFound|404/i.test(message)) return;
+          throw error;
+        }
+      },
+      deleteEgressPolicy: async (namespace, policyName) => {
+        try {
+          const customObjectsApi = kc.makeApiClient(k8sModule.CustomObjectsApi);
+          await customObjectsApi.deleteNamespacedCustomObject({
+            group: "cilium.io",
+            version: "v2",
+            namespace,
+            plural: "ciliumnetworkpolicies",
+            name: policyName,
+          });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           if (/NotFound|404/i.test(message)) return;
@@ -585,6 +639,10 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
     return `sf-sa-${normalized}`.slice(0, 63);
   }
 
+  private buildEgressPolicyName(sandboxId: string): string {
+    return `${sandboxId}-egress`.slice(0, 63);
+  }
+
   private shellEscape(value: string): string {
     return `'${value.replace(/'/g, `'\"'\"'`)}'`;
   }
@@ -609,6 +667,15 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
     }
   }
 
+  private async safeDeleteEgressPolicy(policyName: string): Promise<void> {
+    try {
+      await this.client.deleteEgressPolicy(this.namespace, policyName);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[execution-backend] Failed to delete egress policy ${policyName}: ${message}`);
+    }
+  }
+
   private readPodPhase(pod: Record<string, unknown>): string {
     const status = pod["status"];
     if (!status || typeof status !== "object") return "";
@@ -630,6 +697,63 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
   private resolveProjectedSecrets(secretProfile: string): string[] {
     const profiles = this.platformConfig.k8s?.secret_profiles ?? {};
     return profiles[secretProfile] ?? [];
+  }
+
+  private buildEgressPolicyManifest(
+    run: TaskRun,
+    sandboxId: string,
+    networkProfile: string
+  ): Record<string, unknown> | null {
+    const provider = this.platformConfig.k8s?.network_policy_provider ?? "none";
+    if (provider === "none") return null;
+    if (provider !== "cilium-fqdn") {
+      throw new Error(`Unsupported k8s network policy provider '${provider}'`);
+    }
+
+    const profile = this.platformConfig.k8s?.network_profiles?.[networkProfile];
+    if (!profile) {
+      throw new Error(`Unknown k8s network profile '${networkProfile}'`);
+    }
+
+    const egressRules: Record<string, unknown>[] = [];
+    if (profile.allow_internet) {
+      egressRules.push({
+        toEntities: ["world"],
+      });
+    }
+    if ((profile.fqdn_allowlist?.length ?? 0) > 0) {
+      egressRules.push({
+        toFQDNs: profile.fqdn_allowlist!.map((matchName) => ({ matchName })),
+      });
+    }
+    if ((profile.cidr_allowlist?.length ?? 0) > 0) {
+      egressRules.push({
+        toCIDRSet: profile.cidr_allowlist!.map((cidr) => ({ cidr })),
+      });
+    }
+
+    return {
+      apiVersion: "cilium.io/v2",
+      kind: "CiliumNetworkPolicy",
+      metadata: {
+        name: this.buildEgressPolicyName(sandboxId),
+        namespace: this.namespace,
+        labels: {
+          "app.kubernetes.io/name": "sprintfoundry-run-egress",
+          "sprintfoundry.io/project-id": run.project_id,
+          "sprintfoundry.io/run-id": run.run_id,
+          ...(run.tenant_id ? { "sprintfoundry.io/tenant-id": run.tenant_id } : {}),
+        },
+      },
+      spec: {
+        endpointSelector: {
+          matchLabels: {
+            "sprintfoundry.io/run-id": run.run_id,
+          },
+        },
+        egress: egressRules,
+      },
+    };
   }
 
   private resolveRuntimeClassName(

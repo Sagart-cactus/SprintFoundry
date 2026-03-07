@@ -238,6 +238,14 @@ export interface PlatformConfig {
     secret_profiles?: Record<string, string[]>;
     default_isolation_level?: IsolationLevel;
     runtime_class_per_isolation?: Partial<Record<IsolationLevel, string>>;
+    network_policy_provider?: "none" | "cilium-fqdn";
+    default_network_profile?: string;
+    network_profiles?: Record<string, {
+      allow_internet?: boolean;
+      fqdn_allowlist?: string[];
+      cidr_allowlist?: string[];
+    }>;
+    policy_prerequisites?: string[];
   };
 }
 

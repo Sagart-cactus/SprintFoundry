@@ -7,6 +7,7 @@ describe("KubernetesPodExecutionBackend", () => {
   const client = {
     createServiceAccount: vi.fn(),
     createPvc: vi.fn(),
+    createEgressPolicy: vi.fn(),
     createPod: vi.fn(),
     waitForPodReady: vi.fn(),
     getPod: vi.fn(),
@@ -15,6 +16,7 @@ describe("KubernetesPodExecutionBackend", () => {
     deletePod: vi.fn(),
     deletePvc: vi.fn(),
     deleteServiceAccount: vi.fn(),
+    deleteEgressPolicy: vi.fn(),
   };
 
   beforeEach(() => {
@@ -42,6 +44,20 @@ describe("KubernetesPodExecutionBackend", () => {
             hardened_isolated: "gvisor",
             strong_isolated: "kata",
           },
+          network_policy_provider: "cilium-fqdn",
+          default_network_profile: "github-plus-registries",
+          network_profiles: {
+            "github-only": {
+              allow_internet: false,
+              fqdn_allowlist: ["github.com", "api.github.com"],
+              cidr_allowlist: [],
+            },
+            "github-plus-registries": {
+              allow_internet: false,
+              fqdn_allowlist: ["github.com", "api.github.com", "ghcr.io"],
+              cidr_allowlist: [],
+            },
+          },
         },
       }),
       makeProjectConfig(),
@@ -53,6 +69,7 @@ describe("KubernetesPodExecutionBackend", () => {
         run_id: "Run 1",
         project_id: "project-1",
         tenant_id: "tenant-1",
+        network_profile: "github-only",
       } as any,
       makePlan({
         steps: [makeStep({ step_number: 1, agent: "developer", task: "Implement feature" })],
@@ -65,16 +82,19 @@ describe("KubernetesPodExecutionBackend", () => {
       execution_backend: "k8s-pod",
       workspace_path: "/tmp/workspace-run-1",
       workspace_volume_ref: "sf-pod-run-1-workspace",
+      network_profile: "github-only",
       secret_profile: "github-only",
       isolation_level: "hardened_isolated",
     });
 
     expect(client.createServiceAccount).toHaveBeenCalledTimes(1);
     expect(client.createPvc).toHaveBeenCalledTimes(1);
+    expect(client.createEgressPolicy).toHaveBeenCalledTimes(1);
     expect(client.createPod).toHaveBeenCalledTimes(1);
     expect(client.waitForPodReady).toHaveBeenCalledWith("tenant-a", "sf-pod-run-1");
     const serviceAccountManifest = client.createServiceAccount.mock.calls[0][1];
     const pvcManifest = client.createPvc.mock.calls[0][1];
+    const egressPolicy = client.createEgressPolicy.mock.calls[0][1];
     const manifest = client.createPod.mock.calls[0][1];
     expect(serviceAccountManifest).toMatchObject({
       metadata: {
@@ -125,6 +145,26 @@ describe("KubernetesPodExecutionBackend", () => {
         drop: ["ALL"],
       },
     });
+    expect(egressPolicy).toMatchObject({
+      apiVersion: "cilium.io/v2",
+      kind: "CiliumNetworkPolicy",
+      metadata: {
+        name: "sf-pod-run-1-egress",
+        namespace: "tenant-a",
+      },
+      spec: {
+        endpointSelector: {
+          matchLabels: {
+            "sprintfoundry.io/run-id": "Run 1",
+          },
+        },
+      },
+    });
+    expect(egressPolicy.spec.egress).toEqual([
+      {
+        toFQDNs: [{ matchName: "github.com" }, { matchName: "api.github.com" }],
+      },
+    ]);
     expect(manifest.spec.volumes).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -149,7 +189,20 @@ describe("KubernetesPodExecutionBackend", () => {
     });
 
     const backend = new KubernetesPodExecutionBackend(
-      makePlatformConfig({ k8s: { namespace: "tenant-a" } }),
+      makePlatformConfig({
+        k8s: {
+          namespace: "tenant-a",
+          network_policy_provider: "cilium-fqdn",
+          default_network_profile: "full-internet",
+          network_profiles: {
+            "full-internet": {
+              allow_internet: true,
+              fqdn_allowlist: [],
+              cidr_allowlist: [],
+            },
+          },
+        },
+      }),
       makeProjectConfig(),
       client
     );
@@ -215,11 +268,25 @@ describe("KubernetesPodExecutionBackend", () => {
     client.getPvc.mockResolvedValue({
       metadata: { name: "sf-pod-run-1-workspace" },
     });
+    client.createEgressPolicy.mockResolvedValue(undefined);
     client.createPod.mockResolvedValue(undefined);
     client.waitForPodReady.mockResolvedValue(undefined);
 
     const backend = new KubernetesPodExecutionBackend(
-      makePlatformConfig({ k8s: { namespace: "tenant-a" } }),
+      makePlatformConfig({
+        k8s: {
+          namespace: "tenant-a",
+          network_policy_provider: "cilium-fqdn",
+          default_network_profile: "full-internet",
+          network_profiles: {
+            "full-internet": {
+              allow_internet: true,
+              fqdn_allowlist: [],
+              cidr_allowlist: [],
+            },
+          },
+        },
+      }),
       makeProjectConfig(),
       client
     );
@@ -232,6 +299,7 @@ describe("KubernetesPodExecutionBackend", () => {
       workspace_path: "/tmp/workspace-run-1",
       workspace_volume_ref: "sf-pod-run-1-workspace",
       checkpoint_generation: 0,
+      network_profile: "full-internet",
       secret_profile: "default",
       isolation_level: "strong_isolated",
       metadata: {
@@ -247,6 +315,7 @@ describe("KubernetesPodExecutionBackend", () => {
       workspace_path: "/tmp/workspace-run-1",
       workspace_volume_ref: "sf-pod-run-1-workspace",
       checkpoint_generation: 1,
+      network_profile: "full-internet",
       secret_profile: "default",
       isolation_level: "strong_isolated",
       metadata: {
@@ -258,6 +327,7 @@ describe("KubernetesPodExecutionBackend", () => {
     expect(attached.checkpoint_generation).toBe(1);
     expect(attached.metadata).toMatchObject({ recovery_action: "reattached" });
     expect(client.createPod).toHaveBeenCalledTimes(1);
+    expect(client.createEgressPolicy).toHaveBeenCalledTimes(1);
     expect(recreated.checkpoint_generation).toBe(2);
     expect(recreated.metadata).toMatchObject({ recovery_action: "recreated" });
   });
@@ -266,6 +336,7 @@ describe("KubernetesPodExecutionBackend", () => {
     client.deletePod.mockResolvedValue(undefined);
     client.deletePvc.mockRejectedValue(new Error("storage api unavailable"));
     client.deleteServiceAccount.mockResolvedValue(undefined);
+    client.deleteEgressPolicy.mockResolvedValue(undefined);
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const backend = new KubernetesPodExecutionBackend(
@@ -282,9 +353,11 @@ describe("KubernetesPodExecutionBackend", () => {
         execution_backend: "k8s-pod",
         workspace_path: "/tmp/workspace-run-1",
         workspace_volume_ref: "sf-pod-run-1-workspace",
+        network_profile: "github-only",
         checkpoint_generation: 0,
         metadata: {
           service_account_name: "sf-sa-run-1",
+          egress_policy_name: "sf-pod-run-1-egress",
         },
       },
       "completed"
@@ -292,6 +365,7 @@ describe("KubernetesPodExecutionBackend", () => {
 
     expect(client.deletePod).toHaveBeenCalledWith("tenant-a", "sf-pod-run-1");
     expect(client.deletePvc).toHaveBeenCalledWith("tenant-a", "sf-pod-run-1-workspace");
+    expect(client.deleteEgressPolicy).toHaveBeenCalledWith("tenant-a", "sf-pod-run-1-egress");
     expect(client.deleteServiceAccount).toHaveBeenCalledWith("tenant-a", "sf-sa-run-1");
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining("Failed to delete PVC sf-pod-run-1-workspace")
