@@ -243,12 +243,44 @@ describe("OrchestrationService", () => {
     expect(mockAgentRunner.run).toHaveBeenCalledTimes(2);
     expect((backend.teardownRun as any).mock.calls[0][0].sandbox_id).toBe("sandbox-1");
     expect(run.status).toBe("completed");
+    expect(run.sandbox_id).toBe("sandbox-1");
+    expect(run.execution_backend).toBe("test");
 
     const runStatePath = path.join(workspacePath, ".sprintfoundry", "run-state.json");
     let persisted: any;
     await vi.waitFor(async () => {
       persisted = JSON.parse(await fs.readFile(runStatePath, "utf-8"));
       expect(persisted.run_environment?.sandbox_id).toBe("sandbox-1");
+    });
+
+    const storedEvents = ((service as any).events.store as any).mock.calls.map((c: any[]) => c[0]);
+    const sandboxCreated = storedEvents.find((event: any) => event.event_type === "sandbox.created");
+    const sandboxDestroyed = storedEvents.find((event: any) => event.event_type === "sandbox.destroyed");
+    const stepStarted = storedEvents.find(
+      (event: any) => event.event_type === "step.started" && event.data.step === 1
+    );
+    const stepCompleted = storedEvents.find(
+      (event: any) => event.event_type === "step.completed" && event.data.step === 1
+    );
+
+    expect(sandboxCreated?.data).toMatchObject({
+      sandbox_id: "sandbox-1",
+      execution_backend: "test",
+      checkpoint_generation: 0,
+      workspace_path: workspacePath,
+    });
+    expect(sandboxDestroyed?.data).toMatchObject({
+      sandbox_id: "sandbox-1",
+      execution_backend: "test",
+      reason: "completed",
+    });
+    expect(stepStarted?.data).toMatchObject({
+      sandbox_id: "sandbox-1",
+      execution_backend: "test",
+    });
+    expect(stepCompleted?.data).toMatchObject({
+      sandbox_id: "sandbox-1",
+      execution_backend: "test",
     });
   });
 
@@ -293,6 +325,16 @@ describe("OrchestrationService", () => {
     expect(backend.resumeRun).toHaveBeenCalledTimes(1);
     expect(prepared.checkpoint_generation).toBe(1);
     expect(run.run_environment?.metadata).toEqual({ resumed: true });
+    expect(run.sandbox_id).toBe("sandbox-existing");
+    expect(run.execution_backend).toBe("test");
+
+    const storedEvents = ((service as any).events.store as any).mock.calls.map((c: any[]) => c[0]);
+    const sandboxResumed = storedEvents.find((event: any) => event.event_type === "sandbox.resumed");
+    expect(sandboxResumed?.data).toMatchObject({
+      sandbox_id: "sandbox-existing",
+      execution_backend: "test",
+      checkpoint_generation: 1,
+    });
   });
 
   it("handleTask with source=prompt creates ticket from prompt text", async () => {
@@ -1221,6 +1263,8 @@ describe("OrchestrationService", () => {
     expect(failedEvent).toBeDefined();
     expect(failedEvent.data.error).toContain("Git checkpoint commit failed");
     expect(failedEvent.data.error).toContain("index.lock");
+    expect(failedEvent.data.sandbox_id).toBe(run.sandbox_id);
+    expect(failedEvent.data.execution_backend).toBe(run.execution_backend);
 
     // PR should NOT be created when run fails
     expect(mockGitManager.createPullRequest).not.toHaveBeenCalled();
@@ -1646,6 +1690,8 @@ describe("OrchestrationService", () => {
     expect(failed.data.resume_used).toBe(true);
     expect(failed.data.resume_failed).toBe(true);
     expect(failed.data.resume_fallback).toBe(false);
+    expect(failed.data.sandbox_id).toBe(run.sandbox_id);
+    expect(failed.data.execution_backend).toBe(run.execution_backend);
     expect(failed.data.runtime_metadata).toMatchObject({
       schema_version: 1,
       runtime: {
@@ -1738,6 +1784,8 @@ describe("OrchestrationService", () => {
     expect(failed.data.resume_used).toBe(true);
     expect(failed.data.resume_failed).toBe(true);
     expect(failed.data.resume_fallback).toBe(true);
+    expect(failed.data.sandbox_id).toBe(run.sandbox_id);
+    expect(failed.data.execution_backend).toBe(run.execution_backend);
     expect(failed.data.runtime_metadata).toMatchObject({
       schema_version: 1,
       runtime: {

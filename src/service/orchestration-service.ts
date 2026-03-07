@@ -429,6 +429,7 @@ export class OrchestrationService {
       resumed: true,
       resume_step: resumeFromStep,
       additional_prompt: Boolean(options?.prompt?.trim()),
+      ...this.buildSandboxEventData(run),
     });
     this.persistSession(run, { workspace_path: workspacePath });
 
@@ -446,7 +447,11 @@ export class OrchestrationService {
     } catch (error) {
       run.status = "failed";
       run.error = error instanceof Error ? error.message : String(error);
-      await this.emitEvent(run.run_id, "task.failed", { error: run.error, resumed: true });
+      await this.emitEvent(run.run_id, "task.failed", {
+        error: run.error,
+        resumed: true,
+        ...this.buildSandboxEventData(run),
+      });
       this.persistSession(run, { workspace_path: workspacePath });
       return run;
     } finally {
@@ -599,7 +604,10 @@ export class OrchestrationService {
     } catch (error) {
       run.status = "failed";
       run.error = error instanceof Error ? error.message : String(error);
-      await this.emitEvent(run.run_id, "task.failed", { error: run.error });
+      await this.emitEvent(run.run_id, "task.failed", {
+        error: run.error,
+        ...this.buildSandboxEventData(run),
+      });
       this.metricsService.recordRunCompleted({
         project_id: this.projectConfig.project_id,
         run_id: run.run_id,
@@ -944,6 +952,7 @@ export class OrchestrationService {
       await this.emitEvent(run.run_id, "task.completed", {
         total_tokens: run.total_tokens_used,
         total_cost: run.total_cost_usd,
+        ...this.buildSandboxEventData(run),
       });
       this.persistSession(run, { workspace_path: workspacePath });
     } finally {
@@ -1051,6 +1060,7 @@ export class OrchestrationService {
       task: effectiveTask,
       ...(operatorPrompt ? { operator_prompt: operatorPrompt } : {}),
       ...initialResumeTelemetry,
+      ...this.buildSandboxEventData(run),
       runtime_metadata: runtimeMetadata,
     });
     const stepStartMs = Date.now();
@@ -1200,6 +1210,9 @@ export class OrchestrationService {
         tokenSavings,
       });
       stepExec.runtime_metadata = runtimeMetadata;
+      stepExec.sandbox_id = run.sandbox_id;
+      stepExec.execution_backend = run.execution_backend;
+      stepExec.attempted_with_resume = Boolean(resumeSessionId);
 
       await this.recordRuntimeSession(
         workspacePath,
@@ -1241,6 +1254,7 @@ export class OrchestrationService {
             step: step.step_number,
             error: `Git checkpoint commit failed: ${message}`,
             ...finalResumeTelemetry,
+            ...this.buildSandboxEventData(run),
             ...(tokenSavings ? { token_savings: tokenSavings } : {}),
             runtime_metadata: runtimeMetadata,
           });
@@ -1256,6 +1270,7 @@ export class OrchestrationService {
           tokens: result.tokens_used,
           artifacts: result.agentResult.artifacts_created,
           ...finalResumeTelemetry,
+          ...this.buildSandboxEventData(run),
           ...(tokenSavings ? { token_savings: tokenSavings } : {}),
           runtime_metadata: runtimeMetadata,
         });
@@ -1341,6 +1356,7 @@ export class OrchestrationService {
             step: step.step_number,
             reason: "max_rework_exceeded",
             ...finalResumeTelemetry,
+            ...this.buildSandboxEventData(run),
             ...(tokenSavings ? { token_savings: tokenSavings } : {}),
             runtime_metadata: runtimeMetadata,
           });
@@ -1409,6 +1425,7 @@ export class OrchestrationService {
         reason: result.agentResult.status,
         issues: result.agentResult.issues,
         ...finalResumeTelemetry,
+        ...this.buildSandboxEventData(run),
         ...(tokenSavings ? { token_savings: tokenSavings } : {}),
         runtime_metadata: runtimeMetadata,
       });
@@ -1437,6 +1454,7 @@ export class OrchestrationService {
         step: step.step_number,
         error: error instanceof Error ? error.message : String(error),
         ...terminalResumeTelemetry,
+        ...this.buildSandboxEventData(run),
         ...(tokenSavings ? { token_savings: tokenSavings } : {}),
         runtime_metadata: runtimeMetadata,
       });
@@ -1890,6 +1908,17 @@ export class OrchestrationService {
       : await this.createRunEnvironment(run, plan, workspacePath);
 
     this.setRunEnvironment(run, prepared);
+    this.applyRunEnvironmentMetadata(run, prepared);
+    if (existing) {
+      await this.emitEvent(run.run_id, "sandbox.resumed", this.buildSandboxEventData(run, {
+        checkpoint_generation: prepared.checkpoint_generation,
+      }));
+    } else {
+      await this.emitEvent(run.run_id, "sandbox.created", this.buildSandboxEventData(run, {
+        workspace_path: prepared.workspace_path,
+        checkpoint_generation: prepared.checkpoint_generation,
+      }));
+    }
     this.persistSession(run, { workspace_path: workspacePath });
     return prepared;
   }
@@ -1930,6 +1959,9 @@ export class OrchestrationService {
         console.warn(`[execution-backend] Failed to teardown sandbox ${handle.sandbox_id}: ${message}`);
       }
     }
+    await this.emitEvent(run.run_id, "sandbox.destroyed", this.buildSandboxEventData(run, {
+      reason,
+    }));
     this.persistSession(run, { workspace_path: workspacePath });
   }
 
@@ -1942,6 +1974,33 @@ export class OrchestrationService {
       default:
         return "failed";
     }
+  }
+
+  private applyRunEnvironmentMetadata(run: TaskRun, handle: RunEnvironmentHandle): void {
+    run.sandbox_id = handle.sandbox_id;
+    run.execution_backend = handle.execution_backend;
+    run.workspace_volume_ref = handle.workspace_volume_ref;
+    run.network_profile = handle.network_profile;
+    run.secret_profile = handle.secret_profile;
+    run.isolation_level = handle.isolation_level;
+    run.resume_token = handle.resume_token;
+    run.checkpoint_generation = handle.checkpoint_generation;
+  }
+
+  private buildSandboxEventData(
+    run: TaskRun,
+    extra?: Record<string, unknown>
+  ): Record<string, unknown> {
+    const handle = this.getRunEnvironment(run);
+    return {
+      sandbox_id: handle?.sandbox_id ?? run.sandbox_id,
+      execution_backend: handle?.execution_backend ?? run.execution_backend,
+      tenant_id: run.tenant_id,
+      workspace_volume_ref: handle?.workspace_volume_ref ?? run.workspace_volume_ref,
+      network_profile: handle?.network_profile ?? run.network_profile,
+      isolation_level: handle?.isolation_level ?? run.isolation_level,
+      ...(extra ?? {}),
+    };
   }
 
   private async persistRunState(run: TaskRun, workspacePath: string): Promise<void> {
