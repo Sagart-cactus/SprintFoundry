@@ -431,6 +431,7 @@ describe("dispatch-controller", () => {
         "    webhook_secret: webhook-secret",
         "    allowed_events:",
         "      - issues.opened",
+        "    require_command: false",
         "rules: []",
         "",
       ].join("\n"),
