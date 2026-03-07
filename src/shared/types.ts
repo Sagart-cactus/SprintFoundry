@@ -236,6 +236,8 @@ export interface PlatformConfig {
     automount_service_account_token?: boolean;
     default_secret_profile?: string;
     secret_profiles?: Record<string, string[]>;
+    default_isolation_level?: IsolationLevel;
+    runtime_class_per_isolation?: Partial<Record<IsolationLevel, string>>;
   };
 }
 

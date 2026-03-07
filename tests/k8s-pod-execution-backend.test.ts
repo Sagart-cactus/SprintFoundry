@@ -37,6 +37,11 @@ describe("KubernetesPodExecutionBackend", () => {
           secret_profiles: {
             "github-only": ["tenant-a-github-token"],
           },
+          default_isolation_level: "hardened_isolated",
+          runtime_class_per_isolation: {
+            hardened_isolated: "gvisor",
+            strong_isolated: "kata",
+          },
         },
       }),
       makeProjectConfig(),
@@ -61,6 +66,7 @@ describe("KubernetesPodExecutionBackend", () => {
       workspace_path: "/tmp/workspace-run-1",
       workspace_volume_ref: "sf-pod-run-1-workspace",
       secret_profile: "github-only",
+      isolation_level: "hardened_isolated",
     });
 
     expect(client.createServiceAccount).toHaveBeenCalledTimes(1);
@@ -100,10 +106,25 @@ describe("KubernetesPodExecutionBackend", () => {
     expect(manifest.spec).toMatchObject({
       serviceAccountName: "sf-sa-run-1",
       automountServiceAccountToken: false,
+      runtimeClassName: "gvisor",
+      securityContext: {
+        runAsNonRoot: true,
+        seccompProfile: {
+          type: "RuntimeDefault",
+        },
+      },
     });
     expect(manifest.spec.containers[0].env).toEqual([
       { name: "SPRINTFOUNDRY_SECRET_PROFILE", value: "github-only" },
+      { name: "SPRINTFOUNDRY_ISOLATION_LEVEL", value: "hardened_isolated" },
     ]);
+    expect(manifest.spec.containers[0].securityContext).toMatchObject({
+      allowPrivilegeEscalation: false,
+      readOnlyRootFilesystem: false,
+      capabilities: {
+        drop: ["ALL"],
+      },
+    });
     expect(manifest.spec.volumes).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -212,6 +233,7 @@ describe("KubernetesPodExecutionBackend", () => {
       workspace_volume_ref: "sf-pod-run-1-workspace",
       checkpoint_generation: 0,
       secret_profile: "default",
+      isolation_level: "strong_isolated",
       metadata: {
         image: "sprintfoundry/agent-developer:latest",
         service_account_name: "sf-sa-run-1",
@@ -226,6 +248,7 @@ describe("KubernetesPodExecutionBackend", () => {
       workspace_volume_ref: "sf-pod-run-1-workspace",
       checkpoint_generation: 1,
       secret_profile: "default",
+      isolation_level: "strong_isolated",
       metadata: {
         image: "sprintfoundry/agent-developer:latest",
         service_account_name: "sf-sa-run-1",
