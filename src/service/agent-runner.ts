@@ -25,7 +25,11 @@ import { CodexSkillManager } from "./runtime/codex-skill-manager.js";
 import { parseTokenUsage as parseRuntimeTokenUsage } from "./runtime/process-utils.js";
 import type { RuntimeActivityEvent } from "./runtime/types.js";
 import type { EventSinkClient } from "./event-sink-client.js";
-import type { RunEnvironmentHandle } from "./execution/index.js";
+import {
+  LocalExecutionBackend,
+  type ExecutionBackend,
+  type RunEnvironmentHandle,
+} from "./execution/index.js";
 
 export interface AgentRunConfig {
   runId: string;
@@ -48,6 +52,12 @@ export interface AgentRunConfig {
   cliFlags?: AgentCliFlags;
   containerResources?: ContainerResources;
   runEnvironment?: RunEnvironmentHandle;
+  runtime?: RuntimeConfig;
+  resolvedPluginPaths?: string[];
+  containerImage?: string;
+  codexHomeDir?: string;
+  codexSkillNames?: string[];
+  guardrails?: GuardrailConfig;
   resumeSessionId?: string;
   resumeReason?: string;
   onRuntimeActivity?: (event: RuntimeActivityEvent) => Promise<void> | void;
@@ -81,24 +91,25 @@ export class AgentRunner {
   private agentDir: string;
   private codexAgentDir: string;
   private projectRoot: string;
-  private runtimeFactory: RuntimeFactory;
   private codexSkillManager: CodexSkillManager;
+  private executionBackend: ExecutionBackend;
 
   constructor(
     private platformConfig: PlatformConfig,
-    private projectConfig: ProjectConfig
+    private projectConfig: ProjectConfig,
+    executionBackend?: ExecutionBackend
   ) {
     const __filename = fileURLToPath(import.meta.url);
     const __dirname = path.dirname(__filename);
     this.agentDir = path.resolve(__dirname, "../agents");
     this.codexAgentDir = path.resolve(__dirname, "../agents-codex");
     this.projectRoot = path.resolve(__dirname, "../..");
-    this.runtimeFactory = new RuntimeFactory();
     this.codexSkillManager = new CodexSkillManager(
       platformConfig,
       projectConfig,
       this.projectRoot
     );
+    this.executionBackend = executionBackend ?? new LocalExecutionBackend();
   }
 
   async run(config: AgentRunConfig): Promise<AgentRunResult> {
@@ -111,36 +122,25 @@ export class AgentRunner {
     console.log(`[agent-runner] Preparing workspace at ${config.workspacePath}...`);
     const prep = (await this.prepareWorkspace(config, runtime)) ?? {};
 
-    // 3. Spawn runtime selected for this agent
     const agentDef = this.platformConfig.agent_definitions.find((d) => d.type === config.agent);
-    const runtimeImpl = this.runtimeFactory.create(runtime);
     console.log(`[agent-runner] Spawning ${runtime.provider} runtime for ${config.agent}...`);
-    const result = await runtimeImpl.runStep({
-      runId: config.runId,
-      stepNumber: config.stepNumber,
-      stepAttempt: config.stepAttempt,
-      agent: config.agent,
-      task: config.task,
-      context_inputs: config.context_inputs,
-      workspacePath: config.workspacePath,
-      modelConfig: config.modelConfig,
-      apiKey: config.apiKey,
-      timeoutMinutes: config.timeoutMinutes,
-      tokenBudget: config.tokenBudget,
-      previousStepResults: config.previousStepResults,
-      plugins: this.resolvePluginPaths(config.plugins),
-      cliFlags: config.cliFlags,
-      containerResources: config.containerResources,
-      runtime,
-      containerImage: agentDef?.container_image,
-      codexHomeDir: prep.codexHomeDir,
-      codexSkillNames: prep.codexSkillNames,
-      resumeSessionId: config.resumeSessionId,
-      resumeReason: config.resumeReason,
-      guardrails: this.resolveGuardrails(),
-      onActivity: config.onRuntimeActivity,
-      sinkClient: config.sinkClient,
-    });
+    const runEnvironment =
+      config.runEnvironment
+      ?? this.createFallbackRunEnvironment(config);
+    const result = await this.executionBackend.executeStep(
+      runEnvironment,
+      this.toPlanStep(config),
+      {
+        ...config,
+        runEnvironment,
+        runtime,
+        resolvedPluginPaths: this.resolvePluginPaths(config.plugins),
+        containerImage: agentDef?.container_image,
+        codexHomeDir: prep.codexHomeDir,
+        codexSkillNames: prep.codexSkillNames,
+        guardrails: this.resolveGuardrails(),
+      }
+    );
 
     if ((prep.codexSkillNames?.length ?? 0) > 0 || (prep.skillWarnings?.length ?? 0) > 0) {
       result.runtime_metadata = this.mergeSkillMetadata(result.runtime_metadata, prep);
@@ -178,13 +178,36 @@ export class AgentRunner {
       tokens_used: result.tokens_used,
       cost_usd: costUsd,
       duration_seconds: duration,
-      container_id: result.runtime_id,
+      container_id: result.container_id,
       usage: result.usage,
       resume_used: result.resume_used,
       resume_failed: result.resume_failed,
       resume_fallback: result.resume_fallback,
       token_savings: result.token_savings,
       runtime_metadata: result.runtime_metadata,
+    };
+  }
+
+  private createFallbackRunEnvironment(config: AgentRunConfig): RunEnvironmentHandle {
+    return {
+      run_id: config.runId,
+      project_id: this.projectConfig.project_id,
+      sandbox_id: `local-${config.runId || config.stepNumber}`,
+      execution_backend: "local",
+      workspace_path: config.workspacePath,
+      checkpoint_generation: 0,
+      metadata: {},
+    };
+  }
+
+  private toPlanStep(config: AgentRunConfig): import("../shared/types.js").PlanStep {
+    return {
+      step_number: config.stepNumber,
+      agent: config.agent,
+      task: config.task,
+      context_inputs: config.context_inputs,
+      depends_on: [],
+      estimated_complexity: "medium",
     };
   }
 
