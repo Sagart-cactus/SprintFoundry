@@ -426,8 +426,10 @@ describe("AgentRunner", () => {
   it("uses codex runtime when project runtime override is set", async () => {
     delete process.env.SPRINTFOUNDRY_USE_CONTAINERS;
 
-    const proc = makeFakeProcess(JSON.stringify({ usage: { total_tokens: 321 } }));
-    (mockSpawn as any).mockReturnValueOnce(proc);
+    // Use mockImplementationOnce so the close-event timer starts only when spawn() is called
+    // (i.e. after the async writeCodexConfigToml file I/O), preventing a race with the 5ms delay.
+    const stdout = JSON.stringify({ usage: { total_tokens: 321 } });
+    (mockSpawn as any).mockImplementationOnce(() => makeFakeProcess(stdout));
 
     const runner = new AgentRunner(
       makePlatformConfig(),
@@ -512,8 +514,9 @@ describe("AgentRunner", () => {
   });
 
   it("project runtime override takes precedence over platform runtime defaults", async () => {
-    const proc = makeFakeProcess(JSON.stringify({ usage: { total_tokens: 111 } }));
-    (mockSpawn as any).mockReturnValueOnce(proc);
+    // Use mockImplementationOnce so the close-event timer starts only when spawn() is called.
+    const stdout = JSON.stringify({ usage: { total_tokens: 111 } });
+    (mockSpawn as any).mockImplementationOnce(() => makeFakeProcess(stdout));
 
     const runner = new AgentRunner(
       makePlatformConfig({
