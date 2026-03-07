@@ -144,9 +144,11 @@ describe("webhook-handler config normalization", () => {
     } as Record<string, unknown>);
     expect(cfg.enabled).toBe(true);
     expect(cfg.webhookSecret).toBe("abc");
-    expect(cfg.allowedEvents.has("issues.opened")).toBe(true);
+    expect(cfg.allowedEvents.has("issues.opened")).toBe(false);
+    expect(cfg.allowedEvents.has("issue_comment.created")).toBe(true);
     expect(cfg.commandTrigger).toBe("/sf-run");
     expect(cfg.labelTrigger).toBe("sf:auto-run");
+    expect(cfg.requireCommand).toBe(true);
   });
 
   it("normalizes linear autoexecute config with defaults", () => {
