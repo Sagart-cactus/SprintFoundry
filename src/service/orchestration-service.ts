@@ -56,6 +56,11 @@ import { LifecycleManager, defaultLifecycleConfig } from "./lifecycle-manager.js
 import { NotificationRouter, defaultRoutingConfig } from "./notification-router.js";
 import { MetricsService } from "./metrics-service.js";
 import { trace, type Span } from "@opentelemetry/api";
+import type {
+  ExecutionBackend,
+  RunEnvironmentHandle,
+  SandboxTeardownReason,
+} from "./execution/index.js";
 
 const RUN_STATE_DIR = ".sprintfoundry";
 const RUN_STATE_FILE = "run-state.json";
@@ -70,6 +75,10 @@ interface ResumeTaskOptions {
   step?: number;
   prompt?: string;
 }
+
+type TaskRunWithEnvironment = TaskRun & {
+  run_environment?: RunEnvironmentHandle | null;
+};
 
 export class OrchestrationService {
   private validator: PlanValidator;
@@ -93,7 +102,8 @@ export class OrchestrationService {
   constructor(
     private platformConfig: PlatformConfig,
     private projectConfig: ProjectConfig,
-    registry?: PluginRegistry
+    registry?: PluginRegistry,
+    private executionBackend?: ExecutionBackend
   ) {
     this.registry = registry ?? null;
     this.metricsService = new MetricsService(process.env.SPRINTFOUNDRY_OTEL_ENABLED === "1");
@@ -693,6 +703,7 @@ export class OrchestrationService {
     workspacePath: string,
     options?: ExecutePlanOptions
   ): Promise<void> {
+    const runEnvironment = await this.prepareRunEnvironment(run, plan, workspacePath);
     const planStepNumbers = new Set(plan.steps.map((s) => s.step_number));
     const completed = new Set<number>(
       options?.initialCompletedSteps
@@ -701,231 +712,243 @@ export class OrchestrationService {
     );
     const reworkCounts = new Map<number, number>();
 
-    // Build dependency graph
-    const steps = new Map(plan.steps.map((s) => [s.step_number, s]));
-
-    while (completed.size < plan.steps.length) {
-      // Find steps that are ready to execute (all dependencies met)
-      const ready = plan.steps.filter(
-        (s) =>
-          !completed.has(s.step_number) &&
-          s.depends_on.every((d) => completed.has(d))
-      );
-
-      if (ready.length === 0) {
-        run.status = "failed";
-        run.error = "Deadlock: no executable steps remaining";
-        this.persistSession(run, { workspace_path: workspacePath });
-        return;
-      }
-
-      // Check if any ready steps can be parallelized
-      const parallelGroup = this.findParallelGroup(ready, plan.parallel_groups);
-
-      if (parallelGroup.length > 1) {
-        // Phase 1: Execute in parallel, collecting rework signals instead of handling them inline.
-        // This prevents multiple parallel steps from each spawning an independent developer rework call.
-        const reworkSignals: Array<{ step: PlanStep; agentResult: AgentResult; currentRework: number }> = [];
-
-        // Use sub-worktree isolation when the workspace plugin supports it.
-        // Each parallel step gets its own worktree so file changes can't conflict.
-        const wsPlugin = this.getWorkspacePlugin();
-        const useSubWorktrees = wsPlugin?.supportsSubWorktrees === true
-          && typeof wsPlugin.createSubWorktree === "function"
-          && typeof wsPlugin.mergeSubWorktree === "function";
-
-        const results = await Promise.all(
-          parallelGroup.map(async (step) => {
-            let stepWorkspace = workspacePath;
-            try {
-              if (useSubWorktrees) {
-                stepWorkspace = await wsPlugin!.createSubWorktree!(workspacePath, step.step_number);
-                console.log(`[parallel] Step ${step.step_number} using sub-worktree: ${stepWorkspace}`);
-              }
-              const operatorPrompt =
-                options?.operatorPrompt && options.resumeFromStep === step.step_number
-                  ? options.operatorPrompt
-                  : undefined;
-              const result = await this.executeStep(
-                run,
-                step,
-                stepWorkspace,
-                reworkCounts,
-                reworkSignals,
-                undefined,
-                operatorPrompt
-              );
-              if (useSubWorktrees && result === "completed") {
-                await wsPlugin!.mergeSubWorktree!(workspacePath, stepWorkspace, step.step_number);
-                console.log(`[parallel] Step ${step.step_number} merged back to parent.`);
-              } else if (useSubWorktrees) {
-                // Clean up sub-worktree on failure/rework without merging
-                await wsPlugin!.removeSubWorktree?.(stepWorkspace);
-              }
-              return result;
-            } catch (err) {
-              // Clean up sub-worktree on unexpected error
-              if (useSubWorktrees && stepWorkspace !== workspacePath) {
-                try { await wsPlugin!.removeSubWorktree?.(stepWorkspace); } catch { /* best effort */ }
-              }
-              throw err;
-            }
-          })
+    try {
+      while (completed.size < plan.steps.length) {
+        // Find steps that are ready to execute (all dependencies met)
+        const ready = plan.steps.filter(
+          (s) =>
+            !completed.has(s.step_number) &&
+            s.depends_on.every((d) => completed.has(d))
         );
 
-        // Hard failures take precedence
-        for (let i = 0; i < parallelGroup.length; i++) {
-          if (results[i] === "failed") {
-            run.status = "failed";
-            this.persistSession(run, { workspace_path: workspacePath });
-            return;
-          }
-        }
-
-        // Phase 2: If any steps need rework, merge them into a single planRework call
-        if (reworkSignals.length > 0) {
-          const budget = this.resolveBudget(run.ticket);
-          const maxRework = budget.max_rework_cycles ?? this.platformConfig.defaults.max_rework_cycles;
-
-          if (reworkSignals.some((s) => s.currentRework >= maxRework)) {
-            run.status = "failed";
-            await this.sendNotification(
-              `Parallel group exceeded max rework cycles (${maxRework}). Escalating.`
-            );
-            this.persistSession(run, { workspace_path: workspacePath });
-            return;
-          }
-
-          const mergedReason =
-            reworkSignals.length === 1
-              ? (reworkSignals[0].agentResult.rework_reason ?? "Rework requested")
-              : reworkSignals
-                  .map((s) => `[${s.step.agent}] ${s.agentResult.rework_reason ?? "Rework requested"}`)
-                  .join("; ");
-
-          const primarySignal = reworkSignals[0];
-          const mergedAgentResult: AgentResult = { ...primarySignal.agentResult, rework_reason: mergedReason };
-
-          for (const signal of reworkSignals) {
-            reworkCounts.set(signal.step.step_number, signal.currentRework + 1);
-            await this.emitEvent(run.run_id, "step.rework_triggered", {
-              step: signal.step.step_number,
-              reason: signal.agentResult.rework_reason,
-              rework_count: signal.currentRework + 1,
-              merged: reworkSignals.length > 1,
-            });
-          }
-
-          const previousReworkResults = run.steps
-            .filter((s) => s.step_number === primarySignal.step.step_number && s.status === "needs_rework" && s.result)
-            .map((s) => s.result!);
-
-          const reworkPlan = await this.plannerRuntime.planRework(
-            run.ticket,
-            primarySignal.step,
-            mergedAgentResult,
-            workspacePath,
-            run.steps,
-            primarySignal.currentRework + 1,
-            previousReworkResults
-          );
-
-          for (const reworkStep of reworkPlan.steps) {
-            const reworkResult = await this.executeStep(
-              run,
-              reworkStep,
-              workspacePath,
-              reworkCounts,
-              undefined,
-              "rework_plan"
-            );
-            if (reworkResult === "failed") {
-              run.status = "failed";
-              this.persistSession(run, { workspace_path: workspacePath });
-              return;
-            }
-          }
-
-          // Retry the parallel group — while loop will pick it up since none were added to `completed`
-          continue;
-        }
-
-        for (let i = 0; i < parallelGroup.length; i++) {
-          if (results[i] === "completed") {
-            completed.add(parallelGroup[i].step_number);
-          }
-        }
-      } else {
-        // Execute sequentially
-        const step = ready[0];
-        const operatorPrompt =
-          options?.operatorPrompt && options.resumeFromStep === step.step_number
-            ? options.operatorPrompt
-            : undefined;
-        const result = await this.executeStep(run, step, workspacePath, reworkCounts, undefined, undefined, operatorPrompt);
-
-        if (result === "completed") {
-          completed.add(step.step_number);
-        } else if (result === "failed") {
+        if (ready.length === 0) {
           run.status = "failed";
+          run.error = "Deadlock: no executable steps remaining";
           this.persistSession(run, { workspace_path: workspacePath });
           return;
         }
-      }
 
-      // Check for human gates after completed steps
-      for (const stepNum of completed) {
-        const gate = plan.human_gates.find(
-          (g) => g.after_step === stepNum && g.required
-        );
-        if (gate) {
-          // Remove from completed to prevent re-triggering
-          const alreadyReviewed = run.steps.find(
-            (s) => s.step_number === stepNum
-          )?.result?.metadata?.["human_reviewed"];
+        // Check if any ready steps can be parallelized
+        const parallelGroup = this.findParallelGroup(ready, plan.parallel_groups);
 
-          if (!alreadyReviewed) {
-            run.status = "waiting_human_review";
-            const approved = await this.requestHumanReview(
-              run,
-              stepNum,
-              gate.reason,
-              workspacePath
-            );
+        if (parallelGroup.length > 1) {
+          // Phase 1: Execute in parallel, collecting rework signals instead of handling them inline.
+          // This prevents multiple parallel steps from each spawning an independent developer rework call.
+          const reworkSignals: Array<{ step: PlanStep; agentResult: AgentResult; currentRework: number }> = [];
 
-            if (!approved) {
+          // Use sub-worktree isolation when the workspace plugin supports it.
+          // Each parallel step gets its own worktree so file changes can't conflict.
+          const wsPlugin = this.getWorkspacePlugin();
+          const useSubWorktrees = wsPlugin?.supportsSubWorktrees === true
+            && typeof wsPlugin.createSubWorktree === "function"
+            && typeof wsPlugin.mergeSubWorktree === "function";
+
+          const results = await Promise.all(
+            parallelGroup.map(async (step) => {
+              let stepWorkspace = workspacePath;
+              try {
+                if (useSubWorktrees) {
+                  stepWorkspace = await wsPlugin!.createSubWorktree!(workspacePath, step.step_number);
+                  console.log(`[parallel] Step ${step.step_number} using sub-worktree: ${stepWorkspace}`);
+                }
+                const operatorPrompt =
+                  options?.operatorPrompt && options.resumeFromStep === step.step_number
+                    ? options.operatorPrompt
+                    : undefined;
+                const result = await this.executeStep(
+                  run,
+                  step,
+                  stepWorkspace,
+                  runEnvironment,
+                  reworkCounts,
+                  reworkSignals,
+                  undefined,
+                  operatorPrompt
+                );
+                if (useSubWorktrees && result === "completed") {
+                  await wsPlugin!.mergeSubWorktree!(workspacePath, stepWorkspace, step.step_number);
+                  console.log(`[parallel] Step ${step.step_number} merged back to parent.`);
+                } else if (useSubWorktrees) {
+                  // Clean up sub-worktree on failure/rework without merging
+                  await wsPlugin!.removeSubWorktree?.(stepWorkspace);
+                }
+                return result;
+              } catch (err) {
+                // Clean up sub-worktree on unexpected error
+                if (useSubWorktrees && stepWorkspace !== workspacePath) {
+                  try { await wsPlugin!.removeSubWorktree?.(stepWorkspace); } catch { /* best effort */ }
+                }
+                throw err;
+              }
+            })
+          );
+
+          // Hard failures take precedence
+          for (let i = 0; i < parallelGroup.length; i++) {
+            if (results[i] === "failed") {
               run.status = "failed";
-              run.error = "Human review rejected";
-              await this.emitEvent(run.run_id, "task.failed", {
-                error: run.error,
-                reason: "human_gate_rejected",
-                step: stepNum,
-              });
               this.persistSession(run, { workspace_path: workspacePath });
               return;
             }
-            const reviewedStep = run.steps.find(
-              (s) => s.step_number === stepNum && s.status === "completed"
-            );
-            if (reviewedStep?.result) {
-              reviewedStep.result.metadata = {
-                ...reviewedStep.result.metadata,
-                human_reviewed: true,
-              };
+          }
+
+          // Phase 2: If any steps need rework, merge them into a single planRework call
+          if (reworkSignals.length > 0) {
+            const budget = this.resolveBudget(run.ticket);
+            const maxRework = budget.max_rework_cycles ?? this.platformConfig.defaults.max_rework_cycles;
+
+            if (reworkSignals.some((s) => s.currentRework >= maxRework)) {
+              run.status = "failed";
+              await this.sendNotification(
+                `Parallel group exceeded max rework cycles (${maxRework}). Escalating.`
+              );
+              this.persistSession(run, { workspace_path: workspacePath });
+              return;
             }
-            run.status = "executing";
+
+            const mergedReason =
+              reworkSignals.length === 1
+                ? (reworkSignals[0].agentResult.rework_reason ?? "Rework requested")
+                : reworkSignals
+                    .map((s) => `[${s.step.agent}] ${s.agentResult.rework_reason ?? "Rework requested"}`)
+                    .join("; ");
+
+            const primarySignal = reworkSignals[0];
+            const mergedAgentResult: AgentResult = { ...primarySignal.agentResult, rework_reason: mergedReason };
+
+            for (const signal of reworkSignals) {
+              reworkCounts.set(signal.step.step_number, signal.currentRework + 1);
+              await this.emitEvent(run.run_id, "step.rework_triggered", {
+                step: signal.step.step_number,
+                reason: signal.agentResult.rework_reason,
+                rework_count: signal.currentRework + 1,
+                merged: reworkSignals.length > 1,
+              });
+            }
+
+            const previousReworkResults = run.steps
+              .filter((s) => s.step_number === primarySignal.step.step_number && s.status === "needs_rework" && s.result)
+              .map((s) => s.result!);
+
+            const reworkPlan = await this.plannerRuntime.planRework(
+              run.ticket,
+              primarySignal.step,
+              mergedAgentResult,
+              workspacePath,
+              run.steps,
+              primarySignal.currentRework + 1,
+              previousReworkResults
+            );
+
+            for (const reworkStep of reworkPlan.steps) {
+              const reworkResult = await this.executeStep(
+                run,
+                reworkStep,
+                workspacePath,
+                runEnvironment,
+                reworkCounts,
+                undefined,
+                "rework_plan"
+              );
+              if (reworkResult === "failed") {
+                run.status = "failed";
+                this.persistSession(run, { workspace_path: workspacePath });
+                return;
+              }
+            }
+
+            // Retry the parallel group — while loop will pick it up since none were added to `completed`
+            continue;
+          }
+
+          for (let i = 0; i < parallelGroup.length; i++) {
+            if (results[i] === "completed") {
+              completed.add(parallelGroup[i].step_number);
+            }
+          }
+        } else {
+          // Execute sequentially
+          const step = ready[0];
+          const operatorPrompt =
+            options?.operatorPrompt && options.resumeFromStep === step.step_number
+              ? options.operatorPrompt
+              : undefined;
+          const result = await this.executeStep(
+            run,
+            step,
+            workspacePath,
+            runEnvironment,
+            reworkCounts,
+            undefined,
+            undefined,
+            operatorPrompt
+          );
+
+          if (result === "completed") {
+            completed.add(step.step_number);
+          } else if (result === "failed") {
+            run.status = "failed";
+            this.persistSession(run, { workspace_path: workspacePath });
+            return;
+          }
+        }
+
+        // Check for human gates after completed steps
+        for (const stepNum of completed) {
+          const gate = plan.human_gates.find(
+            (g) => g.after_step === stepNum && g.required
+          );
+          if (gate) {
+            // Remove from completed to prevent re-triggering
+            const alreadyReviewed = run.steps.find(
+              (s) => s.step_number === stepNum
+            )?.result?.metadata?.["human_reviewed"];
+
+            if (!alreadyReviewed) {
+              run.status = "waiting_human_review";
+              const approved = await this.requestHumanReview(
+                run,
+                stepNum,
+                gate.reason,
+                workspacePath
+              );
+
+              if (!approved) {
+                run.status = "failed";
+                run.error = "Human review rejected";
+                await this.emitEvent(run.run_id, "task.failed", {
+                  error: run.error,
+                  reason: "human_gate_rejected",
+                  step: stepNum,
+                });
+                this.persistSession(run, { workspace_path: workspacePath });
+                return;
+              }
+              const reviewedStep = run.steps.find(
+                (s) => s.step_number === stepNum && s.status === "completed"
+              );
+              if (reviewedStep?.result) {
+                reviewedStep.result.metadata = {
+                  ...reviewedStep.result.metadata,
+                  human_reviewed: true,
+                };
+              }
+              run.status = "executing";
+            }
           }
         }
       }
-    }
 
-    run.status = "completed";
-    run.completed_at = new Date();
-    await this.emitEvent(run.run_id, "task.completed", {
-      total_tokens: run.total_tokens_used,
-      total_cost: run.total_cost_usd,
-    });
-    this.persistSession(run, { workspace_path: workspacePath });
+      run.status = "completed";
+      run.completed_at = new Date();
+      await this.emitEvent(run.run_id, "task.completed", {
+        total_tokens: run.total_tokens_used,
+        total_cost: run.total_cost_usd,
+      });
+      this.persistSession(run, { workspace_path: workspacePath });
+    } finally {
+      await this.teardownRunEnvironment(run, runEnvironment, workspacePath);
+    }
   }
 
   // ---- Single Step Execution ----
@@ -934,6 +957,7 @@ export class OrchestrationService {
     run: TaskRun,
     step: PlanStep,
     workspacePath: string,
+    runEnvironment: RunEnvironmentHandle,
     reworkCounts: Map<number, number>,
     parallelReworkSignals?: Array<{ step: PlanStep; agentResult: AgentResult; currentRework: number }>,
     resumeReason?: string,
@@ -948,6 +972,7 @@ export class OrchestrationService {
             run,
             step,
             workspacePath,
+            runEnvironment,
             reworkCounts,
             parallelReworkSignals,
             resumeReason,
@@ -964,6 +989,7 @@ export class OrchestrationService {
     run: TaskRun,
     step: PlanStep,
     workspacePath: string,
+    runEnvironment: RunEnvironmentHandle,
     reworkCounts: Map<number, number>,
     parallelReworkSignals?: Array<{ step: PlanStep; agentResult: AgentResult; currentRework: number }>,
     resumeReason?: string,
@@ -1103,6 +1129,7 @@ export class OrchestrationService {
         plugins: agentDef?.plugins,
         cliFlags,
         containerResources,
+        runEnvironment,
         resumeSessionId,
         resumeReason,
         onRuntimeActivity: async (activity: RuntimeActivityEvent) => {
@@ -1277,6 +1304,7 @@ export class OrchestrationService {
               run,
               step,
               workspacePath,
+              runEnvironment,
               reworkCounts,
               undefined,
               "quality_gate_retry",
@@ -1350,7 +1378,13 @@ export class OrchestrationService {
         // Execute the rework step(s) then retry this step
         for (const reworkStep of reworkPlan.steps) {
           const reworkResult = await this.executeStep(
-            run, reworkStep, workspacePath, reworkCounts, undefined, "rework_plan"
+            run,
+            reworkStep,
+            workspacePath,
+            runEnvironment,
+            reworkCounts,
+            undefined,
+            "rework_plan"
           );
           if (reworkResult === "failed") return "failed";
         }
@@ -1360,6 +1394,7 @@ export class OrchestrationService {
           run,
           step,
           workspacePath,
+          runEnvironment,
           reworkCounts,
           undefined,
           "rework_retry",
@@ -1822,6 +1857,91 @@ export class OrchestrationService {
 
   private getRunStatePath(workspacePath: string): string {
     return path.join(workspacePath, RUN_STATE_DIR, RUN_STATE_FILE);
+  }
+
+  private getRunEnvironment(run: TaskRun): RunEnvironmentHandle | null {
+    return (run as TaskRunWithEnvironment).run_environment ?? null;
+  }
+
+  private setRunEnvironment(run: TaskRun, handle: RunEnvironmentHandle | null): void {
+    (run as TaskRunWithEnvironment).run_environment = handle;
+  }
+
+  private createFallbackRunEnvironment(run: TaskRun, workspacePath: string): RunEnvironmentHandle {
+    return {
+      run_id: run.run_id,
+      project_id: run.project_id,
+      sandbox_id: `local-${run.run_id}`,
+      execution_backend: "local",
+      workspace_path: workspacePath,
+      checkpoint_generation: 0,
+      metadata: {},
+    };
+  }
+
+  private async prepareRunEnvironment(
+    run: TaskRun,
+    plan: ExecutionPlan,
+    workspacePath: string
+  ): Promise<RunEnvironmentHandle> {
+    const existing = this.getRunEnvironment(run);
+    const prepared = existing
+      ? await this.resumeRunEnvironment(existing)
+      : await this.createRunEnvironment(run, plan, workspacePath);
+
+    this.setRunEnvironment(run, prepared);
+    this.persistSession(run, { workspace_path: workspacePath });
+    return prepared;
+  }
+
+  private async createRunEnvironment(
+    run: TaskRun,
+    plan: ExecutionPlan,
+    workspacePath: string
+  ): Promise<RunEnvironmentHandle> {
+    if (!this.executionBackend) {
+      return this.createFallbackRunEnvironment(run, workspacePath);
+    }
+
+    return this.executionBackend.prepareRunEnvironment(run, plan, workspacePath);
+  }
+
+  private async resumeRunEnvironment(
+    handle: RunEnvironmentHandle
+  ): Promise<RunEnvironmentHandle> {
+    if (!this.executionBackend) {
+      return handle;
+    }
+
+    return this.executionBackend.resumeRun(handle);
+  }
+
+  private async teardownRunEnvironment(
+    run: TaskRun,
+    handle: RunEnvironmentHandle,
+    workspacePath: string
+  ): Promise<void> {
+    const reason = this.resolveTeardownReason(run.status);
+    if (this.executionBackend) {
+      try {
+        await this.executionBackend.teardownRun(handle, reason);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`[execution-backend] Failed to teardown sandbox ${handle.sandbox_id}: ${message}`);
+      }
+    }
+    this.persistSession(run, { workspace_path: workspacePath });
+  }
+
+  private resolveTeardownReason(status: RunStatus): SandboxTeardownReason {
+    switch (status) {
+      case "completed":
+        return "completed";
+      case "cancelled":
+        return "cancelled";
+      default:
+        return "failed";
+    }
   }
 
   private async persistRunState(run: TaskRun, workspacePath: string): Promise<void> {

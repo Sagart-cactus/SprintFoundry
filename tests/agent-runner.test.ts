@@ -24,6 +24,7 @@ const { spawn: mockSpawn } = await import("child_process");
 const { query: mockClaudeSdkQuery } = await import("@anthropic-ai/claude-agent-sdk");
 
 const { AgentRunner } = await import("../src/service/agent-runner.js");
+const { CodexRuntime } = await import("../src/service/runtime/codex-runtime.js");
 
 function makeFakeProcess(
   stdout = "",
@@ -98,6 +99,7 @@ describe("AgentRunner", () => {
   let tmpDir: string;
 
   beforeEach(async () => {
+    vi.restoreAllMocks();
     vi.clearAllMocks();
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-runner-test-"));
 
@@ -425,11 +427,23 @@ describe("AgentRunner", () => {
 
   it("uses codex runtime when project runtime override is set", async () => {
     delete process.env.SPRINTFOUNDRY_USE_CONTAINERS;
-
-    // Use mockImplementationOnce so the close-event timer starts only when spawn() is called
-    // (i.e. after the async writeCodexConfigToml file I/O), preventing a race with the 5ms delay.
-    const stdout = JSON.stringify({ usage: { total_tokens: 321 } });
-    (mockSpawn as any).mockImplementationOnce(() => makeFakeProcess(stdout));
+    const runStepSpy = vi.spyOn(CodexRuntime.prototype, "runStep").mockResolvedValue({
+      tokens_used: 321,
+      runtime_id: "codex-runtime-1",
+      usage: { total_tokens: 321 },
+      runtime_metadata: {
+        schema_version: 1,
+        runtime: {
+          provider: "codex",
+          mode: "local_process",
+          runtime_id: "codex-runtime-1",
+          step_attempt: 1,
+        },
+        provider_metadata: {
+          output_parsing: "single_json",
+        },
+      },
+    } as any);
 
     const runner = new AgentRunner(
       makePlatformConfig(),
@@ -442,18 +456,21 @@ describe("AgentRunner", () => {
     (runner as any).prepareWorkspace = vi.fn().mockResolvedValue({
       codexHomeDir: "/tmp/codex-home-test",
       codexSkillNames: ["web-design-guidelines"],
+      runtimeSkillProvider: "codex",
     });
     (runner as any).readAgentResult = vi.fn().mockResolvedValue(makeResult());
 
     const result = await runner.run(makeRunConfig({ agent: "developer" }));
 
-    expect(mockSpawn).toHaveBeenCalledWith(
-      "codex",
-      expect.any(Array),
-      expect.any(Object)
-    );
-    const spawnOpts = (mockSpawn as any).mock.calls[0][2];
-    expect(spawnOpts.env.CODEX_HOME).toBe("/tmp/codex-home-test");
+    expect(runStepSpy).toHaveBeenCalledTimes(1);
+    expect(runStepSpy.mock.calls[0][0]).toMatchObject({
+      runtime: {
+        provider: "codex",
+        mode: "local_process",
+      },
+      codexHomeDir: "/tmp/codex-home-test",
+      codexSkillNames: ["web-design-guidelines"],
+    });
     expect(result.tokens_used).toBe(321);
     expect(result.cost_usd).toBeCloseTo(0.000963, 8);
     expect((result.runtime_metadata as any)?.provider_metadata?.skills?.names).toEqual([
@@ -514,9 +531,20 @@ describe("AgentRunner", () => {
   });
 
   it("project runtime override takes precedence over platform runtime defaults", async () => {
-    // Use mockImplementationOnce so the close-event timer starts only when spawn() is called.
-    const stdout = JSON.stringify({ usage: { total_tokens: 111 } });
-    (mockSpawn as any).mockImplementationOnce(() => makeFakeProcess(stdout));
+    const runStepSpy = vi.spyOn(CodexRuntime.prototype, "runStep").mockResolvedValue({
+      tokens_used: 111,
+      runtime_id: "codex-runtime-override",
+      usage: { total_tokens: 111 },
+      runtime_metadata: {
+        schema_version: 1,
+        runtime: {
+          provider: "codex",
+          mode: "local_process",
+          runtime_id: "codex-runtime-override",
+          step_attempt: 1,
+        },
+      },
+    } as any);
 
     const runner = new AgentRunner(
       makePlatformConfig({
@@ -552,10 +580,12 @@ describe("AgentRunner", () => {
     (runner as any).readAgentResult = vi.fn().mockResolvedValue(makeResult());
 
     await runner.run(makeRunConfig({ agent: "developer" }));
-    expect(mockSpawn).toHaveBeenCalledWith(
-      "codex",
-      expect.any(Array),
-      expect.any(Object)
-    );
+    expect(runStepSpy).toHaveBeenCalledTimes(1);
+    expect(runStepSpy.mock.calls[0][0]).toMatchObject({
+      runtime: {
+        provider: "codex",
+        mode: "local_process",
+      },
+    });
   });
 });

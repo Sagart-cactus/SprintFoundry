@@ -25,6 +25,7 @@ import { CodexSkillManager } from "./runtime/codex-skill-manager.js";
 import { parseTokenUsage as parseRuntimeTokenUsage } from "./runtime/process-utils.js";
 import type { RuntimeActivityEvent } from "./runtime/types.js";
 import type { EventSinkClient } from "./event-sink-client.js";
+import type { RunEnvironmentHandle } from "./execution/index.js";
 
 export interface AgentRunConfig {
   runId: string;
@@ -46,6 +47,7 @@ export interface AgentRunConfig {
   plugins?: string[];
   cliFlags?: AgentCliFlags;
   containerResources?: ContainerResources;
+  runEnvironment?: RunEnvironmentHandle;
   resumeSessionId?: string;
   resumeReason?: string;
   onRuntimeActivity?: (event: RuntimeActivityEvent) => Promise<void> | void;

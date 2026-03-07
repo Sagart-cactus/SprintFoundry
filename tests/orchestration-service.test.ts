@@ -6,6 +6,7 @@ import { makePlatformConfig, makeProjectConfig } from "./fixtures/configs.js";
 import { makeTicket } from "./fixtures/tickets.js";
 import { makePlan, makeStep, makeDevQaPlan } from "./fixtures/plans.js";
 import { makeResult, makeFailedResult, makeReworkResult } from "./fixtures/results.js";
+import type { ExecutionBackend, RunEnvironmentHandle } from "../src/service/execution/index.js";
 
 const eventStoreCtor = vi.fn();
 const eventSinkCtor = vi.fn();
@@ -192,6 +193,106 @@ describe("OrchestrationService", () => {
       },
       { timeout: 5000 }
     );
+  });
+
+  it("prepares and tears down one run environment per run", async () => {
+    const workspacePath = await fs.mkdtemp(path.join(os.tmpdir(), "sf-run-env-"));
+    const backendHandle: RunEnvironmentHandle = {
+      run_id: "pending",
+      project_id: makeProjectConfig().project_id,
+      sandbox_id: "sandbox-1",
+      execution_backend: "test",
+      workspace_path: workspacePath,
+      checkpoint_generation: 0,
+      metadata: {},
+    };
+    const backend: ExecutionBackend = {
+      prepareRunEnvironment: vi.fn(async (run) => ({ ...backendHandle, run_id: run.run_id })),
+      executeStep: vi.fn(),
+      pauseRun: vi.fn(),
+      resumeRun: vi.fn(async (handle) => handle),
+      teardownRun: vi.fn(async () => {}),
+    };
+
+    service = new OrchestrationService(
+      makePlatformConfig(),
+      makeProjectConfig(),
+      undefined,
+      backend
+    );
+    mockOrchestratorAgent = (service as any).plannerRuntime;
+    mockAgentRunner = (service as any).agentRunner;
+    mockTicketFetcher = (service as any).tickets;
+    mockGitManager = (service as any).git;
+    mockSessionStore = (service as any).sessions;
+    (service as any).workspace.create.mockResolvedValue(workspacePath);
+
+    mockOrchestratorAgent.generatePlan.mockResolvedValue(makeDevQaPlan());
+    mockAgentRunner.run.mockResolvedValue({
+      agentResult: makeResult(),
+      tokens_used: 100,
+      cost_usd: 0.01,
+      duration_seconds: 5,
+      container_id: "local-1",
+    });
+
+    const run = await service.handleTask("prompt-1", "prompt", "Add a button");
+
+    expect(backend.prepareRunEnvironment).toHaveBeenCalledTimes(1);
+    expect(backend.teardownRun).toHaveBeenCalledTimes(1);
+    expect(mockAgentRunner.run).toHaveBeenCalledTimes(2);
+    expect((backend.teardownRun as any).mock.calls[0][0].sandbox_id).toBe("sandbox-1");
+    expect(run.status).toBe("completed");
+
+    const runStatePath = path.join(workspacePath, ".sprintfoundry", "run-state.json");
+    let persisted: any;
+    await vi.waitFor(async () => {
+      persisted = JSON.parse(await fs.readFile(runStatePath, "utf-8"));
+      expect(persisted.run_environment?.sandbox_id).toBe("sandbox-1");
+    });
+  });
+
+  it("reuses a persisted run environment through resumeRun instead of recreating it", async () => {
+    const workspacePath = await fs.mkdtemp(path.join(os.tmpdir(), "sf-run-env-resume-"));
+    const initialHandle: RunEnvironmentHandle = {
+      run_id: "run-1",
+      project_id: makeProjectConfig().project_id,
+      sandbox_id: "sandbox-existing",
+      execution_backend: "test",
+      workspace_path: workspacePath,
+      checkpoint_generation: 0,
+      metadata: {},
+    };
+    const resumedHandle: RunEnvironmentHandle = {
+      ...initialHandle,
+      checkpoint_generation: 1,
+      metadata: { resumed: true },
+    };
+    const backend: ExecutionBackend = {
+      prepareRunEnvironment: vi.fn(async () => initialHandle),
+      executeStep: vi.fn(),
+      pauseRun: vi.fn(),
+      resumeRun: vi.fn(async () => resumedHandle),
+      teardownRun: vi.fn(async () => {}),
+    };
+
+    service = new OrchestrationService(
+      makePlatformConfig(),
+      makeProjectConfig(),
+      undefined,
+      backend
+    );
+
+    const run = (service as any).createRun("ticket-1");
+    run.ticket = makeTicket();
+    run.run_environment = initialHandle;
+
+    const prepared = await (service as any).prepareRunEnvironment(run, makePlan(), workspacePath);
+
+    expect(backend.prepareRunEnvironment).not.toHaveBeenCalled();
+    expect(backend.resumeRun).toHaveBeenCalledTimes(1);
+    expect(prepared.checkpoint_generation).toBe(1);
+    expect(run.run_environment?.metadata).toEqual({ resumed: true });
   });
 
   it("handleTask with source=prompt creates ticket from prompt text", async () => {
