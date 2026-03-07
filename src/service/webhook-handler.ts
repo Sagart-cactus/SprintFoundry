@@ -34,14 +34,14 @@ export function normalizeGitHubAutoexecuteConfig(raw: AnyRecord): GitHubAutoexec
   const enabled = (github.enabled ?? topEnabled) === true;
   const allowedEvents = Array.isArray(github.allowed_events) && github.allowed_events.length
     ? github.allowed_events.map((v) => String(v))
-    : ["issues.opened", "issues.labeled", "issue_comment.created"];
+    : ["issue_comment.created"];
   return {
     enabled,
     webhookSecret: String(github.webhook_secret ?? "").trim(),
     allowedEvents: new Set(allowedEvents),
     labelTrigger: String(github.label_trigger ?? "sf:auto-run"),
     commandTrigger: String(github.command_trigger ?? "/sf-run"),
-    requireCommand: github.require_command === true,
+    requireCommand: github.require_command == null ? true : github.require_command === true,
     dedupeWindowMinutes: Number(github.dedupe_window_minutes ?? 30),
   };
 }
