@@ -123,6 +123,11 @@ k8s:
   namespace: default
   workspace_storage_class: ""
   workspace_size: 10Gi
+  service_account_mode: per_run
+  automount_service_account_token: false
+  default_secret_profile: default
+  secret_profiles:
+    default: []
     developer: [detect-project-type, code-quality, error-handling, performance-review]
     go-developer: [code-quality, error-handling, performance-review]
     qa: [detect-project-type, testing-standards]

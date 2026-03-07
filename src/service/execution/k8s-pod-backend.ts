@@ -17,6 +17,7 @@ import type { ExecutionBackend, RunEnvironmentHandle, SandboxTeardownReason } fr
 const require = createRequire(import.meta.url);
 
 interface K8sPodClient {
+  createServiceAccount(namespace: string, manifest: Record<string, unknown>): Promise<void>;
   createPvc(namespace: string, manifest: Record<string, unknown>): Promise<void>;
   createPod(namespace: string, manifest: Record<string, unknown>): Promise<void>;
   waitForPodReady(namespace: string, podName: string): Promise<void>;
@@ -30,6 +31,7 @@ interface K8sPodClient {
   ): Promise<{ stdout: string; stderr: string; code: number }>;
   deletePod(namespace: string, podName: string): Promise<void>;
   deletePvc(namespace: string, pvcName: string): Promise<void>;
+  deleteServiceAccount(namespace: string, serviceAccountName: string): Promise<void>;
 }
 
 export class KubernetesPodExecutionBackend implements ExecutionBackend {
@@ -57,14 +59,26 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
     const sandboxId = this.buildSandboxId(run.run_id);
     const pvcName = `${sandboxId}-workspace`.slice(0, 63);
     const image = this.resolveSandboxImage(plan);
+    const serviceAccountName = this.buildServiceAccountName(run.run_id);
+    const secretProfile = run.secret_profile ?? this.platformConfig.k8s?.default_secret_profile ?? "default";
+    const serviceAccountManifest = this.buildServiceAccountManifest(serviceAccountName);
     const pvcManifest = this.buildWorkspacePvcManifest(run, pvcName);
-    const manifest = await this.buildPodManifest(run, sandboxId, image, pvcName);
+    const manifest = await this.buildPodManifest(
+      run,
+      sandboxId,
+      image,
+      pvcName,
+      serviceAccountName,
+      secretProfile
+    );
 
+    await this.client.createServiceAccount(this.namespace, serviceAccountManifest);
     await this.client.createPvc(this.namespace, pvcManifest);
     try {
       await this.client.createPod(this.namespace, manifest);
       await this.client.waitForPodReady(this.namespace, sandboxId);
     } catch (error) {
+      await this.safeDeleteServiceAccount(serviceAccountName);
       await this.safeDeletePvc(pvcName);
       throw error;
     }
@@ -77,12 +91,14 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
       execution_backend: "k8s-pod",
       workspace_path: workspacePath,
       workspace_volume_ref: pvcName,
+      secret_profile: secretProfile,
       checkpoint_generation: 0,
       metadata: {
         namespace: this.namespace,
         image,
         pod_name: sandboxId,
         pvc_name: pvcName,
+        service_account_name: serviceAccountName,
       },
     };
   }
@@ -172,10 +188,13 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
         run_id: handle.run_id,
         project_id: handle.project_id,
         tenant_id: handle.tenant_id,
+        secret_profile: handle.secret_profile,
       } as TaskRun,
       handle.sandbox_id,
       image,
-      handle.workspace_volume_ref
+      handle.workspace_volume_ref,
+      String(handle.metadata["service_account_name"] ?? this.buildServiceAccountName(handle.run_id)),
+      handle.secret_profile ?? this.platformConfig.k8s?.default_secret_profile ?? "default"
     );
     await this.client.createPod(this.namespace, manifest);
     await this.client.waitForPodReady(this.namespace, handle.sandbox_id);
@@ -197,6 +216,10 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
     if (handle.workspace_volume_ref) {
       await this.safeDeletePvc(handle.workspace_volume_ref);
     }
+    const serviceAccountName = String(handle.metadata["service_account_name"] ?? "");
+    if (serviceAccountName) {
+      await this.safeDeleteServiceAccount(serviceAccountName);
+    }
   }
 
   private createClient(): K8sPodClient {
@@ -215,6 +238,9 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
     const execClient = new k8sModule.Exec(kc);
 
     return {
+      createServiceAccount: async (namespace, manifest) => {
+        await coreApi.createNamespacedServiceAccount({ namespace, body: manifest });
+      },
       createPvc: async (namespace, manifest) => {
         await coreApi.createNamespacedPersistentVolumeClaim({ namespace, body: manifest });
       },
@@ -306,6 +332,15 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
           throw error;
         }
       },
+      deleteServiceAccount: async (namespace, serviceAccountName) => {
+        try {
+          await coreApi.deleteNamespacedServiceAccount({ name: serviceAccountName, namespace });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (/NotFound|404/i.test(message)) return;
+          throw error;
+        }
+      },
     };
   }
 
@@ -341,8 +376,11 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
     run: TaskRun,
     sandboxId: string,
     image: string,
-    pvcName: string
+    pvcName: string,
+    serviceAccountName: string,
+    secretProfile: string
   ): Promise<Record<string, unknown>> {
+    const projectedSecrets = this.resolveProjectedSecrets(secretProfile);
     return {
       apiVersion: "v1",
       kind: "Pod",
@@ -358,14 +396,22 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
       },
       spec: {
         restartPolicy: "Never",
+        serviceAccountName,
+        automountServiceAccountToken: this.platformConfig.k8s?.automount_service_account_token ?? false,
         containers: [
           {
             name: "sandbox",
             image,
             imagePullPolicy: "IfNotPresent",
             command: ["sh", "-lc", "trap 'exit 0' TERM INT; while true; do sleep 3600; done"],
+            env: [
+              { name: "SPRINTFOUNDRY_SECRET_PROFILE", value: secretProfile },
+            ],
             volumeMounts: [
               { name: "workspace", mountPath: "/workspace" },
+              ...(projectedSecrets.length > 0
+                ? [{ name: "projected-secrets", mountPath: "/var/run/sprintfoundry/secrets", readOnly: true }]
+                : []),
               ...(await this.buildPluginVolumeMounts()),
             ],
           },
@@ -377,9 +423,35 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
               claimName: pvcName,
             },
           },
+          ...(projectedSecrets.length > 0
+            ? [
+                {
+                  name: "projected-secrets",
+                  projected: {
+                    sources: projectedSecrets.map((secretName) => ({
+                      secret: {
+                        name: secretName,
+                      },
+                    })),
+                  },
+                },
+              ]
+            : []),
           ...(await this.buildPluginVolumes()),
         ],
       },
+    };
+  }
+
+  private buildServiceAccountManifest(serviceAccountName: string): Record<string, unknown> {
+    return {
+      apiVersion: "v1",
+      kind: "ServiceAccount",
+      metadata: {
+        name: serviceAccountName,
+        namespace: this.namespace,
+      },
+      automountServiceAccountToken: this.platformConfig.k8s?.automount_service_account_token ?? false,
     };
   }
 
@@ -482,6 +554,11 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
     return `sf-pod-${normalized}`.slice(0, 63);
   }
 
+  private buildServiceAccountName(runId: string): string {
+    const normalized = runId.toLowerCase().replace(/[^a-z0-9-.]+/g, "-");
+    return `sf-sa-${normalized}`.slice(0, 63);
+  }
+
   private shellEscape(value: string): string {
     return `'${value.replace(/'/g, `'\"'\"'`)}'`;
   }
@@ -492,6 +569,17 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(`[execution-backend] Failed to delete PVC ${pvcName}: ${message}`);
+    }
+  }
+
+  private async safeDeleteServiceAccount(serviceAccountName: string): Promise<void> {
+    try {
+      await this.client.deleteServiceAccount(this.namespace, serviceAccountName);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `[execution-backend] Failed to delete service account ${serviceAccountName}: ${message}`
+      );
     }
   }
 
@@ -511,5 +599,10 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
       const record = condition as Record<string, unknown>;
       return record["type"] === "Ready" && record["status"] === "True";
     });
+  }
+
+  private resolveProjectedSecrets(secretProfile: string): string[] {
+    const profiles = this.platformConfig.k8s?.secret_profiles ?? {};
+    return profiles[secretProfile] ?? [];
   }
 }
