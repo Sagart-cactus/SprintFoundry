@@ -128,6 +128,11 @@ k8s:
   default_secret_profile: default
   secret_profiles:
     default: []
+  default_isolation_level: hardened_isolated
+  runtime_class_per_isolation:
+    standard_isolated: ""
+    hardened_isolated: gvisor
+    strong_isolated: kata
     developer: [detect-project-type, code-quality, error-handling, performance-review]
     go-developer: [code-quality, error-handling, performance-review]
     qa: [detect-project-type, testing-standards]

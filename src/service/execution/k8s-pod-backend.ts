@@ -61,6 +61,9 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
     const image = this.resolveSandboxImage(plan);
     const serviceAccountName = this.buildServiceAccountName(run.run_id);
     const secretProfile = run.secret_profile ?? this.platformConfig.k8s?.default_secret_profile ?? "default";
+    const isolationLevel = run.isolation_level
+      ?? this.platformConfig.k8s?.default_isolation_level
+      ?? "hardened_isolated";
     const serviceAccountManifest = this.buildServiceAccountManifest(serviceAccountName);
     const pvcManifest = this.buildWorkspacePvcManifest(run, pvcName);
     const manifest = await this.buildPodManifest(
@@ -69,7 +72,8 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
       image,
       pvcName,
       serviceAccountName,
-      secretProfile
+      secretProfile,
+      isolationLevel
     );
 
     await this.client.createServiceAccount(this.namespace, serviceAccountManifest);
@@ -92,6 +96,7 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
       workspace_path: workspacePath,
       workspace_volume_ref: pvcName,
       secret_profile: secretProfile,
+      isolation_level: isolationLevel,
       checkpoint_generation: 0,
       metadata: {
         namespace: this.namespace,
@@ -189,12 +194,16 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
         project_id: handle.project_id,
         tenant_id: handle.tenant_id,
         secret_profile: handle.secret_profile,
+        isolation_level: handle.isolation_level,
       } as TaskRun,
       handle.sandbox_id,
       image,
       handle.workspace_volume_ref,
       String(handle.metadata["service_account_name"] ?? this.buildServiceAccountName(handle.run_id)),
-      handle.secret_profile ?? this.platformConfig.k8s?.default_secret_profile ?? "default"
+      handle.secret_profile ?? this.platformConfig.k8s?.default_secret_profile ?? "default",
+      handle.isolation_level
+        ?? this.platformConfig.k8s?.default_isolation_level
+        ?? "hardened_isolated"
     );
     await this.client.createPod(this.namespace, manifest);
     await this.client.waitForPodReady(this.namespace, handle.sandbox_id);
@@ -378,9 +387,11 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
     image: string,
     pvcName: string,
     serviceAccountName: string,
-    secretProfile: string
+    secretProfile: string,
+    isolationLevel: NonNullable<RunEnvironmentHandle["isolation_level"]>
   ): Promise<Record<string, unknown>> {
     const projectedSecrets = this.resolveProjectedSecrets(secretProfile);
+    const runtimeClassName = this.resolveRuntimeClassName(isolationLevel);
     return {
       apiVersion: "v1",
       kind: "Pod",
@@ -398,6 +409,13 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
         restartPolicy: "Never",
         serviceAccountName,
         automountServiceAccountToken: this.platformConfig.k8s?.automount_service_account_token ?? false,
+        runtimeClassName,
+        securityContext: {
+          runAsNonRoot: true,
+          seccompProfile: {
+            type: "RuntimeDefault",
+          },
+        },
         containers: [
           {
             name: "sandbox",
@@ -406,7 +424,15 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
             command: ["sh", "-lc", "trap 'exit 0' TERM INT; while true; do sleep 3600; done"],
             env: [
               { name: "SPRINTFOUNDRY_SECRET_PROFILE", value: secretProfile },
+              { name: "SPRINTFOUNDRY_ISOLATION_LEVEL", value: isolationLevel },
             ],
+            securityContext: {
+              allowPrivilegeEscalation: false,
+              readOnlyRootFilesystem: false,
+              capabilities: {
+                drop: ["ALL"],
+              },
+            },
             volumeMounts: [
               { name: "workspace", mountPath: "/workspace" },
               ...(projectedSecrets.length > 0
@@ -604,5 +630,23 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
   private resolveProjectedSecrets(secretProfile: string): string[] {
     const profiles = this.platformConfig.k8s?.secret_profiles ?? {};
     return profiles[secretProfile] ?? [];
+  }
+
+  private resolveRuntimeClassName(
+    isolationLevel: NonNullable<RunEnvironmentHandle["isolation_level"]>
+  ): string | undefined {
+    const configured = this.platformConfig.k8s?.runtime_class_per_isolation?.[isolationLevel];
+    if (configured) return configured;
+
+    switch (isolationLevel) {
+      case "standard_isolated":
+        return undefined;
+      case "hardened_isolated":
+        return "gvisor";
+      case "strong_isolated":
+        return "kata";
+      default:
+        return undefined;
+    }
   }
 }
