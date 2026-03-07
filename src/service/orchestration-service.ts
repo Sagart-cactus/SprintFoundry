@@ -166,16 +166,20 @@ export class OrchestrationService {
     }
   }
 
-  private async uploadArtifactsIfConfigured(runId: string, workspacePath: string): Promise<void> {
+  private async uploadArtifactsIfConfigured(run: TaskRun, workspacePath: string): Promise<void> {
     try {
-      const summary = await this.artifactUploader.uploadRunArtifacts(runId, workspacePath);
+      const summary = await this.artifactUploader.uploadRunArtifacts({
+        run_id: run.run_id,
+        project_id: run.project_id,
+        tenant_id: run.tenant_id,
+      }, workspacePath);
       if (!summary.skipped && summary.attempted > summary.uploaded) {
         console.warn(
-          `[artifacts] Partial upload for run ${runId}: uploaded ${summary.uploaded}/${summary.attempted} to s3://${summary.bucket}/${summary.prefix}`
+          `[artifacts] Partial upload for run ${run.run_id}: uploaded ${summary.uploaded}/${summary.attempted} to s3://${summary.bucket}/${summary.prefix}`
         );
       }
     } catch (err) {
-      console.warn(`[artifacts] Upload skipped for run ${runId}: ${err instanceof Error ? err.message : String(err)}`);
+      console.warn(`[artifacts] Upload skipped for run ${run.run_id}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -624,7 +628,7 @@ export class OrchestrationService {
       return run;
     } finally {
       if (workspacePath) {
-        await this.uploadArtifactsIfConfigured(run.run_id, workspacePath);
+        await this.uploadArtifactsIfConfigured(run, workspacePath);
       }
       await this.events.close();
     }

@@ -23,6 +23,9 @@ Sandbox pods should not inherit ambient Kubernetes API credentials. A per-run id
 ### Network egress model
 Run-scoped egress policy uses `CiliumNetworkPolicy` with FQDN support. Vanilla Kubernetes `NetworkPolicy` is not used for hostname allowlists because it cannot express them. Clusters that do not run Cilium must either disable app-managed egress policy or provide an alternative enforcement path outside SprintFoundry.
 
+### Resource and artifact governance
+SprintFoundry owns pod requests/limits and tenant/project/run artifact prefixes. Namespace `ResourceQuota` objects remain a cluster-admin concern; the runner records the configured quota scope in run metadata but does not try to create cluster quota policy itself.
+
 ---
 
 ## ADR-001: Multi-Agent Orchestration Over Single Agent
