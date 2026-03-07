@@ -20,6 +20,8 @@ interface K8sPodClient {
   createPvc(namespace: string, manifest: Record<string, unknown>): Promise<void>;
   createPod(namespace: string, manifest: Record<string, unknown>): Promise<void>;
   waitForPodReady(namespace: string, podName: string): Promise<void>;
+  getPod(namespace: string, podName: string): Promise<Record<string, unknown> | null>;
+  getPvc(namespace: string, pvcName: string): Promise<Record<string, unknown> | null>;
   exec(
     namespace: string,
     podName: string,
@@ -56,44 +58,7 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
     const pvcName = `${sandboxId}-workspace`.slice(0, 63);
     const image = this.resolveSandboxImage(plan);
     const pvcManifest = this.buildWorkspacePvcManifest(run, pvcName);
-    const manifest = {
-      apiVersion: "v1",
-      kind: "Pod",
-      metadata: {
-        name: sandboxId,
-        namespace: this.namespace,
-        labels: {
-          "app.kubernetes.io/name": "sprintfoundry-run-sandbox",
-          "sprintfoundry.io/project-id": run.project_id,
-          "sprintfoundry.io/run-id": run.run_id,
-          ...(run.tenant_id ? { "sprintfoundry.io/tenant-id": run.tenant_id } : {}),
-        },
-      },
-      spec: {
-        restartPolicy: "Never",
-        containers: [
-          {
-            name: "sandbox",
-            image,
-            imagePullPolicy: "IfNotPresent",
-            command: ["sh", "-lc", "trap 'exit 0' TERM INT; while true; do sleep 3600; done"],
-            volumeMounts: [
-              { name: "workspace", mountPath: "/workspace" },
-              ...(await this.buildPluginVolumeMounts()),
-            ],
-          },
-        ],
-        volumes: [
-          {
-            name: "workspace",
-            persistentVolumeClaim: {
-              claimName: pvcName,
-            },
-          },
-          ...(await this.buildPluginVolumes()),
-        ],
-      },
-    };
+    const manifest = await this.buildPodManifest(run, sandboxId, image, pvcName);
 
     await this.client.createPvc(this.namespace, pvcManifest);
     try {
@@ -166,8 +131,62 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
   }
 
   async resumeRun(handle: RunEnvironmentHandle): Promise<RunEnvironmentHandle> {
-    console.warn("[execution-backend] KubernetesPodExecutionBackend does not support resume yet");
-    return handle;
+    const pod = await this.client.getPod(this.namespace, handle.sandbox_id);
+    if (pod) {
+      const phase = this.readPodPhase(pod);
+      if (phase === "Running" && this.isPodReady(pod)) {
+        return {
+          ...handle,
+          checkpoint_generation: handle.checkpoint_generation + 1,
+          metadata: {
+            ...handle.metadata,
+            recovery_action: "reattached",
+          },
+        };
+      }
+      throw new Error(
+        `Sandbox pod ${handle.sandbox_id} is not resumable from phase '${phase || "unknown"}'`
+      );
+    }
+
+    if (!handle.workspace_volume_ref) {
+      throw new Error(
+        `Sandbox pod ${handle.sandbox_id} is missing and no workspace PVC is available for recovery`
+      );
+    }
+
+    const pvc = await this.client.getPvc(this.namespace, handle.workspace_volume_ref);
+    if (!pvc) {
+      throw new Error(
+        `Sandbox pod ${handle.sandbox_id} is missing and PVC ${handle.workspace_volume_ref} was not found`
+      );
+    }
+
+    const image = String(handle.metadata["image"] ?? "").trim();
+    if (!image) {
+      throw new Error(`Sandbox pod ${handle.sandbox_id} cannot be recreated because no image metadata was persisted`);
+    }
+
+    const manifest = await this.buildPodManifest(
+      {
+        run_id: handle.run_id,
+        project_id: handle.project_id,
+        tenant_id: handle.tenant_id,
+      } as TaskRun,
+      handle.sandbox_id,
+      image,
+      handle.workspace_volume_ref
+    );
+    await this.client.createPod(this.namespace, manifest);
+    await this.client.waitForPodReady(this.namespace, handle.sandbox_id);
+    return {
+      ...handle,
+      checkpoint_generation: handle.checkpoint_generation + 1,
+      metadata: {
+        ...handle.metadata,
+        recovery_action: "recreated",
+      },
+    };
   }
 
   async teardownRun(
@@ -206,17 +225,33 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
         const deadline = Date.now() + 60_000;
         while (Date.now() < deadline) {
           const pod = await coreApi.readNamespacedPod({ name: podName, namespace });
-          const phase = pod?.status?.phase ?? pod?.body?.status?.phase;
-          const conditions = pod?.status?.conditions ?? pod?.body?.status?.conditions ?? [];
-          const ready = Array.isArray(conditions) && conditions.some((condition: any) =>
-            condition?.type === "Ready" && condition?.status === "True"
-          );
-          if (phase === "Running" && ready) {
+          const resolvedPod = (pod?.body ?? pod) as Record<string, unknown>;
+          if (this.readPodPhase(resolvedPod) === "Running" && this.isPodReady(resolvedPod)) {
             return;
           }
           await new Promise((resolve) => setTimeout(resolve, 1_000));
         }
         throw new Error(`Timed out waiting for pod ${podName} to become ready`);
+      },
+      getPod: async (namespace, podName) => {
+        try {
+          const pod = await coreApi.readNamespacedPod({ name: podName, namespace });
+          return (pod?.body ?? pod) as Record<string, unknown>;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (/NotFound|404/i.test(message)) return null;
+          throw error;
+        }
+      },
+      getPvc: async (namespace, pvcName) => {
+        try {
+          const pvc = await coreApi.readNamespacedPersistentVolumeClaim({ name: pvcName, namespace });
+          return (pvc?.body ?? pvc) as Record<string, unknown>;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (/NotFound|404/i.test(message)) return null;
+          throw error;
+        }
       },
       exec: async (namespace, podName, containerName, command) => {
         const stdoutChunks: Buffer[] = [];
@@ -298,6 +333,52 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
           },
         },
         ...(storageClassName ? { storageClassName } : {}),
+      },
+    };
+  }
+
+  private async buildPodManifest(
+    run: TaskRun,
+    sandboxId: string,
+    image: string,
+    pvcName: string
+  ): Promise<Record<string, unknown>> {
+    return {
+      apiVersion: "v1",
+      kind: "Pod",
+      metadata: {
+        name: sandboxId,
+        namespace: this.namespace,
+        labels: {
+          "app.kubernetes.io/name": "sprintfoundry-run-sandbox",
+          "sprintfoundry.io/project-id": run.project_id,
+          "sprintfoundry.io/run-id": run.run_id,
+          ...(run.tenant_id ? { "sprintfoundry.io/tenant-id": run.tenant_id } : {}),
+        },
+      },
+      spec: {
+        restartPolicy: "Never",
+        containers: [
+          {
+            name: "sandbox",
+            image,
+            imagePullPolicy: "IfNotPresent",
+            command: ["sh", "-lc", "trap 'exit 0' TERM INT; while true; do sleep 3600; done"],
+            volumeMounts: [
+              { name: "workspace", mountPath: "/workspace" },
+              ...(await this.buildPluginVolumeMounts()),
+            ],
+          },
+        ],
+        volumes: [
+          {
+            name: "workspace",
+            persistentVolumeClaim: {
+              claimName: pvcName,
+            },
+          },
+          ...(await this.buildPluginVolumes()),
+        ],
       },
     };
   }
@@ -412,5 +493,23 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(`[execution-backend] Failed to delete PVC ${pvcName}: ${message}`);
     }
+  }
+
+  private readPodPhase(pod: Record<string, unknown>): string {
+    const status = pod["status"];
+    if (!status || typeof status !== "object") return "";
+    return String((status as Record<string, unknown>)["phase"] ?? "");
+  }
+
+  private isPodReady(pod: Record<string, unknown>): boolean {
+    const status = pod["status"];
+    if (!status || typeof status !== "object") return false;
+    const conditions = (status as Record<string, unknown>)["conditions"];
+    if (!Array.isArray(conditions)) return false;
+    return conditions.some((condition) => {
+      if (!condition || typeof condition !== "object") return false;
+      const record = condition as Record<string, unknown>;
+      return record["type"] === "Ready" && record["status"] === "True";
+    });
   }
 }

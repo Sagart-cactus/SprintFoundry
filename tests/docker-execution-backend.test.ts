@@ -14,7 +14,7 @@ vi.mock("child_process", async () => {
 const { spawn: mockSpawn } = await import("child_process");
 const { DockerExecutionBackend } = await import("../src/service/execution/docker-backend.js");
 
-function makeFakeProcess(stdout = "", exitCode = 0) {
+function makeFakeProcess(stdout = "", exitCode = 0, stderr = "") {
   const proc = new EventEmitter() as any;
   proc.stdout = new EventEmitter();
   proc.stderr = new EventEmitter();
@@ -24,6 +24,7 @@ function makeFakeProcess(stdout = "", exitCode = 0) {
 
   setTimeout(() => {
     if (stdout) proc.stdout.emit("data", Buffer.from(stdout));
+    if (stderr) proc.stderr.emit("data", Buffer.from(stderr));
     proc.emit("close", exitCode);
   }, 5);
 
@@ -169,7 +170,7 @@ describe("DockerExecutionBackend", () => {
   it("pauses, resumes, and tears down the sandbox container", async () => {
     (mockSpawn as any)
       .mockImplementationOnce(() => makeFakeProcess(""))
-      .mockImplementationOnce(() => makeFakeProcess(""))
+      .mockImplementationOnce(() => makeFakeProcess("running\n"))
       .mockImplementationOnce(() => makeFakeProcess(""));
 
     const backend = new DockerExecutionBackend(makePlatformConfig(), makeProjectConfig());
@@ -180,15 +181,62 @@ describe("DockerExecutionBackend", () => {
       execution_backend: "docker",
       workspace_path: "/tmp/workspace-run-1",
       checkpoint_generation: 0,
-      metadata: {},
+      metadata: { image: "sprintfoundry/agent-developer:latest" },
     };
 
     await backend.pauseRun(handle);
-    await backend.resumeRun(handle);
+    const resumed = await backend.resumeRun(handle);
     await backend.teardownRun(handle, "completed");
 
     expect((mockSpawn as any).mock.calls[0][1]).toEqual(["pause", "sf-run-run-1"]);
-    expect((mockSpawn as any).mock.calls[1][1]).toEqual(["unpause", "sf-run-run-1"]);
+    expect((mockSpawn as any).mock.calls[1][1]).toEqual([
+      "inspect",
+      "-f",
+      "{{.State.Status}}",
+      "sf-run-run-1",
+    ]);
     expect((mockSpawn as any).mock.calls[2][1]).toEqual(["rm", "-f", "sf-run-run-1"]);
+    expect(resumed.checkpoint_generation).toBe(1);
+    expect(resumed.metadata).toMatchObject({ recovery_action: "reattached" });
+  });
+
+  it("recreates the sandbox container when the prior one is missing", async () => {
+    (mockSpawn as any)
+      .mockImplementationOnce(() => makeFakeProcess("", 1, "Error: No such container"))
+      .mockImplementationOnce(() => makeFakeProcess("container-456\n"));
+
+    const backend = new DockerExecutionBackend(makePlatformConfig(), makeProjectConfig());
+    const resumed = await backend.resumeRun({
+      run_id: "run-1",
+      project_id: "project-1",
+      sandbox_id: "sf-run-run-1",
+      execution_backend: "docker",
+      workspace_path: "/tmp/workspace-run-1",
+      checkpoint_generation: 2,
+      metadata: {
+        image: "sprintfoundry/agent-developer:latest",
+      },
+    });
+
+    expect((mockSpawn as any).mock.calls[0][1]).toEqual([
+      "inspect",
+      "-f",
+      "{{.State.Status}}",
+      "sf-run-run-1",
+    ]);
+    expect((mockSpawn as any).mock.calls[1][1]).toEqual(
+      expect.arrayContaining([
+        "run",
+        "-d",
+        "--name",
+        "sf-run-run-1",
+        "sprintfoundry/agent-developer:latest",
+      ])
+    );
+    expect(resumed.checkpoint_generation).toBe(3);
+    expect(resumed.metadata).toMatchObject({
+      recovery_action: "recreated",
+      container_id: "container-456",
+    });
   });
 });

@@ -8,6 +8,8 @@ describe("KubernetesPodExecutionBackend", () => {
     createPvc: vi.fn(),
     createPod: vi.fn(),
     waitForPodReady: vi.fn(),
+    getPod: vi.fn(),
+    getPvc: vi.fn(),
     exec: vi.fn(),
     deletePod: vi.fn(),
     deletePvc: vi.fn(),
@@ -148,6 +150,55 @@ describe("KubernetesPodExecutionBackend", () => {
     expect(client.exec.mock.calls[0][3][2]).toContain(
       "export AGENT_PLUGIN_DIRS='/opt/sprintfoundry/plugins/js-nextjs'"
     );
+  });
+
+  it("re-attaches to a running pod and recreates from PVC when the pod is gone", async () => {
+    client.getPod
+      .mockResolvedValueOnce({
+        status: {
+          phase: "Running",
+          conditions: [{ type: "Ready", status: "True" }],
+        },
+      })
+      .mockResolvedValueOnce(null);
+    client.getPvc.mockResolvedValue({
+      metadata: { name: "sf-pod-run-1-workspace" },
+    });
+    client.createPod.mockResolvedValue(undefined);
+    client.waitForPodReady.mockResolvedValue(undefined);
+
+    const backend = new KubernetesPodExecutionBackend(
+      makePlatformConfig({ k8s: { namespace: "tenant-a" } }),
+      makeProjectConfig(),
+      client
+    );
+
+    const attached = await backend.resumeRun({
+      run_id: "run-1",
+      project_id: "project-1",
+      sandbox_id: "sf-pod-run-1",
+      execution_backend: "k8s-pod",
+      workspace_path: "/tmp/workspace-run-1",
+      workspace_volume_ref: "sf-pod-run-1-workspace",
+      checkpoint_generation: 0,
+      metadata: { image: "sprintfoundry/agent-developer:latest" },
+    });
+    const recreated = await backend.resumeRun({
+      run_id: "run-1",
+      project_id: "project-1",
+      sandbox_id: "sf-pod-run-1",
+      execution_backend: "k8s-pod",
+      workspace_path: "/tmp/workspace-run-1",
+      workspace_volume_ref: "sf-pod-run-1-workspace",
+      checkpoint_generation: 1,
+      metadata: { image: "sprintfoundry/agent-developer:latest" },
+    });
+
+    expect(attached.checkpoint_generation).toBe(1);
+    expect(attached.metadata).toMatchObject({ recovery_action: "reattached" });
+    expect(client.createPod).toHaveBeenCalledTimes(1);
+    expect(recreated.checkpoint_generation).toBe(2);
+    expect(recreated.metadata).toMatchObject({ recovery_action: "recreated" });
   });
 
   it("deletes the pod on teardown", async () => {
