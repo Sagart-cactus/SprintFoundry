@@ -5,6 +5,7 @@ import { KubernetesPodExecutionBackend } from "../src/service/execution/k8s-pod-
 
 describe("KubernetesPodExecutionBackend", () => {
   const client = {
+    createServiceAccount: vi.fn(),
     createPvc: vi.fn(),
     createPod: vi.fn(),
     waitForPodReady: vi.fn(),
@@ -13,6 +14,7 @@ describe("KubernetesPodExecutionBackend", () => {
     exec: vi.fn(),
     deletePod: vi.fn(),
     deletePvc: vi.fn(),
+    deleteServiceAccount: vi.fn(),
   };
 
   beforeEach(() => {
@@ -22,6 +24,7 @@ describe("KubernetesPodExecutionBackend", () => {
   it("creates one pod sandbox per run and waits for readiness", async () => {
     client.createPod.mockResolvedValue(undefined);
     client.waitForPodReady.mockResolvedValue(undefined);
+    client.createServiceAccount.mockResolvedValue(undefined);
     client.createPvc.mockResolvedValue(undefined);
 
     const backend = new KubernetesPodExecutionBackend(
@@ -30,6 +33,10 @@ describe("KubernetesPodExecutionBackend", () => {
           namespace: "tenant-a",
           workspace_storage_class: "fast-ssd",
           workspace_size: "25Gi",
+          default_secret_profile: "github-only",
+          secret_profiles: {
+            "github-only": ["tenant-a-github-token"],
+          },
         },
       }),
       makeProjectConfig(),
@@ -53,13 +60,23 @@ describe("KubernetesPodExecutionBackend", () => {
       execution_backend: "k8s-pod",
       workspace_path: "/tmp/workspace-run-1",
       workspace_volume_ref: "sf-pod-run-1-workspace",
+      secret_profile: "github-only",
     });
 
+    expect(client.createServiceAccount).toHaveBeenCalledTimes(1);
     expect(client.createPvc).toHaveBeenCalledTimes(1);
     expect(client.createPod).toHaveBeenCalledTimes(1);
     expect(client.waitForPodReady).toHaveBeenCalledWith("tenant-a", "sf-pod-run-1");
+    const serviceAccountManifest = client.createServiceAccount.mock.calls[0][1];
     const pvcManifest = client.createPvc.mock.calls[0][1];
     const manifest = client.createPod.mock.calls[0][1];
+    expect(serviceAccountManifest).toMatchObject({
+      metadata: {
+        name: "sf-sa-run-1",
+        namespace: "tenant-a",
+      },
+      automountServiceAccountToken: false,
+    });
     expect(pvcManifest).toMatchObject({
       metadata: {
         name: "sf-pod-run-1-workspace",
@@ -80,11 +97,24 @@ describe("KubernetesPodExecutionBackend", () => {
         "sprintfoundry.io/tenant-id": "tenant-1",
       },
     });
+    expect(manifest.spec).toMatchObject({
+      serviceAccountName: "sf-sa-run-1",
+      automountServiceAccountToken: false,
+    });
+    expect(manifest.spec.containers[0].env).toEqual([
+      { name: "SPRINTFOUNDRY_SECRET_PROFILE", value: "github-only" },
+    ]);
     expect(manifest.spec.volumes).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           name: "workspace",
           persistentVolumeClaim: { claimName: "sf-pod-run-1-workspace" },
+        }),
+        expect.objectContaining({
+          name: "projected-secrets",
+          projected: {
+            sources: [{ secret: { name: "tenant-a-github-token" } }],
+          },
         }),
       ])
     );
@@ -181,7 +211,11 @@ describe("KubernetesPodExecutionBackend", () => {
       workspace_path: "/tmp/workspace-run-1",
       workspace_volume_ref: "sf-pod-run-1-workspace",
       checkpoint_generation: 0,
-      metadata: { image: "sprintfoundry/agent-developer:latest" },
+      secret_profile: "default",
+      metadata: {
+        image: "sprintfoundry/agent-developer:latest",
+        service_account_name: "sf-sa-run-1",
+      },
     });
     const recreated = await backend.resumeRun({
       run_id: "run-1",
@@ -191,7 +225,11 @@ describe("KubernetesPodExecutionBackend", () => {
       workspace_path: "/tmp/workspace-run-1",
       workspace_volume_ref: "sf-pod-run-1-workspace",
       checkpoint_generation: 1,
-      metadata: { image: "sprintfoundry/agent-developer:latest" },
+      secret_profile: "default",
+      metadata: {
+        image: "sprintfoundry/agent-developer:latest",
+        service_account_name: "sf-sa-run-1",
+      },
     });
 
     expect(attached.checkpoint_generation).toBe(1);
@@ -204,6 +242,7 @@ describe("KubernetesPodExecutionBackend", () => {
   it("deletes the pod on teardown", async () => {
     client.deletePod.mockResolvedValue(undefined);
     client.deletePvc.mockRejectedValue(new Error("storage api unavailable"));
+    client.deleteServiceAccount.mockResolvedValue(undefined);
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const backend = new KubernetesPodExecutionBackend(
@@ -221,13 +260,16 @@ describe("KubernetesPodExecutionBackend", () => {
         workspace_path: "/tmp/workspace-run-1",
         workspace_volume_ref: "sf-pod-run-1-workspace",
         checkpoint_generation: 0,
-        metadata: {},
+        metadata: {
+          service_account_name: "sf-sa-run-1",
+        },
       },
       "completed"
     );
 
     expect(client.deletePod).toHaveBeenCalledWith("tenant-a", "sf-pod-run-1");
     expect(client.deletePvc).toHaveBeenCalledWith("tenant-a", "sf-pod-run-1-workspace");
+    expect(client.deleteServiceAccount).toHaveBeenCalledWith("tenant-a", "sf-sa-run-1");
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining("Failed to delete PVC sf-pod-run-1-workspace")
     );

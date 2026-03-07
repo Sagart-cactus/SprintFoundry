@@ -232,6 +232,10 @@ export interface PlatformConfig {
     namespace?: string;
     workspace_storage_class?: string;
     workspace_size?: string;
+    service_account_mode?: "per_run" | "shared";
+    automount_service_account_token?: boolean;
+    default_secret_profile?: string;
+    secret_profiles?: Record<string, string[]>;
   };
 }
 
