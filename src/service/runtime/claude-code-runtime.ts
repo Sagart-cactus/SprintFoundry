@@ -1,6 +1,6 @@
 import * as path from "path";
-import { spawn } from "child_process";
 import * as fs from "fs/promises";
+import { spawn } from "child_process";
 import { query, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
 import type {
   AgentRuntime,
@@ -27,13 +27,6 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     const activityDispatcher = this.createActivityDispatcher(config);
     await fs.mkdir(config.workspacePath, { recursive: true });
     try {
-      if (config.runtime.mode === "container") {
-        console.warn(
-          "[sprintfoundry] Container mode is deprecated and will be removed in v0.3.0. " +
-          "Use local_process instead."
-        );
-        return this.runContainer(config);
-      }
       if (config.runtime.mode === "local_sdk") return this.runSdk(config, activityDispatcher);
       return this.runLocal(config, activityDispatcher);
     } finally {
@@ -254,8 +247,8 @@ export class ClaudeCodeRuntime implements AgentRuntime {
         });
       };
 
-      proc.on("close", (code) => { finish(code).catch(reject); });
-      proc.on("error", async (err) => {
+      proc.on("close", (code: number | null) => { finish(code).catch(reject); });
+      proc.on("error", async (err: Error) => {
         clearTimeout(timeoutHandle);
         await Promise.all([
           fs.writeFile(paths.stepStdoutPath, stdoutLines.join("\n"), "utf-8").catch(() => {}),
@@ -841,112 +834,6 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     return Boolean(value) && typeof value === "object" && !Array.isArray(value);
   }
 
-  private async runContainer(config: RuntimeStepContext): Promise<RuntimeStepResult> {
-    const containerName = `sprintfoundry-${config.agent}-${Date.now()}`;
-    const resources = config.containerResources ?? {};
-    const flags = config.cliFlags ?? {};
-    const image = config.runtime.image ?? config.containerImage;
-    if (!image) throw new Error(`No container image configured for ${config.agent}`);
-
-    const dockerArgs: string[] = [
-      "run",
-      "--name", containerName,
-      "--rm",
-      "-v", `${config.workspacePath}:/workspace`,
-      "-e", `ANTHROPIC_API_KEY=${config.apiKey}`,
-      "-e", `ANTHROPIC_MODEL=${config.modelConfig.model}`,
-      "-e", `AGENT_TYPE=${config.agent}`,
-      "-e", `AGENT_MAX_BUDGET=${flags.max_budget_usd ?? ""}`,
-      "-e", `AGENT_OUTPUT_FORMAT=${flags.output_format ?? "json"}`,
-      "-e", `AGENT_SKIP_PERMISSIONS=${flags.skip_permissions !== false ? "true" : "false"}`,
-      "--memory", resources.memory ?? "4g",
-      "--cpus", resources.cpus ?? "2",
-      "--network", resources.network ?? "bridge",
-    ];
-
-    if (config.plugins && config.plugins.length > 0) {
-      const containerPluginDirs: string[] = [];
-      for (const pluginPath of config.plugins) {
-        const pluginName = path.basename(pluginPath);
-        const containerPath = `/plugins/${pluginName}`;
-        dockerArgs.push("-v", `${pluginPath}:${containerPath}:ro`);
-        containerPluginDirs.push(containerPath);
-      }
-      dockerArgs.push("-e", `AGENT_PLUGIN_DIRS=${containerPluginDirs.join(":")}`);
-    }
-
-    dockerArgs.push(image);
-    const paths = this.buildLogPaths(config);
-
-    // Initiate debug file write concurrently — do NOT await before spawning so
-    // that event listeners are attached synchronously with no async gap in between.
-    const debugWritePromise = this.writeDebugFiles(paths, {
-      timestamp: new Date().toISOString(),
-      step_number: config.stepNumber,
-      step_attempt: config.stepAttempt,
-      runtime_mode: config.runtime.mode,
-      runtime_provider: config.runtime.provider,
-      runtime_command: "docker",
-      container_name: containerName,
-      image,
-      model: config.modelConfig.model,
-      api_key_present: Boolean(config.apiKey),
-    });
-
-    return new Promise((resolve, reject) => {
-      const proc = spawn("docker", dockerArgs, { stdio: ["pipe", "pipe", "pipe"] });
-      let stdout = "";
-      let stderr = "";
-
-      proc.stdout?.on("data", (data) => {
-        stdout += data.toString();
-      });
-      proc.stderr?.on("data", (data) => {
-        stderr += data.toString();
-      });
-
-      const timeout = setTimeout(() => {
-        spawn("docker", ["kill", containerName]);
-        void debugWritePromise.catch(() => {}).then(() =>
-          this.persistContainerLogs(paths, stdout, stderr)
-        ).finally(() => {
-          reject(new Error(`Agent container ${config.agent} timed out`));
-        });
-      }, config.timeoutMinutes * 60 * 1000);
-
-      proc.on("close", (code) => {
-        clearTimeout(timeout);
-        void debugWritePromise.catch(() => {}).then(() =>
-          this.persistContainerLogs(paths, stdout, stderr)
-        ).finally(() => {
-          if (code !== 0) {
-            reject(new Error(`Agent container ${config.agent} exited with code ${code}`));
-            return;
-          }
-          const runtimeMetadata = this.buildRuntimeMetadata(config, containerName, {
-            provider_metadata: {
-              output_parsing: "container_stdout",
-            },
-          });
-          resolve({
-            tokens_used: parseTokenUsage(stdout),
-            runtime_id: containerName,
-            runtime_metadata: runtimeMetadata,
-          });
-        });
-      });
-
-      proc.on("error", (err) => {
-        clearTimeout(timeout);
-        void debugWritePromise.catch(() => {}).then(() =>
-          this.persistContainerLogs(paths, stdout, stderr)
-        ).finally(() => {
-          reject(err);
-        });
-      });
-    });
-  }
-
   private buildLogPaths(config: RuntimeStepContext) {
     const stepPrefix = `.claude-runtime.step-${config.stepNumber}.attempt-${config.stepAttempt}`;
     return {
@@ -982,28 +869,6 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       fs.writeFile(latestStdoutPath, stdout, "utf-8"),
       fs.writeFile(latestStderrPath, stderr, "utf-8"),
     ]);
-  }
-
-  private async persistContainerLogs(
-    paths: {
-      stepStdoutPath: string;
-      stepStderrPath: string;
-      latestStdoutPath: string;
-      latestStderrPath: string;
-    },
-    stdout: string,
-    stderr: string
-  ): Promise<void> {
-    await Promise.all([
-      fs.writeFile(paths.stepStdoutPath, stdout, "utf-8"),
-      fs.writeFile(paths.stepStderrPath, stderr, "utf-8"),
-    ]);
-    await this.copyLatestLogs(
-      paths.stepStdoutPath,
-      paths.stepStderrPath,
-      paths.latestStdoutPath,
-      paths.latestStderrPath
-    );
   }
 
   private buildRuntimeMetadata(

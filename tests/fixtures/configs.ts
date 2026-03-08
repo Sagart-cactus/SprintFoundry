@@ -10,6 +10,7 @@ export function makePlatformConfig(
   overrides?: Partial<PlatformConfig>
 ): PlatformConfig {
   return {
+    execution_backend: overrides?.execution_backend,
     defaults: {
       model_per_agent: {
         orchestrator: { provider: "anthropic", model: "claude-sonnet-4-5-20250929" },
@@ -51,6 +52,7 @@ export function makePlatformConfig(
     rules: overrides?.rules ?? defaultPlatformRules(),
     agent_definitions: overrides?.agent_definitions ?? defaultAgentDefinitions(),
     events_dir: overrides?.events_dir,
+    k8s: overrides?.k8s,
   };
 }
 
@@ -88,6 +90,7 @@ export function makeProjectConfig(
     },
     stack: overrides?.stack,
     agents: overrides?.agents,
+    execution_backend_override: overrides?.execution_backend_override,
     runtime_overrides: overrides?.runtime_overrides,
     planner_runtime_override: overrides?.planner_runtime_override,
   };

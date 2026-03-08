@@ -1,9 +1,8 @@
 // ============================================================
 // SprintFoundry — Agent Runner
-// Spawns agent containers, manages execution, captures results
+// Prepares agent workspaces, delegates step execution, captures results
 // ============================================================
 
-import { spawn, type ChildProcess } from "child_process";
 import * as fs from "fs/promises";
 import * as path from "path";
 import { fileURLToPath } from "url";
@@ -22,9 +21,13 @@ import type {
 } from "../shared/types.js";
 import { RuntimeFactory } from "./runtime/runtime-factory.js";
 import { CodexSkillManager } from "./runtime/codex-skill-manager.js";
-import { parseTokenUsage as parseRuntimeTokenUsage } from "./runtime/process-utils.js";
 import type { RuntimeActivityEvent } from "./runtime/types.js";
 import type { EventSinkClient } from "./event-sink-client.js";
+import {
+  LocalExecutionBackend,
+  type ExecutionBackend,
+  type RunEnvironmentHandle,
+} from "./execution/index.js";
 
 export interface AgentRunConfig {
   runId: string;
@@ -46,6 +49,13 @@ export interface AgentRunConfig {
   plugins?: string[];
   cliFlags?: AgentCliFlags;
   containerResources?: ContainerResources;
+  runEnvironment?: RunEnvironmentHandle;
+  runtime?: RuntimeConfig;
+  resolvedPluginPaths?: string[];
+  containerImage?: string;
+  codexHomeDir?: string;
+  codexSkillNames?: string[];
+  guardrails?: GuardrailConfig;
   resumeSessionId?: string;
   resumeReason?: string;
   onRuntimeActivity?: (event: RuntimeActivityEvent) => Promise<void> | void;
@@ -79,24 +89,25 @@ export class AgentRunner {
   private agentDir: string;
   private codexAgentDir: string;
   private projectRoot: string;
-  private runtimeFactory: RuntimeFactory;
   private codexSkillManager: CodexSkillManager;
+  private executionBackend: ExecutionBackend;
 
   constructor(
     private platformConfig: PlatformConfig,
-    private projectConfig: ProjectConfig
+    private projectConfig: ProjectConfig,
+    executionBackend?: ExecutionBackend
   ) {
     const __filename = fileURLToPath(import.meta.url);
     const __dirname = path.dirname(__filename);
     this.agentDir = path.resolve(__dirname, "../agents");
     this.codexAgentDir = path.resolve(__dirname, "../agents-codex");
     this.projectRoot = path.resolve(__dirname, "../..");
-    this.runtimeFactory = new RuntimeFactory();
     this.codexSkillManager = new CodexSkillManager(
       platformConfig,
       projectConfig,
       this.projectRoot
     );
+    this.executionBackend = executionBackend ?? new LocalExecutionBackend();
   }
 
   async run(config: AgentRunConfig): Promise<AgentRunResult> {
@@ -109,36 +120,25 @@ export class AgentRunner {
     console.log(`[agent-runner] Preparing workspace at ${config.workspacePath}...`);
     const prep = (await this.prepareWorkspace(config, runtime)) ?? {};
 
-    // 3. Spawn runtime selected for this agent
     const agentDef = this.platformConfig.agent_definitions.find((d) => d.type === config.agent);
-    const runtimeImpl = this.runtimeFactory.create(runtime);
     console.log(`[agent-runner] Spawning ${runtime.provider} runtime for ${config.agent}...`);
-    const result = await runtimeImpl.runStep({
-      runId: config.runId,
-      stepNumber: config.stepNumber,
-      stepAttempt: config.stepAttempt,
-      agent: config.agent,
-      task: config.task,
-      context_inputs: config.context_inputs,
-      workspacePath: config.workspacePath,
-      modelConfig: config.modelConfig,
-      apiKey: config.apiKey,
-      timeoutMinutes: config.timeoutMinutes,
-      tokenBudget: config.tokenBudget,
-      previousStepResults: config.previousStepResults,
-      plugins: this.resolvePluginPaths(config.plugins),
-      cliFlags: config.cliFlags,
-      containerResources: config.containerResources,
-      runtime,
-      containerImage: agentDef?.container_image,
-      codexHomeDir: prep.codexHomeDir,
-      codexSkillNames: prep.codexSkillNames,
-      resumeSessionId: config.resumeSessionId,
-      resumeReason: config.resumeReason,
-      guardrails: this.resolveGuardrails(),
-      onActivity: config.onRuntimeActivity,
-      sinkClient: config.sinkClient,
-    });
+    const runEnvironment =
+      config.runEnvironment
+      ?? this.createFallbackRunEnvironment(config);
+    const result = await this.executionBackend.executeStep(
+      runEnvironment,
+      this.toPlanStep(config),
+      {
+        ...config,
+        runEnvironment,
+        runtime,
+        resolvedPluginPaths: this.resolvePluginPaths(config.plugins),
+        containerImage: agentDef?.container_image,
+        codexHomeDir: prep.codexHomeDir,
+        codexSkillNames: prep.codexSkillNames,
+        guardrails: this.resolveGuardrails(),
+      }
+    );
 
     if ((prep.codexSkillNames?.length ?? 0) > 0 || (prep.skillWarnings?.length ?? 0) > 0) {
       result.runtime_metadata = this.mergeSkillMetadata(result.runtime_metadata, prep);
@@ -176,13 +176,36 @@ export class AgentRunner {
       tokens_used: result.tokens_used,
       cost_usd: costUsd,
       duration_seconds: duration,
-      container_id: result.runtime_id,
+      container_id: result.container_id,
       usage: result.usage,
       resume_used: result.resume_used,
       resume_failed: result.resume_failed,
       resume_fallback: result.resume_fallback,
       token_savings: result.token_savings,
       runtime_metadata: result.runtime_metadata,
+    };
+  }
+
+  private createFallbackRunEnvironment(config: AgentRunConfig): RunEnvironmentHandle {
+    return {
+      run_id: config.runId,
+      project_id: this.projectConfig.project_id,
+      sandbox_id: `local-${config.runId || config.stepNumber}`,
+      execution_backend: "local",
+      workspace_path: config.workspacePath,
+      checkpoint_generation: 0,
+      metadata: {},
+    };
+  }
+
+  private toPlanStep(config: AgentRunConfig): import("../shared/types.js").PlanStep {
+    return {
+      step_number: config.stepNumber,
+      agent: config.agent,
+      task: config.task,
+      context_inputs: config.context_inputs,
+      depends_on: [],
+      estimated_complexity: "medium",
     };
   }
 
@@ -453,186 +476,10 @@ export class AgentRunner {
       return this.platformConfig.defaults.runtime_per_agent[role];
     }
 
-    const useContainer = process.env.SPRINTFOUNDRY_USE_CONTAINERS === "true";
     return {
       provider: "claude-code",
-      mode: useContainer ? "container" : "local_process",
+      mode: "local_process",
     };
-  }
-
-  // ---- Agent Spawning ----
-
-  private async spawnAgent(
-    config: AgentRunConfig,
-    taskPrompt: string
-  ): Promise<{ tokens_used: number; container_id: string }> {
-    // Determine execution mode: container or local
-    const useContainer = process.env.SPRINTFOUNDRY_USE_CONTAINERS === "true";
-
-    if (useContainer) {
-      return this.spawnContainer(config, taskPrompt);
-    } else {
-      return this.spawnLocalClaudeCode(config, taskPrompt);
-    }
-  }
-
-  // -- Local mode: run Claude Code directly --
-
-  private async spawnLocalClaudeCode(
-    config: AgentRunConfig,
-    taskPrompt: string
-  ): Promise<{ tokens_used: number; container_id: string }> {
-    return new Promise((resolve, reject) => {
-      const args = this.buildClaudeCliArgs(taskPrompt, config);
-
-      const proc = spawn("claude", args, {
-        cwd: config.workspacePath,
-        env: {
-          ...process.env,
-          ANTHROPIC_API_KEY: config.apiKey,
-          ANTHROPIC_MODEL: config.modelConfig.model,
-        },
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-
-      let stdout = "";
-      let stderr = "";
-
-      proc.stdout?.on("data", (data) => {
-        stdout += data.toString();
-      });
-      proc.stderr?.on("data", (data) => {
-        stderr += data.toString();
-      });
-
-      // Timeout enforcement
-      const timeout = setTimeout(() => {
-        proc.kill("SIGTERM");
-        reject(new Error(`Agent ${config.agent} timed out after ${config.timeoutMinutes} minutes`));
-      }, config.timeoutMinutes * 60 * 1000);
-
-      proc.on("close", (code) => {
-        clearTimeout(timeout);
-
-        if (code !== 0) {
-          reject(
-            new Error(
-              `Agent ${config.agent} exited with code ${code}. ${stderr.trim()}`
-            )
-          );
-          return;
-        }
-
-        // Parse token usage from Claude Code output if available
-        const tokensUsed = this.parseTokenUsage(stdout);
-
-        resolve({
-          tokens_used: tokensUsed,
-          container_id: `local-${proc.pid}`,
-        });
-      });
-
-      proc.on("error", (err) => {
-        clearTimeout(timeout);
-        reject(err);
-      });
-    });
-  }
-
-  // -- Container mode: run in Docker --
-
-  private async spawnContainer(
-    config: AgentRunConfig,
-    taskPrompt: string
-  ): Promise<{ tokens_used: number; container_id: string }> {
-    const agentDef = this.platformConfig.agent_definitions.find(
-      (d) => d.type === config.agent
-    );
-    if (!agentDef) {
-      throw new Error(`No agent definition found for: ${config.agent}`);
-    }
-
-    const containerName = `sprintfoundry-${config.agent}-${Date.now()}`;
-    const resources = config.containerResources ?? {};
-    const flags = config.cliFlags ?? {};
-
-    // Resolve plugin paths for volume mounts
-    const pluginPaths = this.resolvePluginPaths(config.plugins);
-
-    return new Promise((resolve, reject) => {
-      const dockerArgs: string[] = [
-        "run",
-        "--name", containerName,
-        "--rm",
-        // Mount workspace
-        "-v", `${config.workspacePath}:/workspace`,
-        // Pass environment
-        "-e", `ANTHROPIC_API_KEY=${config.apiKey}`,
-        "-e", `ANTHROPIC_MODEL=${config.modelConfig.model}`,
-        "-e", `AGENT_TYPE=${config.agent}`,
-        // Pass CLI config as env vars for entrypoint.sh
-        "-e", `AGENT_MAX_BUDGET=${flags.max_budget_usd ?? ""}`,
-        "-e", `AGENT_OUTPUT_FORMAT=${flags.output_format ?? "json"}`,
-        "-e", `AGENT_SKIP_PERMISSIONS=${flags.skip_permissions !== false ? "true" : "false"}`,
-        // Resource limits (configurable)
-        "--memory", resources.memory ?? "4g",
-        "--cpus", resources.cpus ?? "2",
-        // Network access
-        "--network", resources.network ?? "bridge",
-      ];
-
-      // Mount plugin directories and pass as env var
-      if (pluginPaths.length > 0) {
-        const containerPluginDirs: string[] = [];
-        for (const pluginPath of pluginPaths) {
-          const pluginName = path.basename(pluginPath);
-          const containerPath = `/plugins/${pluginName}`;
-          dockerArgs.push("-v", `${pluginPath}:${containerPath}:ro`);
-          containerPluginDirs.push(containerPath);
-        }
-        dockerArgs.push("-e", `AGENT_PLUGIN_DIRS=${containerPluginDirs.join(":")}`);
-      }
-
-      // Image
-      dockerArgs.push(agentDef.container_image);
-
-      const proc = spawn("docker", dockerArgs, {
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-
-      let stdout = "";
-
-      proc.stdout?.on("data", (data) => {
-        stdout += data.toString();
-      });
-
-      const timeout = setTimeout(() => {
-        spawn("docker", ["kill", containerName]);
-        reject(new Error(`Agent container ${config.agent} timed out`));
-      }, config.timeoutMinutes * 60 * 1000);
-
-      proc.on("close", (code) => {
-        clearTimeout(timeout);
-        if (code !== 0) {
-          reject(
-            new Error(
-              `Agent container ${config.agent} exited with code ${code}`
-            )
-          );
-          return;
-        }
-        const tokensUsed = this.parseTokenUsage(stdout);
-        resolve({
-          tokens_used: tokensUsed,
-          container_id: containerName,
-        });
-      });
-
-      proc.on("error", (err) => {
-        clearTimeout(timeout);
-        reject(err);
-      });
-    });
   }
 
   // ---- Result Reading ----
@@ -687,10 +534,6 @@ export class AgentRunner {
   }
 
   // ---- Utilities ----
-
-  private parseTokenUsage(output: string): number {
-    return parseRuntimeTokenUsage(output);
-  }
 
   private estimateCost(tokens: number, model: ModelConfig): number {
     // Rough cost estimation per 1M tokens

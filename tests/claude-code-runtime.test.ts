@@ -2,20 +2,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import * as fs from "fs/promises";
 import * as path from "path";
 import * as os from "os";
-import { EventEmitter } from "events";
 import type { RuntimeStepContext } from "../src/service/runtime/types.js";
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
   query: vi.fn(),
 }));
-
-vi.mock("child_process", async () => {
-  const actual = await vi.importActual<typeof import("child_process")>("child_process");
-  return {
-    ...actual,
-    spawn: vi.fn(),
-  };
-});
 
 vi.mock("../src/service/runtime/process-utils.js", async () => {
   const actual = await vi.importActual<typeof import("../src/service/runtime/process-utils.js")>(
@@ -25,11 +16,10 @@ vi.mock("../src/service/runtime/process-utils.js", async () => {
 });
 
 const { query: mockQuery } = await import("@anthropic-ai/claude-agent-sdk");
-const { spawn: mockSpawn } = await import("child_process");
 const { runProcess: mockRunProcess } = await import("../src/service/runtime/process-utils.js");
 const { ClaudeCodeRuntime } = await import("../src/service/runtime/claude-code-runtime.js");
 
-function makeContext(workspacePath: string, mode: "local_sdk" | "local_process" | "container" = "local_sdk"): RuntimeStepContext {
+function makeContext(workspacePath: string, mode: "local_sdk" | "local_process" = "local_sdk"): RuntimeStepContext {
   return {
     stepNumber: 1,
     stepAttempt: 1,
@@ -45,7 +35,6 @@ function makeContext(workspacePath: string, mode: "local_sdk" | "local_process" 
     plugins: ["/tmp/plugin-a", "/tmp/plugin-b"],
     cliFlags: { max_budget_usd: 2.5, skip_permissions: true },
     runtime: { provider: "claude-code", mode, env: { EXTRA_ENV: "yes" } },
-    containerImage: "ghcr.io/org/agent:latest",
   };
 }
 
@@ -326,51 +315,6 @@ describe("ClaudeCodeRuntime", () => {
     ctx.timeoutMinutes = 0.001;
 
     await expect(runtime.runStep(ctx)).rejects.toThrow(/timed out/);
-  });
-
-  it("keeps container mode on docker CLI path", async () => {
-    const proc = new EventEmitter() as any;
-    proc.stdout = new EventEmitter();
-    proc.stderr = new EventEmitter();
-    proc.on = proc.addListener.bind(proc);
-
-    (mockSpawn as any)
-      .mockReturnValueOnce(proc)
-      .mockReturnValueOnce(new EventEmitter());
-
-    const runtime = new ClaudeCodeRuntime();
-    const promise = runtime.runStep(makeContext(tmpDir, "container"));
-
-    setTimeout(() => {
-      proc.stdout.emit("data", Buffer.from(JSON.stringify({ usage: { total_tokens: 9 } })));
-      proc.emit("close", 0);
-    }, 5);
-
-    const result = await promise;
-    const latestDebug = JSON.parse(
-      await fs.readFile(path.join(tmpDir, ".claude-runtime.debug.json"), "utf-8")
-    );
-    const stepDebug = JSON.parse(
-      await fs.readFile(
-        path.join(tmpDir, ".claude-runtime.step-1.attempt-1.debug.json"),
-        "utf-8"
-      )
-    );
-
-    expect((mockSpawn as any).mock.calls[0][0]).toBe("docker");
-    expect(result.runtime_id).toContain("sprintfoundry-developer-");
-    expect(result.tokens_used).toBe(9);
-    expect(result.runtime_metadata).toMatchObject({
-      schema_version: 1,
-      runtime: {
-        provider: "claude-code",
-        mode: "container",
-        step_attempt: 1,
-      },
-    });
-    expect(latestDebug.runtime_command).toBe("docker");
-    expect(latestDebug.runtime_mode).toBe("container");
-    expect(stepDebug.runtime_provider).toBe("claude-code");
   });
 
   it("uses CLI subprocess (not SDK) for local_process mode", async () => {

@@ -933,15 +933,6 @@ describe("CodexRuntime unsupported modes", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it("throws for container mode", async () => {
-    const runtime = new CodexRuntime();
-    await expect(
-      runtime.runStep(
-        makeContext(tmpDir, { runtime: { provider: "codex", mode: "container" } })
-      )
-    ).rejects.toThrow("Codex runtime supports only local_process and local_sdk modes");
-  });
-
   it("throws for remote mode", async () => {
     const runtime = new CodexRuntime();
     await expect(

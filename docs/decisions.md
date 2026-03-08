@@ -4,6 +4,33 @@ This document captures every significant design decision made during the archite
 
 ---
 
+## ADR-000: Kubernetes Sandbox Identity Defaults
+
+**Status:** Accepted  
+**Date:** 2026-03-08
+
+### Decision
+Use a dedicated service account per run sandbox, disable `automountServiceAccountToken` by default, and project external credentials only through named `k8s.secret_profiles`.
+
+### Rationale
+Sandbox pods should not inherit ambient Kubernetes API credentials. A per-run identity gives clean audit boundaries, while explicit secret profiles keep external credentials scoped to the run that requested them.
+
+### Tradeoffs
+- More Kubernetes objects per run
+- Secret profile configuration must be maintained explicitly
+- Namespace-per-tenant isolation is still a deployment choice outside the runner
+
+### Network egress model
+Run-scoped egress policy uses `CiliumNetworkPolicy` with FQDN support. Vanilla Kubernetes `NetworkPolicy` is not used for hostname allowlists because it cannot express them. Clusters that do not run Cilium must either disable app-managed egress policy or provide an alternative enforcement path outside SprintFoundry.
+
+### Resource and artifact governance
+SprintFoundry owns pod requests/limits and tenant/project/run artifact prefixes. Namespace `ResourceQuota` objects remain a cluster-admin concern; the runner records the configured quota scope in run metadata but does not try to create cluster quota policy itself.
+
+### Agent sandbox rollout
+The `agent-sandbox` backend is scaffolded behind an explicit feature flag or config gate. The default hosted backend remains the pod-scoped Kubernetes backend until the `SandboxClaim` lifecycle and execution protocol are proven out.
+
+---
+
 ## ADR-001: Multi-Agent Orchestration Over Single Agent
 
 **Status:** Accepted  

@@ -22,6 +22,12 @@ export interface ArtifactUploaderOptions {
   logger?: Pick<Console, "warn">;
 }
 
+export interface ArtifactUploadIdentity {
+  run_id: string;
+  project_id?: string;
+  tenant_id?: string;
+}
+
 export interface ArtifactUploadSummary {
   attempted: number;
   uploaded: number;
@@ -108,9 +114,14 @@ export class ArtifactUploader {
     this.logger = options.logger ?? console;
   }
 
-  async uploadRunArtifacts(runId: string, workspacePath: string): Promise<ArtifactUploadSummary> {
+  async uploadRunArtifacts(
+    run: string | ArtifactUploadIdentity,
+    workspacePath: string
+  ): Promise<ArtifactUploadSummary> {
+    const identity = typeof run === "string" ? { run_id: run } : run;
+    const runId = identity.run_id;
     const bucket = asString(this.options.bucket ?? process.env.SPRINTFOUNDRY_ARTIFACT_BUCKET);
-    const prefix = normalizeS3Key(`runs/${runId}`);
+    const prefix = this.buildArtifactPrefix(identity);
 
     if (!bucket) {
       return {
@@ -181,6 +192,12 @@ export class ArtifactUploader {
       bucket,
       prefix,
     };
+  }
+
+  private buildArtifactPrefix(identity: ArtifactUploadIdentity): string {
+    const tenantId = asString(identity.tenant_id) || "shared";
+    const projectId = asString(identity.project_id) || "unknown-project";
+    return normalizeS3Key(`tenants/${tenantId}/projects/${projectId}/runs/${identity.run_id}`);
   }
 
   private async collectUploadFiles(workspacePath: string, prefix: string): Promise<UploadFile[]> {

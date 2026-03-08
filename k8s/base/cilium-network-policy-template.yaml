@@ -1,0 +1,15 @@
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: sprintfoundry-run-egress-template
+  namespace: project-example
+  labels:
+    app.kubernetes.io/name: sprintfoundry-run-egress
+spec:
+  endpointSelector:
+    matchLabels:
+      sprintfoundry.io/run-id: example-run
+  egress:
+    - toFQDNs:
+        - matchName: github.com
+        - matchName: api.github.com

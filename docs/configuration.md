@@ -121,7 +121,7 @@ Override the runtime provider and mode per agent.
 runtime_overrides:
   developer:
     provider: claude-code        # claude-code | codex
-    mode: local_sdk              # local_process | local_sdk | container | remote
+    mode: local_sdk              # local_process | local_sdk | remote
   go-developer:
     provider: codex
     mode: local_process
@@ -136,7 +136,6 @@ runtime_overrides:
 | `local_sdk` | `claude-code` | API key (no subscription) | Uses Claude Agent SDK directly |
 | `local_process` | `codex` | API key | Spawns `codex exec` CLI subprocess |
 | `local_sdk` | `codex` | API key | Uses Codex SDK with streamed turns |
-| `container` | `claude-code` | API key + Docker | Runs agent in Docker container (deprecated) |
 
 #### `planner_runtime_override`
 Override the runtime used for the orchestrator/planning step.
@@ -338,7 +337,7 @@ Per-step runtime resolves in this order:
 1. `project.runtime_overrides[agent_id]`
 2. `platform.defaults.runtime_per_agent[agent_id]`
 3. `platform.defaults.runtime_per_agent[agent_role]`
-4. Fallback: `claude-code / local_process` (or `container` if `SPRINTFOUNDRY_USE_CONTAINERS=true`)
+4. Fallback: `claude-code / local_process`
 
 Planner runtime resolves via:
 
@@ -416,7 +415,6 @@ Supported types: `slack`, `email`, `webhook`
 | `LINEAR_API_KEY` | Linear API key |
 | `JIRA_API_TOKEN` | Jira API token |
 | `SLACK_WEBHOOK_URL` | Slack webhook for notifications |
-| `SPRINTFOUNDRY_USE_CONTAINERS` | Set to `true` to force container runtime mode |
 | `SPRINTFOUNDRY_RUNS_ROOT` | Override run workspace root directory |
 | `MONITOR_PORT` | Monitor server port (default: 4310) |
 | `SPRINTFOUNDRY_WEBHOOK_PORT` | Dedicated webhook server port. If set and different from `MONITOR_PORT`, webhook routes are served on this port only. |

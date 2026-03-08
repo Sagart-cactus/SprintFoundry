@@ -12,7 +12,7 @@ describe("PlannerFactory", () => {
     expect(planner.constructor.name).toBe("ClaudeCodePlannerRuntime");
   });
 
-  it("returns OrchestratorAgent for container mode", () => {
+  it("returns OrchestratorAgent for non-local_process claude runtimes", () => {
     const planner = new PlannerFactory().create(
       makePlatformConfig({
         defaults: {
@@ -32,7 +32,7 @@ describe("PlannerFactory", () => {
             human_gate_timeout_hours: 48,
           },
           max_rework_cycles: 3,
-          planner_runtime: { provider: "claude-code", mode: "container" },
+          planner_runtime: { provider: "claude-code", mode: "local_sdk" },
         },
       }),
       makeProjectConfig({ api_keys: { anthropic: "sk-ant-test-key" } })

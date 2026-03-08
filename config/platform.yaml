@@ -118,6 +118,63 @@ defaults:
       path: plugins/code-review/skills/architecture-alignment
   codex_skills_per_agent:
     code-review: [code-quality, error-handling, performance-review, testing-standards, architecture-alignment]
+
+k8s:
+  namespace: default
+  workspace_storage_class: ""
+  workspace_size: 10Gi
+  service_account_mode: per_run
+  automount_service_account_token: false
+  default_secret_profile: default
+  secret_profiles:
+    default: []
+  default_isolation_level: hardened_isolated
+  runtime_class_per_isolation:
+    standard_isolated: ""
+    hardened_isolated: gvisor
+    strong_isolated: kata
+  network_policy_provider: cilium-fqdn
+  default_network_profile: github-plus-registries
+  network_profiles:
+    internal-only:
+      allow_internet: false
+      fqdn_allowlist: []
+      cidr_allowlist: []
+    github-only:
+      allow_internet: false
+      fqdn_allowlist:
+        - github.com
+        - api.github.com
+      cidr_allowlist: []
+    github-plus-registries:
+      allow_internet: false
+      fqdn_allowlist:
+        - github.com
+        - api.github.com
+        - registry.npmjs.org
+        - ghcr.io
+      cidr_allowlist: []
+    full-internet:
+      allow_internet: true
+      fqdn_allowlist: []
+      cidr_allowlist: []
+  policy_prerequisites:
+    - Cilium CNI with CiliumNetworkPolicy FQDN enforcement enabled
+  pod_resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+  quota_scope: shared-namespace-admin-managed
+  agent_sandbox:
+    enabled: false
+    template_name: default
+    warm_pool_name: ""
+    api_group: agent-sandbox.dev
+    api_version: v1alpha1
+    claim_plural: sandboxclaims
     developer: [detect-project-type, code-quality, error-handling, performance-review]
     go-developer: [code-quality, error-handling, performance-review]
     qa: [detect-project-type, testing-standards]

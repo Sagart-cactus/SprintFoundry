@@ -19,6 +19,7 @@ import { runAgentCreate } from "./commands/agent-create.js";
 import { SessionManager } from "./service/session-manager.js";
 import { getActivityState } from "./service/activity-detector.js";
 import { PluginRegistry } from "./service/plugin-registry.js";
+import { createExecutionBackend, resolveExecutionBackendName } from "./service/execution/index.js";
 import { tmpdirWorkspaceModule } from "./plugins/workspace-tmpdir/index.js";
 import { worktreeWorkspaceModule } from "./plugins/workspace-worktree/index.js";
 import { defaultTrackerModule } from "./plugins/tracker-default/index.js";
@@ -153,7 +154,9 @@ program
 
     const { platform, project } = await loadConfig(opts.config, opts.project);
     const registry = buildPluginRegistry(platform, project);
-    const service = new OrchestrationService(platform, project, registry);
+    const executionBackendName = resolveExecutionBackendName(platform, project);
+    const executionBackend = createExecutionBackend(platform, project);
+    const service = new OrchestrationService(platform, project, registry, executionBackend);
 
     const ticketId = opts.ticket ?? `prompt-${Date.now()}`;
 
@@ -161,6 +164,7 @@ program
     console.log(`  Source: ${source}`);
     console.log(`  Ticket: ${ticketId}`);
     console.log(`  Project: ${project.name} (${project.project_id})`);
+    console.log(`  Execution backend: ${executionBackendName}`);
     if (project.stack) console.log(`  Stack: ${project.stack}`);
     if (project.agents) console.log(`  Agents: ${project.agents.join(", ")}`);
     if (opts.dryRun) console.log(`  Mode: dry-run (plan only)`);
@@ -209,8 +213,10 @@ program
   .action(async (opts) => {
     try {
       const { platform, project } = await loadConfig(opts.config, opts.project);
+      const executionBackendName = resolveExecutionBackendName(platform, project);
       console.log("Configuration valid.");
       console.log(`  Project: ${project.name} (${project.project_id})`);
+      console.log(`  Execution backend: ${executionBackendName}`);
       console.log(`  Repo: ${project.repo.url}`);
       if (project.stack) console.log(`  Stack: ${project.stack}`);
       if (project.agents) console.log(`  Agents: ${project.agents.join(", ")}`);
@@ -277,7 +283,8 @@ program
 
     const { platform, project } = await loadConfig(opts.config, opts.project);
     const registry = buildPluginRegistry(platform, project);
-    const service = new OrchestrationService(platform, project, registry);
+    const executionBackend = createExecutionBackend(platform, project);
+    const service = new OrchestrationService(platform, project, registry, executionBackend);
 
     console.log(`Resuming run ${id}...`);
     if (step !== undefined) {
@@ -457,14 +464,10 @@ program
     let needsOpenaiKey = false;
     let needsDocker = false;
 
-    const useContainers =
-      String(process.env.SPRINTFOUNDRY_USE_CONTAINERS || "").toLowerCase() === "true";
-
     const applyRuntimeNeeds = (rt: RuntimeConfig) => {
       if (rt.provider === "claude-code") {
         if (rt.mode === "local_process") needsClaudeCli = true;
-        if (rt.mode === "local_sdk" || rt.mode === "container") needsAnthropicKey = true;
-        if (rt.mode === "container") needsDocker = true;
+        if (rt.mode === "local_sdk") needsAnthropicKey = true;
       } else if (rt.provider === "codex") {
         if (rt.mode === "local_process") needsCodexCli = true;
         if (rt.mode === "local_sdk") needsOpenaiKey = true;
@@ -472,13 +475,17 @@ program
     };
 
     if (platform && project) {
+      const executionBackendName = resolveExecutionBackendName(platform, project);
+      if (executionBackendName === "docker") {
+        needsDocker = true;
+      }
       const byAgent = platform.defaults.runtime_per_agent ?? {};
       const agentRoleById = new Map(
         platform.agent_definitions.map((a) => [a.type, a.role] as const)
       );
       const fallbackRuntime: RuntimeConfig = {
         provider: "claude-code",
-        mode: useContainers ? "container" : "local_process",
+        mode: "local_process",
       };
 
       const resolveRuntime = (agentId: string): RuntimeConfig => {
@@ -503,7 +510,7 @@ program
         project.planner_runtime_override ??
         platform.defaults.planner_runtime ?? {
           provider: "claude-code",
-          mode: useContainers ? "container" : "local_process",
+          mode: "local_process",
         }
       );
 
@@ -546,7 +553,7 @@ program
     if (needsDocker) {
       const dockerBin = await run("docker", ["--version"]);
       if (!dockerBin.ok) {
-        add("fail", "Docker", "required by container runtime but docker is not installed");
+        add("fail", "Docker", "required by docker execution backend but docker is not installed");
       } else {
         const dockerDaemon = await run("docker", ["info", "--format", "{{.ServerVersion}}"]);
         add(

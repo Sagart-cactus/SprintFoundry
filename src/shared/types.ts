@@ -113,8 +113,13 @@ export interface ContainerResources {
   network?: string;  // default: "bridge"
 }
 
+export interface ResourceQuantityPair {
+  cpu?: string;
+  memory?: string;
+}
+
 export type RuntimeProvider = "claude-code" | "codex";
-export type RuntimeMode = "local_process" | "local_sdk" | "container" | "remote";
+export type RuntimeMode = "local_process" | "local_sdk" | "remote";
 
 export interface RuntimeConfig {
   provider: RuntimeProvider;
@@ -173,6 +178,7 @@ export interface SkillDefinition {
 }
 
 export type CodexSkillDefinition = SkillDefinition;
+export type ExecutionBackendName = "local" | "docker" | "k8s-pod" | "agent-sandbox";
 
 export type SkillSource =
   | {
@@ -197,6 +203,7 @@ export interface SkillGuardrails {
 }
 
 export interface PlatformConfig {
+  execution_backend?: ExecutionBackendName;
   defaults: {
     model_per_agent: Record<string, ModelConfig>;
     budgets: BudgetConfig;
@@ -225,6 +232,39 @@ export interface PlatformConfig {
     strategy?: "tmpdir" | "worktree";
     base_repo_dir?: string;
   };
+  k8s?: {
+    enabled?: boolean;
+    namespace?: string;
+    workspace_storage_class?: string;
+    workspace_size?: string;
+    service_account_mode?: "per_run" | "shared";
+    automount_service_account_token?: boolean;
+    default_secret_profile?: string;
+    secret_profiles?: Record<string, string[]>;
+    default_isolation_level?: IsolationLevel;
+    runtime_class_per_isolation?: Partial<Record<IsolationLevel, string>>;
+    network_policy_provider?: "none" | "cilium-fqdn";
+    default_network_profile?: string;
+    network_profiles?: Record<string, {
+      allow_internet?: boolean;
+      fqdn_allowlist?: string[];
+      cidr_allowlist?: string[];
+    }>;
+    policy_prerequisites?: string[];
+    pod_resources?: {
+      requests?: ResourceQuantityPair;
+      limits?: ResourceQuantityPair;
+    };
+    quota_scope?: string;
+    agent_sandbox?: {
+      enabled?: boolean;
+      template_name?: string;
+      warm_pool_name?: string;
+      api_group?: string;
+      api_version?: string;
+      claim_plural?: string;
+    };
+  };
 }
 
 export interface ProjectConfig {
@@ -239,6 +279,7 @@ export interface ProjectConfig {
   branch_strategy: BranchStrategy;
   stack?: string;       // e.g. "js", "go", "python"
   agents?: string[];    // agent IDs this project uses (filters the catalog)
+  execution_backend_override?: ExecutionBackendName;
   runtime_overrides?: Partial<Record<string, RuntimeConfig>>;
   planner_runtime_override?: RuntimeConfig;
   workspace?: {
@@ -405,13 +446,44 @@ export type StepStatus =
   | "needs_rework"
   | "skipped";
 
+export type IsolationLevel =
+  | "standard_isolated"
+  | "hardened_isolated"
+  | "strong_isolated";
+
+export interface RunEnvironmentRecord {
+  run_id: string;
+  project_id: string;
+  tenant_id?: string;
+  sandbox_id: string;
+  execution_backend: ExecutionBackendName | string;
+  workspace_path: string;
+  workspace_volume_ref?: string;
+  network_profile?: string;
+  secret_profile?: string;
+  isolation_level?: IsolationLevel;
+  resume_token?: string;
+  checkpoint_generation: number;
+  metadata: Record<string, unknown>;
+}
+
 export interface TaskRun {
   run_id: string;
   project_id: string;
+  tenant_id?: string;
   ticket: TicketDetails;
   plan: ExecutionPlan | null;
   validated_plan: ExecutionPlan | null; // plan after service validation
   status: RunStatus;
+  sandbox_id?: string;
+  execution_backend?: ExecutionBackendName | string;
+  workspace_volume_ref?: string;
+  network_profile?: string;
+  secret_profile?: string;
+  isolation_level?: IsolationLevel;
+  resume_token?: string;
+  checkpoint_generation?: number;
+  run_environment?: RunEnvironmentRecord | null;
   steps: StepExecution[];
   total_tokens_used: number;
   total_cost_usd: number;
@@ -427,6 +499,9 @@ export interface StepExecution {
   agent: AgentType;
   task?: string;
   status: StepStatus;
+  sandbox_id?: string;
+  execution_backend?: ExecutionBackendName | string;
+  attempted_with_resume?: boolean;
   container_id: string | null;
   tokens_used: number;
   cost_usd: number;
@@ -464,6 +539,9 @@ export interface HumanReview {
 // ----- Events (audit log) -----
 
 export type EventType =
+  | "sandbox.created"
+  | "sandbox.resumed"
+  | "sandbox.destroyed"
   | "task.created"
   | "task.plan_generated"
   | "task.plan_validated"

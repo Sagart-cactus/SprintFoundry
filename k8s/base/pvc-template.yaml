@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sprintfoundry-run-workspace-template
+  namespace: project-example
+  labels:
+    app.kubernetes.io/name: sprintfoundry-run-workspace
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi

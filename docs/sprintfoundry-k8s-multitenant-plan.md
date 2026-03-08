@@ -30,7 +30,7 @@ Based on the latest `main` branch documentation:
 - Runs already have isolated workspaces.
 - The monitor already shows runs, live step progress, streaming output, token usage, and cost.
 - SprintFoundry already supports:
-  - multiple runtime modes, including container mode
+  - multiple execution backends, including Docker-backed sandboxes
   - plugins and Codex skills
   - Postgres/Redis-backed distributed testing
   - sessions / lifecycle / worktree direction in recent release messaging

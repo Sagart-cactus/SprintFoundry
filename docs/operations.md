@@ -5,7 +5,7 @@
 - Node.js >= 20
 - pnpm or npm
 - Local CLI auth for runtime tools used (`claude`, `codex`) when in local process mode
-- Docker (only when using container runtime mode)
+- Docker (only when using the Docker execution backend)
 
 ## Install
 
