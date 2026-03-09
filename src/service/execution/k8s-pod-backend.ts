@@ -245,10 +245,11 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
 
   async teardownRun(
     handle: RunEnvironmentHandle,
-    _reason: SandboxTeardownReason
+    reason: SandboxTeardownReason
   ): Promise<void> {
     await this.client.deletePod(this.namespace, handle.sandbox_id);
-    if (handle.workspace_volume_ref) {
+    // Preserve the workspace PVC for failed/cancelled runs so resume can recreate the pod.
+    if (reason === "completed" && handle.workspace_volume_ref) {
       await this.safeDeletePvc(handle.workspace_volume_ref);
     }
     const egressPolicyName = String(handle.metadata["egress_policy_name"] ?? "");

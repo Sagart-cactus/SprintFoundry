@@ -13,6 +13,7 @@ const eventSinkCtor = vi.fn();
 const eventSinkUpsertRun = vi.fn();
 const eventSinkPostLog = vi.fn();
 const eventSinkUpsertStepResult = vi.fn();
+const agentRunnerCtor = vi.fn();
 
 // Mock all sub-services using class syntax so they work with `new`
 // Mock PlannerFactory — returns a mock planner with generatePlan/planRework
@@ -31,7 +32,9 @@ vi.mock("../src/service/runtime/planner-factory.js", () => ({
 vi.mock("../src/service/agent-runner.js", () => ({
   AgentRunner: class {
     run = vi.fn();
-    constructor(..._args: any[]) {}
+    constructor(...args: any[]) {
+      agentRunnerCtor(...args);
+    }
   },
 }));
 
@@ -161,6 +164,26 @@ describe("OrchestrationService", () => {
     expect(eventStoreCtor).toHaveBeenCalledTimes(1);
     expect(eventStoreCtor.mock.calls[0][0]).toBe(makePlatformConfig().events_dir);
     expect(eventStoreCtor.mock.calls[0][1]).toBeUndefined();
+  });
+
+  it("passes the selected execution backend into AgentRunner", () => {
+    const backend: ExecutionBackend = {
+      prepareRunEnvironment: vi.fn(),
+      executeStep: vi.fn(),
+      pauseRun: vi.fn(),
+      resumeRun: vi.fn(),
+      teardownRun: vi.fn(),
+    };
+
+    new OrchestrationService(
+      makePlatformConfig(),
+      makeProjectConfig(),
+      undefined,
+      backend
+    );
+
+    expect(agentRunnerCtor).toHaveBeenCalled();
+    expect(agentRunnerCtor.mock.calls.at(-1)?.[2]).toBe(backend);
   });
 
   it("constructs EventStore with sink client when sink env is set", () => {

@@ -109,7 +109,7 @@ export class OrchestrationService {
     this.metricsService = new MetricsService(process.env.SPRINTFOUNDRY_OTEL_ENABLED === "1");
     this.artifactUploader = new ArtifactUploader();
     this.validator = new PlanValidator(platformConfig, projectConfig);
-    this.agentRunner = new AgentRunner(platformConfig, projectConfig);
+    this.agentRunner = new AgentRunner(platformConfig, projectConfig, executionBackend);
     this.plannerRuntime = new PlannerFactory().create(platformConfig, projectConfig);
     const eventSinkUrl = process.env.SPRINTFOUNDRY_EVENT_SINK_URL?.trim();
     const internalApiToken = process.env.SPRINTFOUNDRY_INTERNAL_API_TOKEN?.trim();
