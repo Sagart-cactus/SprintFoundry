@@ -387,4 +387,39 @@ describe("KubernetesPodExecutionBackend", () => {
       expect.stringContaining("Failed to delete PVC sf-pod-run-1-workspace")
     );
   });
+
+  it("preserves the workspace PVC for failed runs so the pod can be resumed", async () => {
+    client.deletePod.mockResolvedValue(undefined);
+    client.deletePvc.mockResolvedValue(undefined);
+    client.deleteServiceAccount.mockResolvedValue(undefined);
+    client.deleteEgressPolicy.mockResolvedValue(undefined);
+
+    const backend = new KubernetesPodExecutionBackend(
+      makePlatformConfig({ k8s: { namespace: "tenant-a" } }),
+      makeProjectConfig(),
+      client
+    );
+
+    await backend.teardownRun(
+      {
+        run_id: "run-1",
+        project_id: "project-1",
+        sandbox_id: "sf-pod-run-1",
+        execution_backend: "k8s-pod",
+        workspace_path: "/tmp/workspace-run-1",
+        workspace_volume_ref: "sf-pod-run-1-workspace",
+        checkpoint_generation: 1,
+        metadata: {
+          service_account_name: "sf-sa-run-1",
+          egress_policy_name: "sf-pod-run-1-egress",
+        },
+      },
+      "failed"
+    );
+
+    expect(client.deletePod).toHaveBeenCalledWith("tenant-a", "sf-pod-run-1");
+    expect(client.deletePvc).not.toHaveBeenCalled();
+    expect(client.deleteEgressPolicy).toHaveBeenCalledWith("tenant-a", "sf-pod-run-1-egress");
+    expect(client.deleteServiceAccount).toHaveBeenCalledWith("tenant-a", "sf-sa-run-1");
+  });
 });
