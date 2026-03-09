@@ -2555,9 +2555,10 @@ export class OrchestrationService {
   ): Promise<void> {
     if (!this.eventSinkClient) return;
 
+    const runtimeLogPrefix = this.runtimeLogFilePrefix(runtimeProvider);
     const stdoutPath = path.join(
       workspacePath,
-      `.${runtimeProvider}-runtime.step-${stepNumber}.attempt-${stepAttempt}.stdout.log`
+      `.${runtimeLogPrefix}-runtime.step-${stepNumber}.attempt-${stepAttempt}.stdout.log`
     );
     const raw = await fs.readFile(stdoutPath, "utf-8").catch(() => "");
     if (!raw.trim()) return;
@@ -2589,6 +2590,17 @@ export class OrchestrationService {
         );
         break;
       }
+    }
+  }
+
+  private runtimeLogFilePrefix(runtimeProvider: RuntimeConfig["provider"]): string {
+    switch (runtimeProvider) {
+      case "claude-code":
+        return "claude";
+      case "codex":
+        return "codex";
+      default:
+        return runtimeProvider;
     }
   }
 

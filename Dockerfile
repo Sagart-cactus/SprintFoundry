@@ -26,7 +26,7 @@ ENV NODE_ENV=production \
     PATH=/pnpm:$PATH
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git jq curl openssh-client ca-certificates \
+    git jq curl gh openssh-client ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Both CLIs: claude-code for claude agents, codex for codex agents
