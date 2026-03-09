@@ -463,6 +463,11 @@ export function buildK8sJobManifest(task: DispatchQueueItem, options?: {
                 { name: "SPRINTFOUNDRY_PROJECT_ID", value: task.project_id },
                 { name: "SPRINTFOUNDRY_TICKET_ID", value: task.ticket_id },
                 { name: "SPRINTFOUNDRY_TRIGGER_SOURCE", value: task.trigger_source ?? `${task.source}_dispatch` },
+                { name: "SPRINTFOUNDRY_OTEL_ENABLED", value: process.env.SPRINTFOUNDRY_OTEL_ENABLED ?? "0" },
+                { name: "OTEL_EXPORTER_OTLP_ENDPOINT", value: process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? "http://otel-collector.monitoring.svc.cluster.local:4318" },
+                { name: "OTEL_EXPORTER_OTLP_PROTOCOL", value: process.env.OTEL_EXPORTER_OTLP_PROTOCOL ?? "http/protobuf" },
+                { name: "OTEL_METRICS_EXPORTER", value: process.env.OTEL_METRICS_EXPORTER ?? "otlp" },
+                { name: "OTEL_LOGS_EXPORTER", value: process.env.OTEL_LOGS_EXPORTER ?? "otlp" },
               ],
               envFrom: [{ secretRef: { name: projectSecretName } }],
               volumeMounts: [

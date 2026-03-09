@@ -75,6 +75,8 @@ const state = {
   },
 };
 let resumePromptResolver = null;
+let liveEventSource = null;
+let liveRefreshTimer = null;
 
 // ── Helpers (unchanged) ──
 
@@ -100,6 +102,16 @@ function compactUrlLabel(url, fallback = "") {
     return `${host}${shortPath}`;
   } catch {
     return fallback || String(url);
+  }
+}
+
+function isHttpUrl(value) {
+  if (!value) return false;
+  try {
+    const parsed = new URL(String(value));
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
   }
 }
 
@@ -427,9 +439,14 @@ function classifyAgentItem(item) {
   const nested = item?.item ?? {};
   const kind = pickString(nested, ["type"]) || pickString(item, ["type", "event_type"]);
   const command = pickString(nested, ["command", "cmd"]) || pickString(item, ["command", "cmd"]);
+  const normalizedCommand = pickString(item?.data, ["command", "cmd"]);
+  const normalizedPath = pickString(item?.data, ["path", "file_path", "target_path"]);
+  const normalizedTool = pickString(item?.data, ["tool_name", "name"]);
+  const normalizedThought = pickString(item?.data, ["text", "message", "reason"]);
   const thought =
     pickString(nested, ["prompt", "instructions", "input"]) ||
     pickString(item, ["prompt", "instructions", "input"]) ||
+    normalizedThought ||
     textFromContent(nested.input) ||
     textFromContent(item.input);
   const message =
@@ -439,6 +456,21 @@ function classifyAgentItem(item) {
     textFromContent(item.output);
 
   const lower = String(kind).toLowerCase();
+  if (lower === "agent_command_run") {
+    return { title: "Command executed", preview: shortText(normalizedCommand || normalizedTool || "command", 130), code: true };
+  }
+  if (lower === "agent_file_edit") {
+    return { title: "File edited", preview: shortText(normalizedPath || normalizedTool || "file", 130), code: true };
+  }
+  if (lower === "agent_tool_call") {
+    return { title: "Tool call", preview: shortText(normalizedTool || "tool call", 130), code: false };
+  }
+  if (lower === "agent_thinking") {
+    return { title: "Thought", preview: shortText(normalizedThought || "thinking", 130), code: false };
+  }
+  if (lower === "agent_guardrail_block") {
+    return { title: "Guardrail blocked", preview: shortText(normalizedThought || normalizedCommand || normalizedPath || "guardrail", 130), code: false };
+  }
   if (lower === "command_execution" || command) {
     return { title: "Command executed", preview: shortText(command || message || thought, 130), code: true };
   }
@@ -494,7 +526,9 @@ function classifyAgentItem(item) {
 
 function renderAgentOut(raw, stepNumber) {
   const candidates = parseAgentItems(raw);
-  if (!candidates.length) return '<div class="empty">No output</div>';
+  if (!candidates.length) {
+    return '<div class="empty">No structured runtime activity was captured for this step.</div>';
+  }
   const filtered = candidates.filter((item) => (typeof stepNumber === "number" ? getStepNumber(item) === stepNumber : true));
   const target = filtered.length ? filtered : candidates;
 
@@ -504,7 +538,9 @@ function renderAgentOut(raw, stepNumber) {
     .map((item, index) => ({ item, index, cls: classifyAgentItem(item) }))
     .filter((row) => row.cls.title !== "Event");
 
-  if (!rows.length) return '<div class="empty">No output</div>';
+  if (!rows.length) {
+    return '<div class="empty">No structured runtime activity was captured for this step.</div>';
+  }
 
   return rows
     .slice(-140)
@@ -885,14 +921,19 @@ function renderSidebarMeta(runData) {
   const ticketId = runData.ticket_id || null;
   const ticketUrl = runData.ticket_url || null;
   const ticketRepoUrl = runData.ticket_repo_url || null;
+  const prUrl = runData.pr_url || null;
   const issueLabel = ticketId || compactUrlLabel(ticketUrl);
   const repoLabel = compactUrlLabel(ticketRepoUrl, "Repository");
+  const prLabel = compactUrlLabel(prUrl, "Open PR");
   const issueLink = ticketUrl
     ? `<a class="meta-link sidebar-meta-link" href="${escapeHtml(ticketUrl)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(ticketUrl)}">${escapeHtml(issueLabel)}</a>`
     : escapeHtml(ticketId || "-");
   const repoLink = ticketRepoUrl
     ? `<a class="meta-link sidebar-meta-link" href="${escapeHtml(ticketRepoUrl)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(ticketRepoUrl)}">${escapeHtml(repoLabel)}</a>`
     : "-";
+  const prLink = isHttpUrl(prUrl)
+    ? `<a class="meta-link sidebar-meta-link" href="${escapeHtml(prUrl)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(prUrl)}">${escapeHtml(prLabel)}</a>`
+    : escapeHtml(prUrl || "-");
 
   runTitle.textContent = `${runData.project_id}/${runData.run_id}`;
   runStatusBadge.className = `badge ${escapeHtml(status)}`;
@@ -944,6 +985,10 @@ function renderSidebarMeta(runData) {
       <div class="meta-item">
         <span class="meta-label">Repository</span>
         <span class="meta-value">${repoLink}</span>
+      </div>
+      <div class="meta-item">
+        <span class="meta-label">PR</span>
+        <span class="meta-value">${prLink}</span>
       </div>
     </div>
   `;
@@ -1593,6 +1638,45 @@ async function refresh() {
   }
 }
 
+function scheduleLiveRefresh(delayMs = 250) {
+  if (liveRefreshTimer) {
+    clearTimeout(liveRefreshTimer);
+  }
+  liveRefreshTimer = setTimeout(() => {
+    liveRefreshTimer = null;
+    void refresh();
+  }, delayMs);
+}
+
+function connectRunEventStream() {
+  if (!project || !run || liveEventSource) return;
+  const streamUrl = withAuthUrl(
+    `/api/events/stream?project=${encodeURIComponent(project)}&run=${encodeURIComponent(run)}`
+  );
+  const source = new EventSource(streamUrl);
+  liveEventSource = source;
+
+  source.addEventListener("connected", () => {
+    statusLine.textContent = `Live: ${project}/${run}`;
+  });
+
+  source.addEventListener("event", () => {
+    scheduleLiveRefresh(150);
+  });
+
+  source.addEventListener("runs", () => {
+    scheduleLiveRefresh(150);
+  });
+
+  source.onerror = () => {
+    statusLine.textContent = `Live reconnecting: ${project}/${run}`;
+  };
+
+  window.addEventListener("beforeunload", () => {
+    source.close();
+  }, { once: true });
+}
+
 // ── Event listeners ──
 
 // Sidebar step click → scroll to step card in feed
@@ -1774,3 +1858,4 @@ setInterval(() => {
 }, 5000);
 
 await refresh();
+connectRunEventStream();

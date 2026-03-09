@@ -704,10 +704,10 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       });
     }
 
-    if (this.isRecord(raw["content"])) {
-      this.extractEventsFromContentArray([raw["content"]], events);
-    } else if (Array.isArray(raw["content"])) {
-      this.extractEventsFromContentArray(raw["content"], events);
+    this.extractEventsFromMessagePayload(raw, events);
+
+    if (this.isRecord(raw["message"])) {
+      this.extractEventsFromMessagePayload(raw["message"] as Record<string, unknown>, events);
     }
 
     const toolName = this.pickString(raw, ["tool_name", "name"]);
@@ -741,6 +741,19 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     }
 
     return events;
+  }
+
+  private extractEventsFromMessagePayload(
+    value: Record<string, unknown>,
+    out: RuntimeActivityEvent[]
+  ): void {
+    if (this.isRecord(value["content"])) {
+      this.extractEventsFromContentArray([value["content"]], out);
+      return;
+    }
+    if (Array.isArray(value["content"])) {
+      this.extractEventsFromContentArray(value["content"], out);
+    }
   }
 
   private extractEventsFromContentArray(

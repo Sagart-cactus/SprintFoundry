@@ -143,6 +143,30 @@ async function readStepResult(runPath, stepNumber, maxCompletedStep = null) {
   return { result: null, source: "none" };
 }
 
+async function readStepResultFromDb(projectId, runId, stepNumber) {
+  const runRecord = await getDbRunRecord(projectId, runId);
+  if (!runRecord) {
+    throw new Error(`Run not found: ${projectId}/${runId}`);
+  }
+  const db = await getDatabasePool();
+  const result = await db.query(
+    `
+      SELECT result
+      FROM step_results
+      WHERE run_id = $1
+        AND step_number = $2
+      ORDER BY step_attempt DESC
+      LIMIT 1
+    `,
+    [runRecord.run_id, stepNumber]
+  );
+  const row = result.rows[0];
+  return {
+    result: row?.result ?? null,
+    source: row ? "db_step_result" : "none",
+  };
+}
+
 function readBody(req, options = {}) {
   const maxBytes = toPositiveInt(options.maxBytes, monitorApiMaxBodyBytes);
   const timeoutMs = toPositiveInt(options.timeoutMs, monitorBodyReadTimeoutMs);
@@ -1197,6 +1221,78 @@ function extractResultSummaryText(result) {
     : null;
 }
 
+function parseGitHubPullRequestUrl(prUrl) {
+  if (typeof prUrl !== "string" || !prUrl.trim()) return null;
+  try {
+    const parsed = new URL(prUrl);
+    if (parsed.hostname !== "github.com") return null;
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    if (parts.length < 4 || parts[2] !== "pull") return null;
+    const [owner, repo, , pullNumber] = parts;
+    if (!owner || !repo || !pullNumber) return null;
+    return { owner, repo, pullNumber };
+  } catch {
+    return null;
+  }
+}
+
+async function readGitHubPullRequestPatch(prUrl, filePath) {
+  const parsed = parseGitHubPullRequestUrl(prUrl);
+  if (!parsed || typeof fetch !== "function") return null;
+
+  const targetFile = String(filePath ?? "").replace(/^\.?\//, "");
+  if (!targetFile) return null;
+
+  const headers = {
+    Accept: "application/vnd.github+json",
+    "User-Agent": "sprintfoundry-monitor",
+  };
+  if (process.env.GITHUB_TOKEN) {
+    headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
+  }
+
+  for (let page = 1; page <= 10; page += 1) {
+    const apiUrl = new URL(`https://api.github.com/repos/${parsed.owner}/${parsed.repo}/pulls/${parsed.pullNumber}/files`);
+    apiUrl.searchParams.set("per_page", "100");
+    apiUrl.searchParams.set("page", String(page));
+
+    let response;
+    try {
+      response = await fetch(apiUrl, { headers });
+    } catch {
+      return null;
+    }
+    if (!response.ok) return null;
+
+    let payload;
+    try {
+      payload = await response.json();
+    } catch {
+      return null;
+    }
+    if (!Array.isArray(payload) || payload.length === 0) return null;
+
+    const match = payload.find((entry) => {
+      if (!entry || typeof entry !== "object") return false;
+      const filename = typeof entry.filename === "string" ? entry.filename.replace(/^\.?\//, "") : "";
+      const previousFilename = typeof entry.previous_filename === "string"
+        ? entry.previous_filename.replace(/^\.?\//, "")
+        : "";
+      return filename === targetFile || previousFilename === targetFile;
+    });
+    if (match) {
+      if (typeof match.patch === "string" && match.patch.trim()) {
+        return { diff: match.patch, kind: "github_pr_patch" };
+      }
+      return { diff: "", kind: "github_pr_patch" };
+    }
+
+    if (payload.length < 100) break;
+  }
+
+  return null;
+}
+
 async function loadRunSummaryFromDbRecord(runRecord) {
   const events = await readEventsFromDb(runRecord.run_id);
   const planEvent = events.find((e) => e.event_type === "task.plan_generated");
@@ -1286,6 +1382,8 @@ async function loadRunFromDb(projectId, runId) {
 
   return {
     ...summary,
+    branch: runRecord.branch ?? null,
+    pr_url: runRecord.pr_url ?? null,
     steps: (summary.steps ?? []).map((step) => ({
       ...step,
       result_summary: summaryByStep.get(step.step_number) ?? null,
@@ -1943,6 +2041,28 @@ async function readLogTextSelected(projectId, runId, kind, lines, stepNumber = n
   return readLogText(projectId, runId, kind, lines, stepNumber);
 }
 
+async function readStepResultSelected(projectId, runId, stepNumber) {
+  if (useDatabaseBackend) return readStepResultFromDb(projectId, runId, stepNumber);
+  const runPath = await resolveRunPath(projectId, runId);
+  const runSummary = await loadRunSummary(projectId, runId, runPath);
+  const maxCompletedStep = runSummary.steps
+    .filter((step) => step.status === "completed" || step.status === "failed")
+    .map((step) => step.step_number)
+    .sort((a, b) => b - a)[0] ?? null;
+  return readStepResult(runPath, stepNumber, maxCompletedStep);
+}
+
+async function resolveRunPathSelected(projectId, runId) {
+  if (useDatabaseBackend) {
+    const runRecord = await getDbRunRecord(projectId, runId);
+    if (!runRecord || typeof runRecord.workspace_path !== "string" || !runRecord.workspace_path) {
+      throw new Error(`Run not found: ${projectId}/${runId}`);
+    }
+    return runRecord.workspace_path;
+  }
+  return resolveRunPath(projectId, runId);
+}
+
 async function serveStatic(res, pathname, rootDir = publicV3Dir) {
   const filePath = pathname === "/" ? path.join(rootDir, "index.html") : safeJoin(rootDir, pathname.slice(1));
   const contentType = filePath.endsWith(".css")
@@ -2295,13 +2415,7 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { error: "Missing or invalid project/run/step query params" });
         return;
       }
-      const runPath = await resolveRunPath(project, run);
-      const runSummary = await loadRunSummary(project, run, runPath);
-      const maxCompletedStep = runSummary.steps
-        .filter((step) => step.status === "completed" || step.status === "failed")
-        .map((step) => step.step_number)
-        .sort((a, b) => b - a)[0] ?? null;
-      const payload = await readStepResult(runPath, stepNumber, maxCompletedStep);
+      const payload = await readStepResultSelected(project, run, stepNumber);
       sendJson(res, 200, {
         step: stepNumber,
         source: payload.source,
@@ -2331,7 +2445,18 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { error: "Missing project, run, or file" });
         return;
       }
-      const runPath = await resolveRunPath(project, run);
+      const runRecord = useDatabaseBackend ? await getDbRunRecord(project, run) : null;
+      let runPath = null;
+      try {
+        runPath = await resolveRunPathSelected(project, run);
+      } catch (error) {
+        const prPatch = await readGitHubPullRequestPatch(runRecord?.pr_url ?? null, file);
+        if (prPatch) {
+          sendJson(res, 200, prPatch);
+          return;
+        }
+        throw error;
+      }
       const absFile = path.resolve(runPath, file);
       if (!absFile.startsWith(runPath + path.sep) && absFile !== runPath) {
         sendJson(res, 400, { error: "Invalid file path" });
@@ -2363,6 +2488,11 @@ const server = http.createServer(async (req, res) => {
         const body = raw.split("\n").map((l) => `+${l}`).join("\n");
         const synth = `--- /dev/null\n+++ b/${relFile}\n@@ -0,0 +1 @@\n${body}`;
         sendJson(res, 200, { diff: synth, kind: "untracked" });
+        return;
+      }
+      const prPatch = await readGitHubPullRequestPatch(runRecord?.pr_url ?? null, relFile);
+      if (prPatch) {
+        sendJson(res, 200, prPatch);
         return;
       }
       sendJson(res, 200, { diff: "", kind: "none" });

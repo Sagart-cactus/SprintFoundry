@@ -425,6 +425,41 @@ describe("ClaudeCodeRuntime", () => {
     expect(types).toContain("agent_tool_call");
   });
 
+  it("extracts streaming activity events from nested message.content payloads", async () => {
+    const runtime = new ClaudeCodeRuntime();
+
+    const events = (runtime as any).extractActivityEventsFromSdkMessage({
+      type: "assistant",
+      message: {
+        model: "claude-sonnet-4-5-20250929",
+        content: [
+          { type: "thinking", text: "Reviewing files" },
+          { type: "tool_use", name: "Bash", input: { command: "cat README.md" } },
+          { type: "tool_use", name: "Edit", input: { file_path: "src/index.ts" } },
+          { type: "tool_use", name: "Glob", input: { pattern: "src/**/*.ts" } },
+        ],
+      },
+    });
+
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "agent_thinking" }),
+        expect.objectContaining({
+          type: "agent_command_run",
+          data: expect.objectContaining({ tool_name: "Bash", command: "cat README.md" }),
+        }),
+        expect.objectContaining({
+          type: "agent_file_edit",
+          data: expect.objectContaining({ tool_name: "Edit", path: "src/index.ts" }),
+        }),
+        expect.objectContaining({
+          type: "agent_tool_call",
+          data: expect.objectContaining({ tool_name: "Glob" }),
+        }),
+      ])
+    );
+  });
+
   it("posts buffered activity log chunks when sink client is configured", async () => {
     const postLog = vi.fn().mockResolvedValue(undefined);
     const runtime = new ClaudeCodeRuntime();

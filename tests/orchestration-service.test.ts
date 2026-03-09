@@ -11,6 +11,8 @@ import type { ExecutionBackend, RunEnvironmentHandle } from "../src/service/exec
 const eventStoreCtor = vi.fn();
 const eventSinkCtor = vi.fn();
 const eventSinkUpsertRun = vi.fn();
+const eventSinkPostLog = vi.fn();
+const eventSinkUpsertStepResult = vi.fn();
 
 // Mock all sub-services using class syntax so they work with `new`
 // Mock PlannerFactory — returns a mock planner with generatePlan/planRework
@@ -87,6 +89,8 @@ vi.mock("../src/service/event-sink-client.js", () => ({
   EventSinkClient: class {
     postEvent = vi.fn();
     upsertRun = eventSinkUpsertRun;
+    postLog = eventSinkPostLog;
+    upsertStepResult = eventSinkUpsertStepResult;
     constructor(url: string) {
       eventSinkCtor(url);
     }
@@ -706,6 +710,49 @@ describe("OrchestrationService", () => {
     const commandEvent = storedEvents.find((e: any) => e.event_type === "agent_command_run");
     expect(commandEvent.data.step).toBe(1);
     expect(commandEvent.data.agent).toBe("developer");
+  });
+
+  it("posts fallback Claude stdout logs to the sink when no structured activity is emitted", async () => {
+    process.env.SPRINTFOUNDRY_EVENT_SINK_URL = "https://sink.example/events";
+    service = new OrchestrationService(makePlatformConfig(), makeProjectConfig());
+    mockOrchestratorAgent = (service as any).plannerRuntime;
+    mockAgentRunner = (service as any).agentRunner;
+
+    const workspacePath = await fs.mkdtemp(path.join(os.tmpdir(), "sf-fallback-claude-"));
+    (service as any).workspace.getPath = vi.fn().mockReturnValue(workspacePath);
+    (service as any).workspace.create = vi.fn().mockResolvedValue(workspacePath);
+
+    const plan = makePlan({
+      steps: [makeStep({ step_number: 1, agent: "developer", task: "Implement feature" })],
+    });
+    mockOrchestratorAgent.generatePlan.mockResolvedValue(plan);
+    mockAgentRunner.run.mockImplementation(async () => {
+      await fs.writeFile(
+        path.join(workspacePath, ".claude-runtime.step-1.attempt-1.stdout.log"),
+        JSON.stringify({ type: "assistant", message: "hello" }) + "\n",
+        "utf-8"
+      );
+      return {
+        agentResult: makeResult(),
+        tokens_used: 100,
+        cost_usd: 0.01,
+        duration_seconds: 5,
+        container_id: "local-1",
+      };
+    });
+
+    const run = await service.handleTask("p-fallback", "prompt", "Build a thing");
+
+    expect(run.status).toBe("completed");
+    expect(eventSinkPostLog).toHaveBeenCalled();
+    expect(eventSinkPostLog.mock.calls[0][0]).toMatchObject({
+      run_id: run.run_id,
+      step_number: 1,
+      step_attempt: 1,
+      agent: "developer",
+      runtime_provider: "claude-code",
+      stream: "activity",
+    });
   });
 
   it("step failure sets run.status = 'failed'", async () => {

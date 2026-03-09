@@ -158,6 +158,8 @@ const DEFAULT_RATE_LIMIT: RateLimitConfig = {
   logsPerWindow: 360,
 };
 
+const DEFAULT_RUN_PLAN_CLASSIFICATION = "unknown";
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -777,6 +779,8 @@ export function registerEventIngestionRoutes(
       }
 
       const payload = parsed.value;
+      const normalizedPlanClassification =
+        payload.plan_classification ?? DEFAULT_RUN_PLAN_CLASSIFICATION;
       const upsert = await database.query<{ inserted: boolean }>(
         `
           INSERT INTO runs (
@@ -832,7 +836,7 @@ export function registerEventIngestionRoutes(
           payload.status,
           payload.current_step,
           payload.total_steps,
-          payload.plan_classification,
+          normalizedPlanClassification,
           payload.workspace_path,
           payload.branch,
           payload.pr_url,

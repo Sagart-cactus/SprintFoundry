@@ -378,7 +378,7 @@ describe("event-ingestion-api integration", () => {
     expect(db.runs.get("run-1")?.status).toBe("executing");
   });
 
-  it("POST /runs accepts null workspace_path and branch", async () => {
+  it("POST /runs defaults null plan_classification to unknown while accepting null workspace_path and branch", async () => {
     const app = new FakeExpressApp();
     const db = new InMemoryDatabase();
 
@@ -400,7 +400,7 @@ describe("event-ingestion-api integration", () => {
     });
 
     expect(response.status).toBe(200);
-    expect(db.runs.get("run-1")?.plan_classification).toBeNull();
+    expect(db.runs.get("run-1")?.plan_classification).toBe("unknown");
     expect(db.runs.get("run-1")?.workspace_path).toBeNull();
     expect(db.runs.get("run-1")?.branch).toBeNull();
   });
