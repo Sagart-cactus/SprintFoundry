@@ -13,6 +13,7 @@ const { CodexRuntime } = await import("../src/service/runtime/codex-runtime.js")
 
 function makeContext(workspacePath: string, overrides?: Partial<RuntimeStepContext>): RuntimeStepContext {
   return {
+    runId: overrides?.runId ?? "run-codex-runtime-security",
     stepNumber: overrides?.stepNumber ?? 7,
     stepAttempt: overrides?.stepAttempt ?? 1,
     agent: overrides?.agent ?? "developer",

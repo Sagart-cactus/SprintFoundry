@@ -134,6 +134,9 @@ describe("KubernetesPodExecutionBackend", () => {
       runtimeClassName: "gvisor",
       securityContext: {
         runAsNonRoot: true,
+        runAsUser: 1001,
+        runAsGroup: 1001,
+        fsGroup: 1001,
         seccompProfile: {
           type: "RuntimeDefault",
         },
