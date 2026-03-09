@@ -37,6 +37,7 @@ const baseRun: RunSessionMetadata = {
 };
 
 const baseChunk: RuntimeLogChunk = {
+  run_id: "run-1",
   step_number: 2,
   step_attempt: 1,
   agent: "developer",
