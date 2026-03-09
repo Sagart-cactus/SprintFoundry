@@ -30,6 +30,7 @@ const { AgentRunner } = await import("../src/service/agent-runner.js");
 
 function makeRunConfig(workspacePath: string): AgentRunConfig {
   return {
+    runId: "run-codex-code-review-1",
     stepNumber: 7,
     stepAttempt: 1,
     agent: "code-review",

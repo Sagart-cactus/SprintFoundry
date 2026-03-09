@@ -62,6 +62,7 @@ function makeContext(
   overrides?: Partial<RuntimeStepContext>
 ): RuntimeStepContext {
   return {
+    runId: overrides?.runId ?? "run-codex-runtime-sdk",
     stepNumber: overrides?.stepNumber ?? 1,
     stepAttempt: overrides?.stepAttempt ?? 1,
     agent: overrides?.agent ?? "developer",

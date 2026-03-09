@@ -21,6 +21,7 @@ const { ClaudeCodeRuntime } = await import("../src/service/runtime/claude-code-r
 
 function makeContext(workspacePath: string, mode: "local_sdk" | "local_process" = "local_sdk"): RuntimeStepContext {
   return {
+    runId: "run-claude-runtime-test",
     stepNumber: 1,
     stepAttempt: 1,
     agent: "developer",
