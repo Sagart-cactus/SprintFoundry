@@ -12,7 +12,8 @@ export class WorkspaceManager {
   private baseDir: string;
 
   constructor(private projectConfig: ProjectConfig) {
-    this.baseDir = path.join(os.tmpdir(), "sprintfoundry", projectConfig.project_id);
+    const runsRoot = process.env.SPRINTFOUNDRY_RUNS_ROOT?.trim() || os.tmpdir();
+    this.baseDir = path.join(runsRoot, "sprintfoundry", projectConfig.project_id);
   }
 
   async create(runId: string): Promise<string> {

@@ -5,6 +5,7 @@ import os from "node:os";
 import crypto from "node:crypto";
 import {
   buildK8sJobManifest,
+  buildK8sWorkspacePvcManifest,
   registerDispatchRoutes,
   type DispatchRedisClient,
 } from "../src/service/dispatch-controller.js";
@@ -558,7 +559,7 @@ describe("dispatch-controller", () => {
     await runtime.close();
   });
 
-  it("builds a k8s job manifest with image, env, configmap mount, emptyDir, and resources", () => {
+  it("builds a k8s job manifest with image, env, configmap mount, PVC workspace, and resources", () => {
     const manifest = buildK8sJobManifest(
       {
         run_id: "run-xyz",
@@ -598,6 +599,17 @@ describe("dispatch-controller", () => {
     expect(container.envFrom).toEqual([{ secretRef: { name: "proj-secret" } }]);
     expect(container.resources.requests).toEqual({ cpu: "500m", memory: "1Gi" });
     expect(container.resources.limits).toEqual({ cpu: "2", memory: "4Gi" });
+    expect(container.env).toEqual(
+      expect.arrayContaining([
+        { name: "SPRINTFOUNDRY_RUN_ID", value: "run-xyz" },
+        { name: "SPRINTFOUNDRY_RUN_SANDBOX_MODE", value: "k8s-whole-run" },
+        { name: "SPRINTFOUNDRY_RUNS_ROOT", value: "/workspace" },
+        { name: "SPRINTFOUNDRY_SESSIONS_DIR", value: "/workspace/.sprintfoundry/sessions" },
+        { name: "SPRINTFOUNDRY_AUTO_RESUME_EXISTING_RUN", value: "1" },
+        { name: "HOME", value: "/workspace/home" },
+        { name: "CODEX_HOME", value: "/workspace/home/.codex" },
+      ])
+    );
 
     expect(manifest.spec.template.spec.volumes).toContainEqual({
       name: "project-config",
@@ -605,7 +617,48 @@ describe("dispatch-controller", () => {
     });
     expect(manifest.spec.template.spec.volumes).toContainEqual({
       name: "workspace",
-      emptyDir: { sizeLimit: "10Gi" },
+      persistentVolumeClaim: { claimName: "sf-run-ws-run-xyz" },
+    });
+    expect(manifest.spec.backoffLimit).toBe(1);
+  });
+
+  it("builds a per-run PVC manifest for the runner workspace", () => {
+    const manifest = buildK8sWorkspacePvcManifest(
+      {
+        run_id: "run-xyz",
+        project_id: "proj-1",
+        project_arg: "proj",
+        source: "github",
+        ticket_id: "55",
+        created_at: "2026-03-04T00:00:00.000Z",
+      },
+      {
+        namespace: "proj-ns",
+        workspaceSizeLimit: "25Gi",
+        workspaceStorageClassName: "fast-ssd",
+      },
+    );
+
+    expect(manifest).toMatchObject({
+      apiVersion: "v1",
+      kind: "PersistentVolumeClaim",
+      metadata: {
+        name: "sf-run-ws-run-xyz",
+        namespace: "proj-ns",
+        labels: {
+          "sprintfoundry.io/project-id": "proj-1",
+          "sprintfoundry.io/run-id": "run-xyz",
+        },
+      },
+      spec: {
+        accessModes: ["ReadWriteOnce"],
+        resources: {
+          requests: {
+            storage: "25Gi",
+          },
+        },
+        storageClassName: "fast-ssd",
+      },
     });
   });
 });

@@ -171,8 +171,10 @@ describe("GitManager", () => {
     const calls = (mockSpawnSync as any).mock.calls;
     const commands = calls.map((c: any[]) => c[1]);
 
-    // First call should be git add -A
-    expect(commands[0]).toEqual(["add", "-A"]);
+    expect(commands).toContainEqual(["config", "--local", "user.email"]);
+    expect(commands).toContainEqual(["config", "--local", "user.email", "sprintfoundry@localhost"]);
+    expect(commands).toContainEqual(["config", "--local", "user.name", "SprintFoundry"]);
+    expect(commands).toContainEqual(["add", "-A"]);
     // Should contain git reset HEAD -- calls for excluded files
     const resetCalls = commands.filter((c: string[]) => c[0] === "reset" && c[1] === "HEAD");
     expect(resetCalls.length).toBeGreaterThan(0);
@@ -229,6 +231,7 @@ describe("GitManager", () => {
     expect(commands[ghIdx].args).toContain("create");
     expect(commands[ghIdx].args).toContain("--head");
     expect(commands[ghIdx].args).toContain("test:feat/21-resume-fix");
+    expect(commands.some((c: any) => c.cmd === "git" && c.args[0] === "config" && c.args[1] === "--local")).toBe(true);
   });
 
   it("createPullRequest returns manual message when gh pr create fails", async () => {
@@ -364,7 +367,10 @@ describe("GitManager", () => {
 
     const calls = (mockSpawnSync as any).mock.calls;
     const commands = calls.map((c: any[]) => c[1]);
-    expect(commands[0]).toEqual(["add", "-A"]);
+    expect(commands).toContainEqual(["config", "--local", "user.email"]);
+    expect(commands).toContainEqual(["config", "--local", "user.email", "sprintfoundry@localhost"]);
+    expect(commands).toContainEqual(["config", "--local", "user.name", "SprintFoundry"]);
+    expect(commands).toContainEqual(["add", "-A"]);
     // Should have reset calls for excluded files
     const resetCalls = commands.filter((c: string[]) => c[0] === "reset" && c[1] === "HEAD");
     expect(resetCalls.length).toBeGreaterThan(0);
