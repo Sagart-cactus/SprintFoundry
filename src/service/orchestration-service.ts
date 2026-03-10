@@ -74,6 +74,7 @@ interface ExecutePlanOptions {
 interface ResumeTaskOptions {
   step?: number;
   prompt?: string;
+  allowInProgressRecovery?: boolean;
 }
 
 type TaskRunWithEnvironment = TaskRun & {
@@ -409,7 +410,12 @@ export class OrchestrationService {
       }
     }
 
-    if (run.status !== "failed" && run.status !== "cancelled") {
+    const allowInProgressRecovery = options?.allowInProgressRecovery === true;
+    const resumableStatus =
+      run.status === "failed" ||
+      run.status === "cancelled" ||
+      (allowInProgressRecovery && run.status === "executing");
+    if (!resumableStatus) {
       throw new Error(`Run ${runId} status is '${run.status}'. Only failed/cancelled runs can be resumed.`);
     }
 
@@ -1068,6 +1074,8 @@ export class OrchestrationService {
       ...this.buildSandboxEventData(run),
       runtime_metadata: runtimeMetadata,
     });
+    await this.persistRunState(run, workspacePath);
+    await this.persistSessionBlocking(run, { workspace_path: workspacePath });
     const stepStartMs = Date.now();
     this.metricsService.recordStepStarted({ run_id: run.run_id, step_id: String(step.step_number), agent: step.agent, provider: runtime.provider, mode: runtime.mode });
 
@@ -2269,8 +2277,9 @@ export class OrchestrationService {
   }
 
   private createRun(ticketId: string): TaskRun {
+    const presetRunId = String(process.env.SPRINTFOUNDRY_RUN_ID ?? "").trim();
     return {
-      run_id: `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      run_id: presetRunId || `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       project_id: this.projectConfig.project_id,
       ticket: null as any, // will be set immediately after
       plan: null,

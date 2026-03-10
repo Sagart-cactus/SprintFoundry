@@ -16,6 +16,7 @@ import type { EventSinkClient } from "./event-sink-client.js";
 
 const SESSIONS_DIR = path.join(os.homedir(), ".sprintfoundry", "sessions");
 const ARCHIVE_DIR = path.join(SESSIONS_DIR, "archive");
+const SESSIONS_DIR_ENV = "SPRINTFOUNDRY_SESSIONS_DIR";
 
 export class SessionManager {
   private sessionsDir: string;
@@ -23,7 +24,7 @@ export class SessionManager {
   private sinkClient?: Pick<EventSinkClient, "upsertRun">;
 
   constructor(baseDir?: string, sinkClient?: Pick<EventSinkClient, "upsertRun">) {
-    this.sessionsDir = baseDir ?? SESSIONS_DIR;
+    this.sessionsDir = baseDir ?? process.env[SESSIONS_DIR_ENV] ?? SESSIONS_DIR;
     this.archiveDir = path.join(this.sessionsDir, "archive");
     this.sinkClient = sinkClient;
   }
