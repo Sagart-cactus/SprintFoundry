@@ -170,4 +170,27 @@ describe("CodexPlannerRuntime", () => {
     expect(configRaw).toContain("[openai]");
     expect(configRaw).toContain('api_key = "sk-test"');
   });
+
+  it("prefers CODEX_HOME over HOME when seeding auth state", async () => {
+    const fakeHome = path.join(tmpDir, "home");
+    const explicitCodexHome = path.join(tmpDir, "workspace-codex-home");
+    const configPath = path.join(explicitCodexHome, "config.toml");
+    const authPath = path.join(explicitCodexHome, "auth.json");
+    await fs.mkdir(fakeHome, { recursive: true });
+    const previousHome = process.env.HOME;
+    const previousCodexHome = process.env.CODEX_HOME;
+    process.env.HOME = fakeHome;
+    process.env.CODEX_HOME = explicitCodexHome;
+    try {
+      await writeCodexConfigToml("sk-explicit-home");
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+    }
+
+    await expect(fs.readFile(configPath, "utf-8")).resolves.toContain('api_key = "sk-explicit-home"');
+    await expect(fs.readFile(authPath, "utf-8")).resolves.toContain("sk-explicit-home");
+  });
 });

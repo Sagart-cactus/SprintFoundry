@@ -57,6 +57,7 @@ function makeRun(overrides?: Partial<TaskRun>): TaskRun {
 
 describe("SessionManager", () => {
   beforeEach(async () => {
+    delete process.env.SPRINTFOUNDRY_SESSIONS_DIR;
     testDir = path.join(os.tmpdir(), `sf-session-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     await fs.mkdir(testDir, { recursive: true });
   });
@@ -177,6 +178,17 @@ describe("SessionManager", () => {
     const mgr = new SessionManager(testDir);
     const session = await mgr.get("nonexistent");
     expect(session).toBeNull();
+  });
+
+  it("uses SPRINTFOUNDRY_SESSIONS_DIR when constructor baseDir is omitted", async () => {
+    process.env.SPRINTFOUNDRY_SESSIONS_DIR = testDir;
+    const mgr = new SessionManager();
+    const run = makeRun({ run_id: "run-env-dir" });
+
+    await mgr.persist(run);
+
+    const filePath = path.join(testDir, "run-env-dir.json");
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toContain("run-env-dir");
   });
 
   it("lists sessions sorted by updated_at descending", async () => {
