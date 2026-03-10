@@ -77,6 +77,7 @@ export class GitManager {
     stepNumber: number,
     agentId: string
   ): Promise<boolean> {
+    this.ensureGitIdentity(workspacePath);
     this.exec(["git", "add", "-A"], workspacePath);
     this.unstageExcluded(workspacePath);
 
@@ -103,6 +104,7 @@ export class GitManager {
     workspacePath: string,
     message: string
   ): Promise<void> {
+    this.ensureGitIdentity(workspacePath);
     this.exec(["git", "add", "-A"], workspacePath);
     this.unstageExcluded(workspacePath);
     // Only commit if there are staged changes (step checkpoints may have already committed everything)
@@ -117,6 +119,7 @@ export class GitManager {
     workspacePath: string,
     run: TaskRun
   ): Promise<string> {
+    this.ensureGitIdentity(workspacePath);
     const title = `[SprintFoundry] ${run.ticket.title}`;
     const body = this.buildPRBody(run);
 
@@ -300,11 +303,11 @@ export class GitManager {
   }
 
   private ensureGitIdentity(cwd: string): void {
-    const emailResult = this.execRaw(["git", "config", "--global", "user.email"], cwd);
+    const emailResult = this.execRaw(["git", "config", "--local", "user.email"], cwd);
     if (!emailResult.stdout.trim()) {
-      this.execRaw(["git", "config", "--global", "user.email", "sprintfoundry@localhost"], cwd);
-      this.execRaw(["git", "config", "--global", "user.name", "SprintFoundry"], cwd);
-      console.log(`[git] No git identity configured — set default: SprintFoundry <sprintfoundry@localhost>`);
+      this.execRaw(["git", "config", "--local", "user.email", "sprintfoundry@localhost"], cwd);
+      this.execRaw(["git", "config", "--local", "user.name", "SprintFoundry"], cwd);
+      console.log(`[git] No git identity configured in repo — set default: SprintFoundry <sprintfoundry@localhost>`);
     }
   }
 

@@ -41,6 +41,8 @@ const CODEX_AUTH_HEADER_ERROR_SIGNATURE =
   "401 Unauthorized: Missing bearer or basic authentication in header";
 const LOG_CHUNK_FLUSH_INTERVAL_MS = 5_000;
 const LOG_CHUNK_MAX_BYTES = 4_096;
+const RUN_SANDBOX_MODE_ENV = "SPRINTFOUNDRY_RUN_SANDBOX_MODE";
+const WHOLE_RUN_SANDBOX_MODE = "k8s-whole-run";
 
 interface ActivityDispatcher {
   emit(event: RuntimeActivityEvent): Promise<void>;
@@ -81,6 +83,7 @@ export class CodexRuntime implements AgentRuntime {
     const runtimeArgs = config.runtime.args ?? [];
     const hasSandboxFlag = runtimeArgs.includes("--sandbox") || runtimeArgs.includes("-s");
     const hasBypassFlag = runtimeArgs.includes("--dangerously-bypass-approvals-and-sandbox");
+    const defaultSandboxArgs = this.resolveDefaultCliSandboxArgs(hasSandboxFlag, hasBypassFlag);
     const reasoningEffort = this.resolveModelReasoningEffort(config.runtime.model_reasoning_effort, config.modelConfig.model);
     const hasReasoningEffortArg = runtimeArgs.some(
       (arg) => arg.includes("model_reasoning_effort")
@@ -97,13 +100,13 @@ export class CodexRuntime implements AgentRuntime {
         : []),
       prompt,
       "--json",
-      ...(hasSandboxFlag || hasBypassFlag ? [] : ["--sandbox", "workspace-write"]),
+      ...defaultSandboxArgs,
     ];
     const env = this.buildRuntimeEnv(config);
 
     // Codex v0.110+ reads credentials from ~/.codex/config.toml, not OPENAI_API_KEY env var.
     if (config.apiKey) {
-      await writeCodexConfigToml(config.apiKey);
+      await writeCodexConfigToml(config.apiKey, config.codexHomeDir);
     }
 
     const codexHomeFallbackEnabled =
@@ -133,6 +136,7 @@ export class CodexRuntime implements AgentRuntime {
       runtime_args: runtimeArgs,
       has_sandbox_flag: hasSandboxFlag,
       has_bypass_flag: hasBypassFlag,
+      default_cli_sandbox_args: defaultSandboxArgs,
       openai_model: env.OPENAI_MODEL ?? "",
       openai_api_key_present: Boolean(env.OPENAI_API_KEY),
       codex_home: env.CODEX_HOME ?? "",
@@ -223,7 +227,7 @@ export class CodexRuntime implements AgentRuntime {
           : []),
         prompt,
         "--json",
-        ...(hasSandboxFlag || hasBypassFlag ? [] : ["--sandbox", "workspace-write"]),
+        ...defaultSandboxArgs,
       ]
       : null;
 
@@ -327,14 +331,14 @@ export class CodexRuntime implements AgentRuntime {
     const threadOptions: {
       workingDirectory: string;
       model: string;
-      sandboxMode: "workspace-write";
+      sandboxMode: "workspace-write" | "danger-full-access";
       approvalPolicy: "never";
       skipGitRepoCheck: true;
       modelReasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
     } = {
       workingDirectory: config.workspacePath,
       model: config.modelConfig.model,
-      sandboxMode: "workspace-write",
+      sandboxMode: this.resolveDefaultSdkSandboxMode(),
       approvalPolicy: "never",
       skipGitRepoCheck: true,
     };
@@ -599,7 +603,7 @@ export class CodexRuntime implements AgentRuntime {
     threadOptions: {
       workingDirectory: string;
       model: string;
-      sandboxMode: "workspace-write";
+      sandboxMode: "workspace-write" | "danger-full-access";
       approvalPolicy: "never";
       skipGitRepoCheck: true;
       modelReasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
@@ -750,6 +754,27 @@ export class CodexRuntime implements AgentRuntime {
       env[key] = value;
     }
     return env;
+  }
+
+  private resolveDefaultCliSandboxArgs(
+    hasSandboxFlag: boolean,
+    hasBypassFlag: boolean
+  ): string[] {
+    if (hasSandboxFlag || hasBypassFlag) {
+      return [];
+    }
+    if (this.isWholeRunSandboxMode()) {
+      return ["--dangerously-bypass-approvals-and-sandbox"];
+    }
+    return ["--sandbox", "workspace-write"];
+  }
+
+  private resolveDefaultSdkSandboxMode(): "workspace-write" | "danger-full-access" {
+    return this.isWholeRunSandboxMode() ? "danger-full-access" : "workspace-write";
+  }
+
+  private isWholeRunSandboxMode(): boolean {
+    return process.env[RUN_SANDBOX_MODE_ENV] === WHOLE_RUN_SANDBOX_MODE;
   }
 
   private resolveModelReasoningEffort(

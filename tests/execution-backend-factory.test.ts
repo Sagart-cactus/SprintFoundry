@@ -42,6 +42,15 @@ describe("execution backend factory", () => {
     expect(resolveExecutionBackendName(platform, project, env)).toBe("local");
   });
 
+  it("forces local step execution inside a whole-run k8s runner pod", () => {
+    const platform = makePlatformConfig({ execution_backend: "k8s-pod" });
+    const project = makeProjectConfig({ execution_backend_override: "docker" });
+    const env = { SPRINTFOUNDRY_RUN_SANDBOX_MODE: "k8s-whole-run" } as NodeJS.ProcessEnv;
+
+    expect(resolveExecutionBackendName(platform, project, env)).toBe("local");
+    expect(createExecutionBackend(platform, project, env)).toBeInstanceOf(LocalExecutionBackend);
+  });
+
   it("constructs the docker backend when configured", () => {
     const platform = makePlatformConfig();
     const project = makeProjectConfig({ execution_backend_override: "docker" });
