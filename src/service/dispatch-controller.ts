@@ -152,6 +152,14 @@ export interface K8sPersistentVolumeClaimManifest {
     name: string;
     namespace: string;
     labels: Record<string, string>;
+    ownerReferences?: Array<{
+      apiVersion: string;
+      kind: string;
+      name: string;
+      uid: string;
+      controller?: boolean;
+      blockOwnerDeletion?: boolean;
+    }>;
   };
   spec: {
     accessModes: ["ReadWriteOnce"];
@@ -570,6 +578,115 @@ export function buildK8sWorkspacePvcManifest(task: DispatchQueueItem, options?: 
   };
 }
 
+export function buildJobOwnerReference(job: {
+  apiVersion?: string;
+  kind?: string;
+  metadata: {
+    name: string;
+    uid: string;
+  };
+}): {
+  apiVersion: string;
+  kind: string;
+  name: string;
+  uid: string;
+  controller: boolean;
+  blockOwnerDeletion: boolean;
+} {
+  return {
+    apiVersion: job.apiVersion ?? "batch/v1",
+    kind: job.kind ?? "Job",
+    name: job.metadata.name,
+    uid: job.metadata.uid,
+    controller: false,
+    blockOwnerDeletion: false,
+  };
+}
+
+function withOwnerReference<T extends { metadata?: Record<string, unknown> }>(
+  resource: T,
+  ownerReference: ReturnType<typeof buildJobOwnerReference>
+): T {
+  const metadata = (resource.metadata ?? {}) as Record<string, unknown>;
+  const existingOwnerReferences = Array.isArray(metadata.ownerReferences)
+    ? (metadata.ownerReferences as Array<Record<string, unknown>>)
+    : [];
+  const nextOwnerReferences = [
+    ...existingOwnerReferences.filter(
+      (ref) => !(ref.uid === ownerReference.uid && ref.name === ownerReference.name)
+    ),
+    ownerReference,
+  ];
+  return {
+    ...resource,
+    metadata: {
+      ...metadata,
+      ownerReferences: nextOwnerReferences,
+    },
+  };
+}
+
+async function attachWorkspacePvcToJob(
+  coreApi: any,
+  namespace: string,
+  pvcManifest: K8sPersistentVolumeClaimManifest,
+  ownerReference: ReturnType<typeof buildJobOwnerReference>
+): Promise<void> {
+  const pvcName = pvcManifest.metadata.name;
+
+  let currentPvc: any;
+  try {
+    currentPvc = await coreApi.readNamespacedPersistentVolumeClaim({ name: pvcName, namespace });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const expectsLegacyArgs = /name was null or undefined|namespace was null or undefined/i.test(message);
+    if (!expectsLegacyArgs) {
+      throw error;
+    }
+    currentPvc = await coreApi.readNamespacedPersistentVolumeClaim(pvcName, namespace);
+  }
+
+  const currentBody = currentPvc?.body ?? currentPvc;
+  const updatedBody = withOwnerReference(currentBody, ownerReference);
+
+  try {
+    await coreApi.replaceNamespacedPersistentVolumeClaim({
+      name: pvcName,
+      namespace,
+      body: updatedBody,
+    });
+    return;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const expectsLegacyArgs = /name was null or undefined|namespace was null or undefined/i.test(message);
+    if (!expectsLegacyArgs) {
+      throw error;
+    }
+  }
+
+  await coreApi.replaceNamespacedPersistentVolumeClaim(pvcName, namespace, updatedBody);
+}
+
+async function readJobUid(batchApi: any, namespace: string, jobName: string): Promise<string> {
+  try {
+    const job = await batchApi.readNamespacedJob({ name: jobName, namespace });
+    return String(job?.body?.metadata?.uid ?? job?.metadata?.uid ?? "").trim();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const expectsLegacyArgs = /name was null or undefined|namespace was null or undefined/i.test(message);
+    if (!expectsLegacyArgs) {
+      return "";
+    }
+  }
+
+  try {
+    const job = await batchApi.readNamespacedJob(jobName, namespace);
+    return String(job?.body?.metadata?.uid ?? job?.metadata?.uid ?? "").trim();
+  } catch {
+    return "";
+  }
+}
+
 async function defaultCreateK8sJob(manifest: K8sJobManifest, _task: DispatchQueueItem, namespace: string): Promise<void> {
   let k8sModule: any;
   try {
@@ -614,7 +731,19 @@ async function defaultCreateK8sJob(manifest: K8sJobManifest, _task: DispatchQueu
   // - v1.x: createNamespacedJob({ namespace, body })
   // - older: createNamespacedJob(namespace, body)
   try {
-    await batchApi.createNamespacedJob({ namespace, body: manifest });
+    const createdJob = await batchApi.createNamespacedJob({ namespace, body: manifest });
+    const jobBody = createdJob?.body ?? createdJob;
+    const uid = String(jobBody?.metadata?.uid ?? "").trim() || await readJobUid(batchApi, namespace, manifest.metadata.name);
+    if (uid) {
+      await attachWorkspacePvcToJob(coreApi, namespace, workspacePvc, buildJobOwnerReference({
+        apiVersion: manifest.apiVersion,
+        kind: manifest.kind,
+        metadata: {
+          name: manifest.metadata.name,
+          uid,
+        },
+      }));
+    }
     return;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -624,7 +753,19 @@ async function defaultCreateK8sJob(manifest: K8sJobManifest, _task: DispatchQueu
     }
   }
 
-  await batchApi.createNamespacedJob(namespace, manifest);
+  const createdJob = await batchApi.createNamespacedJob(namespace, manifest);
+  const jobBody = createdJob?.body ?? createdJob;
+  const uid = String(jobBody?.metadata?.uid ?? "").trim() || await readJobUid(batchApi, namespace, manifest.metadata.name);
+  if (uid) {
+    await attachWorkspacePvcToJob(coreApi, namespace, workspacePvc, buildJobOwnerReference({
+      apiVersion: manifest.apiVersion,
+      kind: manifest.kind,
+      metadata: {
+        name: manifest.metadata.name,
+        uid,
+      },
+    }));
+  }
 }
 
 class DispatchController implements DispatchControllerRuntime {

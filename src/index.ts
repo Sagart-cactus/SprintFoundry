@@ -17,6 +17,7 @@ import { migrateEnvVars } from "./service/env-compat.js";
 import { runProjectCreate } from "./commands/project-create.js";
 import { runAgentCreate } from "./commands/agent-create.js";
 import { SessionManager } from "./service/session-manager.js";
+import { resolveAutoResumeAction } from "./service/auto-resume.js";
 import { getActivityState } from "./service/activity-detector.js";
 import { PluginRegistry } from "./service/plugin-registry.js";
 import { createExecutionBackend, resolveExecutionBackendName } from "./service/execution/index.js";
@@ -186,10 +187,20 @@ program
     const envRunId = process.env.SPRINTFOUNDRY_RUN_ID?.trim();
     if (autoResumeExistingRun && envRunId) {
       const session = await new SessionManager().get(envRunId);
-      if (session) {
+      const autoResumeAction = resolveAutoResumeAction(envRunId, session);
+      if (autoResumeAction === "resume") {
         console.log(`Detected existing run state for ${envRunId}; attempting recovery/resume.`);
         run = await service.resumeTask(envRunId, {
           allowInProgressRecovery: true,
+        });
+      } else if (autoResumeAction === "restart") {
+        console.log(
+          `Detected session for ${envRunId} without a workspace path; restarting the run with the same run_id.`
+        );
+        run = await service.handleTask(ticketId, source, opts.prompt, {
+          dryRun: !!opts.dryRun,
+          agent: opts.agent,
+          agentFile: opts.agentFile,
         });
       } else {
         run = await service.handleTask(ticketId, source, opts.prompt, {
