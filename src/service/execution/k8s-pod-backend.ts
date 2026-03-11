@@ -2,6 +2,7 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
+import { PassThrough } from "stream";
 import type {
   ExecutionPlan,
   PlanStep,
@@ -257,7 +258,7 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
       await this.safeDeleteEgressPolicy(egressPolicyName);
     }
     const serviceAccountName = String(handle.metadata["service_account_name"] ?? "");
-    if (serviceAccountName) {
+    if (reason === "completed" && serviceAccountName) {
       await this.safeDeleteServiceAccount(serviceAccountName);
     }
   }
@@ -333,21 +334,21 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
         const stdoutChunks: Buffer[] = [];
         const stderrChunks: Buffer[] = [];
         let exitCode = 0;
+        const stdoutStream = new PassThrough();
+        const stderrStream = new PassThrough();
+        stdoutStream.on("data", (chunk: Buffer | string) => {
+          stdoutChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        });
+        stderrStream.on("data", (chunk: Buffer | string) => {
+          stderrChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        });
         await execClient.exec(
           namespace,
           podName,
           containerName,
           command,
-          {
-            write: (chunk: Buffer | string) => {
-              stdoutChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-            },
-          },
-          {
-            write: (chunk: Buffer | string) => {
-              stderrChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-            },
-          },
+          stdoutStream,
+          stderrStream,
           null,
           false,
           (status: { status?: string; code?: number }) => {
@@ -469,6 +470,9 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
         runtimeClassName,
         securityContext: {
           runAsNonRoot: true,
+          runAsUser: 1001,
+          runAsGroup: 1001,
+          fsGroup: 1001,
           seccompProfile: {
             type: "RuntimeDefault",
           },

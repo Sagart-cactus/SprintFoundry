@@ -62,6 +62,7 @@ function makeContext(
   overrides?: Partial<RuntimeStepContext>
 ): RuntimeStepContext {
   return {
+    runId: overrides?.runId ?? "run-codex-runtime-sdk",
     stepNumber: overrides?.stepNumber ?? 1,
     stepAttempt: overrides?.stepAttempt ?? 1,
     agent: overrides?.agent ?? "developer",
@@ -197,6 +198,25 @@ describe("CodexRuntime local_sdk mode", () => {
       workingDirectory: tmpDir,
       model: "gpt-5",
       sandboxMode: "workspace-write",
+      approvalPolicy: "never",
+      skipGitRepoCheck: true,
+    });
+  });
+
+  it("uses danger-full-access in SDK mode for whole-run k8s pods", async () => {
+    process.env.SPRINTFOUNDRY_RUN_SANDBOX_MODE = "k8s-whole-run";
+
+    const runtime = new CodexRuntime();
+    await runtime.runStep(
+      makeContext(tmpDir, {
+        modelConfig: { provider: "openai", model: "gpt-5.3-codex" },
+      })
+    );
+
+    expect(mockStartThreadFn).toHaveBeenCalledWith({
+      workingDirectory: tmpDir,
+      model: "gpt-5.3-codex",
+      sandboxMode: "danger-full-access",
       approvalPolicy: "never",
       skipGitRepoCheck: true,
     });
@@ -843,6 +863,21 @@ describe("CodexRuntime local_process mode (unchanged behavior)", () => {
     expect(args[0]).toBe("exec");
     expect(args[2]).toBe("resume");
     expect(args[3]).toBe("process-session-123");
+  });
+
+  it("bypasses the inner codex sandbox in local_process mode for whole-run k8s pods", async () => {
+    process.env.SPRINTFOUNDRY_RUN_SANDBOX_MODE = "k8s-whole-run";
+
+    const runtime = new CodexRuntime();
+    await runtime.runStep(
+      makeContext(tmpDir, {
+        runtime: { provider: "codex", mode: "local_process" },
+      })
+    );
+
+    const args = vi.mocked(runProcess).mock.calls[0][1] as string[];
+    expect(args).toContain("--dangerously-bypass-approvals-and-sandbox");
+    expect(args).not.toContain("workspace-write");
   });
 
   it("falls back to one fresh local_process run when resume command fails with invalid session", async () => {

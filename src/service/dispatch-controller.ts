@@ -19,6 +19,11 @@ import {
 } from "./webhook-handler.js";
 
 const require = createRequire(import.meta.url);
+const RUN_SANDBOX_MODE_ENV = "SPRINTFOUNDRY_RUN_SANDBOX_MODE";
+const WHOLE_RUN_SANDBOX_MODE = "k8s-whole-run";
+const RUNS_ROOT_ENV = "SPRINTFOUNDRY_RUNS_ROOT";
+const SESSIONS_DIR_ENV = "SPRINTFOUNDRY_SESSIONS_DIR";
+const AUTO_RESUME_ENV = "SPRINTFOUNDRY_AUTO_RESUME_EXISTING_RUN";
 
 export interface DispatchControllerStartOptions {
   host?: string;
@@ -133,10 +138,37 @@ export interface K8sJobManifest {
         }>;
         volumes: Array<
           | { name: string; configMap: { name: string } }
-          | { name: string; emptyDir: { sizeLimit: string } }
+          | { name: string; persistentVolumeClaim: { claimName: string } }
         >;
       };
     };
+  };
+}
+
+export interface K8sPersistentVolumeClaimManifest {
+  apiVersion: "v1";
+  kind: "PersistentVolumeClaim";
+  metadata: {
+    name: string;
+    namespace: string;
+    labels: Record<string, string>;
+    ownerReferences?: Array<{
+      apiVersion: string;
+      kind: string;
+      name: string;
+      uid: string;
+      controller?: boolean;
+      blockOwnerDeletion?: boolean;
+    }>;
+  };
+  spec: {
+    accessModes: ["ReadWriteOnce"];
+    resources: {
+      requests: {
+        storage: string;
+      };
+    };
+    storageClassName?: string;
   };
 }
 
@@ -233,6 +265,12 @@ function activeSetKey(projectId: string): string {
 
 function dedupeKey(projectId: string, delivery: string): string {
   return `sprintfoundry:dispatch:dedupe:${projectId}:${delivery}`;
+}
+
+function normalizeK8sName(input: string, prefix: string): string {
+  const normalized = input.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
+  const value = `${prefix}-${normalized || "run"}`;
+  return value.slice(0, 63).replace(/-+$/g, "");
 }
 
 function extractBearerToken(headers: Record<string, string | string[] | undefined>): string {
@@ -401,11 +439,13 @@ export function buildK8sJobManifest(task: DispatchQueueItem, options?: {
   memoryRequest?: string;
   memoryLimit?: string;
   workspaceSizeLimit?: string;
+  workspaceStorageClassName?: string;
 }): K8sJobManifest {
   const namespace = asString(options?.namespace) || "default";
   const image = asString(options?.image) || "sprintfoundry-runner:latest";
   const projectSecretName = asString(options?.projectSecretName) || `sprintfoundry-project-${task.project_id}-secrets`;
   const projectConfigMapName = asString(options?.projectConfigMapName) || `sprintfoundry-project-${task.project_id}-config`;
+  const workspacePvcName = makeRunWorkspacePvcName(task.run_id);
 
   const args = ["run", "--source", task.source, "--config", "/config"];
 
@@ -439,7 +479,7 @@ export function buildK8sJobManifest(task: DispatchQueueItem, options?: {
     },
     spec: {
       ttlSecondsAfterFinished: options?.ttlSecondsAfterFinished ?? 1800,
-      backoffLimit: 0,
+      backoffLimit: 1,
       template: {
         metadata: {
           labels: {
@@ -463,6 +503,12 @@ export function buildK8sJobManifest(task: DispatchQueueItem, options?: {
                 { name: "SPRINTFOUNDRY_PROJECT_ID", value: task.project_id },
                 { name: "SPRINTFOUNDRY_TICKET_ID", value: task.ticket_id },
                 { name: "SPRINTFOUNDRY_TRIGGER_SOURCE", value: task.trigger_source ?? `${task.source}_dispatch` },
+                { name: RUN_SANDBOX_MODE_ENV, value: WHOLE_RUN_SANDBOX_MODE },
+                { name: RUNS_ROOT_ENV, value: "/workspace" },
+                { name: SESSIONS_DIR_ENV, value: "/workspace/.sprintfoundry/sessions" },
+                { name: AUTO_RESUME_ENV, value: "1" },
+                { name: "HOME", value: "/workspace/home" },
+                { name: "CODEX_HOME", value: "/workspace/home/.codex" },
                 { name: "SPRINTFOUNDRY_OTEL_ENABLED", value: process.env.SPRINTFOUNDRY_OTEL_ENABLED ?? "0" },
                 { name: "OTEL_EXPORTER_OTLP_ENDPOINT", value: process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? "http://otel-collector.monitoring.svc.cluster.local:4318" },
                 { name: "OTEL_EXPORTER_OTLP_PROTOCOL", value: process.env.OTEL_EXPORTER_OTLP_PROTOCOL ?? "http/protobuf" },
@@ -488,12 +534,157 @@ export function buildK8sJobManifest(task: DispatchQueueItem, options?: {
           ],
           volumes: [
             { name: "project-config", configMap: { name: projectConfigMapName } },
-            { name: "workspace", emptyDir: { sizeLimit: asString(options?.workspaceSizeLimit) || "10Gi" } },
+            { name: "workspace", persistentVolumeClaim: { claimName: workspacePvcName } },
           ],
         },
       },
     },
   };
+}
+
+export function makeRunWorkspacePvcName(runId: string): string {
+  return normalizeK8sName(runId, "sf-run-ws");
+}
+
+export function buildK8sWorkspacePvcManifest(task: DispatchQueueItem, options?: {
+  namespace?: string;
+  workspaceSizeLimit?: string;
+  workspaceStorageClassName?: string;
+}): K8sPersistentVolumeClaimManifest {
+  const namespace = asString(options?.namespace) || "default";
+  const storageSize = asString(options?.workspaceSizeLimit) || "10Gi";
+  const storageClassName = asString(options?.workspaceStorageClassName) || "";
+  return {
+    apiVersion: "v1",
+    kind: "PersistentVolumeClaim",
+    metadata: {
+      name: makeRunWorkspacePvcName(task.run_id),
+      namespace,
+      labels: {
+        "app.kubernetes.io/name": "sprintfoundry-runner-workspace",
+        "sprintfoundry.io/project-id": task.project_id,
+        "sprintfoundry.io/run-id": task.run_id,
+      },
+    },
+    spec: {
+      accessModes: ["ReadWriteOnce"],
+      resources: {
+        requests: {
+          storage: storageSize,
+        },
+      },
+      ...(storageClassName ? { storageClassName } : {}),
+    },
+  };
+}
+
+export function buildJobOwnerReference(job: {
+  apiVersion?: string;
+  kind?: string;
+  metadata: {
+    name: string;
+    uid: string;
+  };
+}): {
+  apiVersion: string;
+  kind: string;
+  name: string;
+  uid: string;
+  controller: boolean;
+  blockOwnerDeletion: boolean;
+} {
+  return {
+    apiVersion: job.apiVersion ?? "batch/v1",
+    kind: job.kind ?? "Job",
+    name: job.metadata.name,
+    uid: job.metadata.uid,
+    controller: false,
+    blockOwnerDeletion: false,
+  };
+}
+
+function withOwnerReference<T extends { metadata?: Record<string, unknown> }>(
+  resource: T,
+  ownerReference: ReturnType<typeof buildJobOwnerReference>
+): T {
+  const metadata = (resource.metadata ?? {}) as Record<string, unknown>;
+  const existingOwnerReferences = Array.isArray(metadata.ownerReferences)
+    ? (metadata.ownerReferences as Array<Record<string, unknown>>)
+    : [];
+  const nextOwnerReferences = [
+    ...existingOwnerReferences.filter(
+      (ref) => !(ref.uid === ownerReference.uid && ref.name === ownerReference.name)
+    ),
+    ownerReference,
+  ];
+  return {
+    ...resource,
+    metadata: {
+      ...metadata,
+      ownerReferences: nextOwnerReferences,
+    },
+  };
+}
+
+async function attachWorkspacePvcToJob(
+  coreApi: any,
+  namespace: string,
+  pvcManifest: K8sPersistentVolumeClaimManifest,
+  ownerReference: ReturnType<typeof buildJobOwnerReference>
+): Promise<void> {
+  const pvcName = pvcManifest.metadata.name;
+
+  let currentPvc: any;
+  try {
+    currentPvc = await coreApi.readNamespacedPersistentVolumeClaim({ name: pvcName, namespace });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const expectsLegacyArgs = /name was null or undefined|namespace was null or undefined/i.test(message);
+    if (!expectsLegacyArgs) {
+      throw error;
+    }
+    currentPvc = await coreApi.readNamespacedPersistentVolumeClaim(pvcName, namespace);
+  }
+
+  const currentBody = currentPvc?.body ?? currentPvc;
+  const updatedBody = withOwnerReference(currentBody, ownerReference);
+
+  try {
+    await coreApi.replaceNamespacedPersistentVolumeClaim({
+      name: pvcName,
+      namespace,
+      body: updatedBody,
+    });
+    return;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const expectsLegacyArgs = /name was null or undefined|namespace was null or undefined/i.test(message);
+    if (!expectsLegacyArgs) {
+      throw error;
+    }
+  }
+
+  await coreApi.replaceNamespacedPersistentVolumeClaim(pvcName, namespace, updatedBody);
+}
+
+async function readJobUid(batchApi: any, namespace: string, jobName: string): Promise<string> {
+  try {
+    const job = await batchApi.readNamespacedJob({ name: jobName, namespace });
+    return String(job?.body?.metadata?.uid ?? job?.metadata?.uid ?? "").trim();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const expectsLegacyArgs = /name was null or undefined|namespace was null or undefined/i.test(message);
+    if (!expectsLegacyArgs) {
+      return "";
+    }
+  }
+
+  try {
+    const job = await batchApi.readNamespacedJob(jobName, namespace);
+    return String(job?.body?.metadata?.uid ?? job?.metadata?.uid ?? "").trim();
+  } catch {
+    return "";
+  }
 }
 
 async function defaultCreateK8sJob(manifest: K8sJobManifest, _task: DispatchQueueItem, namespace: string): Promise<void> {
@@ -509,12 +700,50 @@ async function defaultCreateK8sJob(manifest: K8sJobManifest, _task: DispatchQueu
   const kc = new k8sModule.KubeConfig();
   kc.loadFromDefault();
   const batchApi = kc.makeApiClient(k8sModule.BatchV1Api);
+  const coreApi = kc.makeApiClient(k8sModule.CoreV1Api);
+  const workspacePvc = buildK8sWorkspacePvcManifest(_task, {
+    namespace,
+    workspaceSizeLimit: process.env.SPRINTFOUNDRY_K8S_WORKSPACE_SIZE,
+    workspaceStorageClassName: process.env.SPRINTFOUNDRY_K8S_WORKSPACE_STORAGE_CLASS,
+  });
+
+  try {
+    await coreApi.createNamespacedPersistentVolumeClaim({ namespace, body: workspacePvc });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const alreadyExists = /AlreadyExists|409/i.test(message);
+    const expectsLegacyArgs = /namespace was null or undefined/i.test(message);
+    if (expectsLegacyArgs) {
+      try {
+        await coreApi.createNamespacedPersistentVolumeClaim(namespace, workspacePvc);
+      } catch (legacyError) {
+        const legacyMessage = legacyError instanceof Error ? legacyError.message : String(legacyError);
+        if (!/AlreadyExists|409/i.test(legacyMessage)) {
+          throw legacyError;
+        }
+      }
+    } else if (!alreadyExists) {
+      throw error;
+    }
+  }
 
   // Support both Kubernetes client signatures:
   // - v1.x: createNamespacedJob({ namespace, body })
   // - older: createNamespacedJob(namespace, body)
   try {
-    await batchApi.createNamespacedJob({ namespace, body: manifest });
+    const createdJob = await batchApi.createNamespacedJob({ namespace, body: manifest });
+    const jobBody = createdJob?.body ?? createdJob;
+    const uid = String(jobBody?.metadata?.uid ?? "").trim() || await readJobUid(batchApi, namespace, manifest.metadata.name);
+    if (uid) {
+      await attachWorkspacePvcToJob(coreApi, namespace, workspacePvc, buildJobOwnerReference({
+        apiVersion: manifest.apiVersion,
+        kind: manifest.kind,
+        metadata: {
+          name: manifest.metadata.name,
+          uid,
+        },
+      }));
+    }
     return;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -524,7 +753,19 @@ async function defaultCreateK8sJob(manifest: K8sJobManifest, _task: DispatchQueu
     }
   }
 
-  await batchApi.createNamespacedJob(namespace, manifest);
+  const createdJob = await batchApi.createNamespacedJob(namespace, manifest);
+  const jobBody = createdJob?.body ?? createdJob;
+  const uid = String(jobBody?.metadata?.uid ?? "").trim() || await readJobUid(batchApi, namespace, manifest.metadata.name);
+  if (uid) {
+    await attachWorkspacePvcToJob(coreApi, namespace, workspacePvc, buildJobOwnerReference({
+      apiVersion: manifest.apiVersion,
+      kind: manifest.kind,
+      metadata: {
+        name: manifest.metadata.name,
+        uid,
+      },
+    }));
+  }
 }
 
 class DispatchController implements DispatchControllerRuntime {

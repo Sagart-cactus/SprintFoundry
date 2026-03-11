@@ -10,13 +10,14 @@ import { spawn } from "child_process";
 
 const require = createRequire(import.meta.url);
 const { version } = require("../package.json");
-import type { PlatformConfig, ProjectConfig, RuntimeConfig, TaskSource } from "./shared/types.js";
+import type { PlatformConfig, ProjectConfig, RuntimeConfig, TaskRun, TaskSource } from "./shared/types.js";
 import { OrchestrationService } from "./service/orchestration-service.js";
 import { loadConfig } from "./service/config-loader.js";
 import { migrateEnvVars } from "./service/env-compat.js";
 import { runProjectCreate } from "./commands/project-create.js";
 import { runAgentCreate } from "./commands/agent-create.js";
 import { SessionManager } from "./service/session-manager.js";
+import { resolveAutoResumeAction } from "./service/auto-resume.js";
 import { getActivityState } from "./service/activity-detector.js";
 import { PluginRegistry } from "./service/plugin-registry.js";
 import { createExecutionBackend, resolveExecutionBackendName } from "./service/execution/index.js";
@@ -26,6 +27,15 @@ import { defaultTrackerModule } from "./plugins/tracker-default/index.js";
 import { consoleNotifierModule } from "./plugins/notifier-console/index.js";
 import { githubSCMModule } from "./plugins/scm-github/index.js";
 import { startDispatchControllerServer } from "./service/dispatch-controller.js";
+
+const RUN_SANDBOX_MODE_ENV = "SPRINTFOUNDRY_RUN_SANDBOX_MODE";
+const WHOLE_RUN_SANDBOX_MODE = "k8s-whole-run";
+const AUTO_RESUME_ENV = "SPRINTFOUNDRY_AUTO_RESUME_EXISTING_RUN";
+
+function isTruthy(value: string | undefined): boolean {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
+}
 
 async function maybeRunRuntimeCliPassthrough(): Promise<void> {
   const runtimeCli = process.argv[2];
@@ -77,9 +87,10 @@ const program = new Command();
 
 function buildPluginRegistry(platform: PlatformConfig, project: ProjectConfig): PluginRegistry {
   const registry = new PluginRegistry();
+  const wholeRunSandbox = process.env[RUN_SANDBOX_MODE_ENV] === WHOLE_RUN_SANDBOX_MODE;
 
   const workspaceStrategy =
-    project.workspace?.strategy ??
+    (wholeRunSandbox ? "tmpdir" : project.workspace?.strategy) ??
     platform.workspace?.strategy ??
     "tmpdir";
   const baseRepoDir =
@@ -171,11 +182,40 @@ program
     if (opts.agent) console.log(`  Direct agent: ${opts.agent}${opts.agentFile ? ` (from ${opts.agentFile})` : ""}`);
     console.log("");
 
-    const run = await service.handleTask(ticketId, source, opts.prompt, {
-      dryRun: !!opts.dryRun,
-      agent: opts.agent,
-      agentFile: opts.agentFile,
-    });
+    let run: TaskRun;
+    const autoResumeExistingRun = isTruthy(process.env[AUTO_RESUME_ENV]);
+    const envRunId = process.env.SPRINTFOUNDRY_RUN_ID?.trim();
+    if (autoResumeExistingRun && envRunId) {
+      const session = await new SessionManager().get(envRunId);
+      const autoResumeAction = resolveAutoResumeAction(envRunId, session);
+      if (autoResumeAction === "resume") {
+        console.log(`Detected existing run state for ${envRunId}; attempting recovery/resume.`);
+        run = await service.resumeTask(envRunId, {
+          allowInProgressRecovery: true,
+        });
+      } else if (autoResumeAction === "restart") {
+        console.log(
+          `Detected session for ${envRunId} without a workspace path; restarting the run with the same run_id.`
+        );
+        run = await service.handleTask(ticketId, source, opts.prompt, {
+          dryRun: !!opts.dryRun,
+          agent: opts.agent,
+          agentFile: opts.agentFile,
+        });
+      } else {
+        run = await service.handleTask(ticketId, source, opts.prompt, {
+          dryRun: !!opts.dryRun,
+          agent: opts.agent,
+          agentFile: opts.agentFile,
+        });
+      }
+    } else {
+      run = await service.handleTask(ticketId, source, opts.prompt, {
+        dryRun: !!opts.dryRun,
+        agent: opts.agent,
+        agentFile: opts.agentFile,
+      });
+    }
 
     console.log("");
     if (opts.dryRun) {

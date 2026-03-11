@@ -10,6 +10,7 @@ describe("WorkspaceManager", () => {
   let baseDir: string;
 
   beforeEach(async () => {
+    delete process.env.SPRINTFOUNDRY_RUNS_ROOT;
     // Use a unique project_id so each test gets its own base dir under os.tmpdir()
     const projectId = `test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     manager = new WorkspaceManager(makeProjectConfig({ project_id: projectId }));
@@ -61,5 +62,18 @@ describe("WorkspaceManager", () => {
     const runs = await freshManager.list();
 
     expect(runs).toEqual([]);
+  });
+
+  it("uses SPRINTFOUNDRY_RUNS_ROOT when provided", async () => {
+    const customRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sf-runs-root-"));
+    process.env.SPRINTFOUNDRY_RUNS_ROOT = customRoot;
+    const projectId = `custom-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const customManager = new WorkspaceManager(makeProjectConfig({ project_id: projectId }));
+
+    const workspacePath = await customManager.create("run-custom");
+
+    expect(workspacePath).toBe(path.join(customRoot, "sprintfoundry", projectId, "run-custom"));
+    await fs.rm(customRoot, { recursive: true, force: true });
+    delete process.env.SPRINTFOUNDRY_RUNS_ROOT;
   });
 });

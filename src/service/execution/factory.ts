@@ -7,12 +7,18 @@ import { LocalExecutionBackend } from "./local-backend.js";
 
 const EXECUTION_BACKEND_ENV = "SPRINTFOUNDRY_EXECUTION_BACKEND";
 const AGENT_SANDBOX_ENV = "SPRINTFOUNDRY_AGENT_SANDBOX";
+const RUN_SANDBOX_MODE_ENV = "SPRINTFOUNDRY_RUN_SANDBOX_MODE";
+const WHOLE_RUN_SANDBOX_MODE = "k8s-whole-run";
 
 export function resolveExecutionBackendName(
   platformConfig: PlatformConfig,
   projectConfig: ProjectConfig,
   env: NodeJS.ProcessEnv = process.env
 ): ExecutionBackendName {
+  if (env[RUN_SANDBOX_MODE_ENV] === WHOLE_RUN_SANDBOX_MODE) {
+    return "local";
+  }
+
   if (projectConfig.execution_backend_override) {
     return projectConfig.execution_backend_override;
   }

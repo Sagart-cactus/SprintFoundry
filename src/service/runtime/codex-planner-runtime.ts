@@ -56,7 +56,7 @@ Set "model" for each step to the agent model that should run that step.`;
 
     // Seed Codex auth state for local_process runs when only an API key is available.
     if (apiKey) {
-      await writeCodexConfigToml(apiKey);
+      await writeCodexConfigToml(apiKey, process.env.CODEX_HOME);
     }
     const runtimeArgs = runtime.args ?? [];
     const hasSandboxFlag = runtimeArgs.includes("--sandbox") || runtimeArgs.includes("-s");
@@ -207,8 +207,8 @@ type CodexAuthState = {
  * - ~/.codex/config.toml (legacy key path)
  * - ~/.codex/auth.json with OPENAI_API_KEY (current CLI key path)
  */
-export async function writeCodexConfigToml(apiKey: string): Promise<void> {
-  const configDir = path.join(os.homedir(), ".codex");
+export async function writeCodexConfigToml(apiKey: string, targetCodexHome?: string): Promise<void> {
+  const configDir = targetCodexHome?.trim() || process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
   const configPath = path.join(configDir, "config.toml");
   const authPath = path.join(configDir, "auth.json");
   await fs.mkdir(configDir, { recursive: true });

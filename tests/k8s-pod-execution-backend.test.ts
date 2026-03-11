@@ -134,6 +134,9 @@ describe("KubernetesPodExecutionBackend", () => {
       runtimeClassName: "gvisor",
       securityContext: {
         runAsNonRoot: true,
+        runAsUser: 1001,
+        runAsGroup: 1001,
+        fsGroup: 1001,
         seccompProfile: {
           type: "RuntimeDefault",
         },
@@ -420,6 +423,6 @@ describe("KubernetesPodExecutionBackend", () => {
     expect(client.deletePod).toHaveBeenCalledWith("tenant-a", "sf-pod-run-1");
     expect(client.deletePvc).not.toHaveBeenCalled();
     expect(client.deleteEgressPolicy).toHaveBeenCalledWith("tenant-a", "sf-pod-run-1-egress");
-    expect(client.deleteServiceAccount).toHaveBeenCalledWith("tenant-a", "sf-sa-run-1");
+    expect(client.deleteServiceAccount).not.toHaveBeenCalled();
   });
 });
