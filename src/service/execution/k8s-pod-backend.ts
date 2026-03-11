@@ -258,7 +258,7 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
       await this.safeDeleteEgressPolicy(egressPolicyName);
     }
     const serviceAccountName = String(handle.metadata["service_account_name"] ?? "");
-    if (serviceAccountName) {
+    if (reason === "completed" && serviceAccountName) {
       await this.safeDeleteServiceAccount(serviceAccountName);
     }
   }

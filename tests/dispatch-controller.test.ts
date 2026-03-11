@@ -4,6 +4,7 @@ import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
 import {
+  buildJobOwnerReference,
   buildK8sJobManifest,
   buildK8sWorkspacePvcManifest,
   registerDispatchRoutes,
@@ -659,6 +660,26 @@ describe("dispatch-controller", () => {
         },
         storageClassName: "fast-ssd",
       },
+    });
+  });
+
+  it("buildJobOwnerReference creates a PVC cleanup owner reference from a Job", () => {
+    expect(
+      buildJobOwnerReference({
+        apiVersion: "batch/v1",
+        kind: "Job",
+        metadata: {
+          name: "sf-run-123",
+          uid: "job-uid-123",
+        },
+      })
+    ).toEqual({
+      apiVersion: "batch/v1",
+      kind: "Job",
+      name: "sf-run-123",
+      uid: "job-uid-123",
+      controller: false,
+      blockOwnerDeletion: false,
     });
   });
 });
