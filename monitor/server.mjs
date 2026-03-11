@@ -2278,6 +2278,19 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (pathname === "/v4" || pathname.startsWith("/v4/")) {
+      const v4Dir = path.join(__dirname, "v4", "dist");
+      const v4Path = pathname === "/v4" ? "/" : pathname.slice(3);
+      // Try to serve the exact file; if it's not a static asset, fall back to index.html (SPA)
+      const isAsset = /\.\w+$/.test(v4Path);
+      if (isAsset) {
+        await serveStatic(res, v4Path, v4Dir);
+      } else {
+        await serveStatic(res, "/index.html", v4Dir);
+      }
+      return;
+    }
+
     if (pathname === "/v3" || pathname.startsWith("/v3/")) {
       const v3Path = pathname === "/v3" ? "/" : pathname.slice(3);
       if (v3Path === "/run") {
