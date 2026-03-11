@@ -4,6 +4,15 @@ import { statusColor, statusLabel, agentColor, formatDuration, formatTimestamp, 
 import AgentActivity from './AgentActivity'
 import FileDiffs from './FileDiffs'
 
+function getDefaultStepNumber(steps) {
+  if (steps.length === 0) return null
+
+  const running = steps.find(s => s.status === 'running')
+  const failed = steps.find(s => s.status === 'failed')
+
+  return running?.step_number ?? failed?.step_number ?? steps[0]?.step_number ?? null
+}
+
 export default function RunDetail({ projectId, runId }) {
   const { run, events, loading } = useRunDetail(projectId, runId)
   const [selectedStep, setSelectedStep] = useState(null)
@@ -17,25 +26,49 @@ export default function RunDetail({ projectId, runId }) {
   const color = statusColor(run?.status)
 
   useEffect(() => {
-    if (!selectedStep && steps.length > 0) {
-      const running = steps.find(s => s.status === 'running')
-      const failed = steps.find(s => s.status === 'failed')
-      setSelectedStep(running?.step_number ?? failed?.step_number ?? steps[0]?.step_number)
+    setSelectedStep(null)
+    setStepResult(null)
+    setStepLog('')
+  }, [projectId, runId])
+
+  useEffect(() => {
+    const hasSelectedStep = steps.some(s => s.step_number === selectedStep)
+
+    if (selectedStep == null || !hasSelectedStep) {
+      setSelectedStep(getDefaultStepNumber(steps))
     }
   }, [steps, selectedStep])
 
   useEffect(() => {
     if (selectedStep == null) return
+    let cancelled = false
     setStepResult(null)
     setStepLog('')
-    fetchStepResult(projectId, runId, selectedStep).then(d => setStepResult(d.result)).catch(() => {})
+    fetchStepResult(projectId, runId, selectedStep)
+      .then(d => {
+        if (!cancelled) setStepResult(d.result)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
   }, [selectedStep, projectId, runId])
 
   useEffect(() => {
     if (selectedStep == null || logTab === 'result') return
+    let cancelled = false
     setStepLog('')
     const kind = logTab === 'stdout' ? 'agent_stdout' : 'agent_stderr'
-    fetchStepLog(projectId, runId, selectedStep, kind).then(setStepLog).catch(() => setStepLog('(no log available)'))
+    fetchStepLog(projectId, runId, selectedStep, kind)
+      .then(log => {
+        if (!cancelled) setStepLog(log)
+      })
+      .catch(() => {
+        if (!cancelled) setStepLog('(no log available)')
+      })
+    return () => {
+      cancelled = true
+    }
   }, [selectedStep, logTab, projectId, runId])
 
   useEffect(() => {

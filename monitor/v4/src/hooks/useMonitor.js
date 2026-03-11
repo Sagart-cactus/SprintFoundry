@@ -108,20 +108,39 @@ export function useRunDetail(projectId, runId) {
   const [run, setRun] = useState(null)
   const [events, setEvents] = useState([])
   const [loading, setLoading] = useState(true)
+  const requestKeyRef = useRef(0)
 
   const fetch_ = useCallback(async () => {
     if (!projectId || !runId) return
+    const requestKey = requestKeyRef.current
     try {
       const [runData, eventsData] = await Promise.all([
         api('/api/run', { project: projectId, run: runId }),
         api('/api/events', { project: projectId, run: runId, limit: 200 }),
       ])
+      if (requestKey !== requestKeyRef.current) return
       setRun(runData)
       setEvents(eventsData.events || [])
       setLoading(false)
     } catch {
+      if (requestKey !== requestKeyRef.current) return
       setLoading(false)
     }
+  }, [projectId, runId])
+
+  useEffect(() => {
+    requestKeyRef.current += 1
+
+    if (!projectId || !runId) {
+      setRun(null)
+      setEvents([])
+      setLoading(false)
+      return
+    }
+
+    setRun(null)
+    setEvents([])
+    setLoading(true)
   }, [projectId, runId])
 
   useEffect(() => {
