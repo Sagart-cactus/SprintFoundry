@@ -4,11 +4,10 @@ export function resolveDefaultDirectAgent(
   platformConfig: PlatformConfig,
   projectConfig: ProjectConfig
 ): string | undefined {
-  const allowedAgents = new Set(projectConfig.agents ?? []);
-  const hasProjectFilter = allowedAgents.size > 0;
   const agentDefinitions = platformConfig.agent_definitions ?? [];
 
   const preferredAgents = [
+    "generic",
     "developer",
     "go-developer",
     ...agentDefinitions
@@ -19,11 +18,10 @@ export function resolveDefaultDirectAgent(
   for (const agent of preferredAgents) {
     const known = agentDefinitions.some((definition) => definition.type === agent);
     if (!known) continue;
-    if (hasProjectFilter && !allowedAgents.has(agent)) continue;
     return agent;
   }
 
-  if (hasProjectFilter) {
+  if ((projectConfig.agents?.length ?? 0) > 0) {
     return projectConfig.agents?.[0];
   }
 

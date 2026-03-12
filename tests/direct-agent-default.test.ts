@@ -3,36 +3,40 @@ import { resolveDefaultDirectAgent } from "../src/service/direct-agent-default.j
 import { makePlatformConfig, makeProjectConfig } from "./fixtures/configs.js";
 
 describe("resolveDefaultDirectAgent", () => {
-  it("prefers the standard developer agent when it is allowed", () => {
+  it("prefers the generic agent by default", () => {
     const agent = resolveDefaultDirectAgent(
       makePlatformConfig(),
       makeProjectConfig({ agents: ["developer", "qa", "security"] })
     );
 
-    expect(agent).toBe("developer");
+    expect(agent).toBe("generic");
   });
 
-  it("falls back to go-developer when the project only allows go agents", () => {
+  it("still prefers the generic agent even when the project only lists go agents", () => {
     const agent = resolveDefaultDirectAgent(
       makePlatformConfig(),
       makeProjectConfig({ agents: ["go-developer", "go-qa"] })
     );
 
-    expect(agent).toBe("go-developer");
+    expect(agent).toBe("generic");
   });
 
   it("falls back to the first allowed project agent when no developer-role agent is available", () => {
     const agent = resolveDefaultDirectAgent(
-      makePlatformConfig(),
+      makePlatformConfig({
+        agent_definitions: makePlatformConfig().agent_definitions.filter((definition) => definition.role !== "developer"),
+      }),
       makeProjectConfig({ agents: ["qa", "security"] })
     );
 
     expect(agent).toBe("qa");
   });
 
-  it("falls back to the platform developer agent when the project does not restrict agents", () => {
+  it("falls back to the platform developer agent when generic is not defined", () => {
     const agent = resolveDefaultDirectAgent(
-      makePlatformConfig(),
+      makePlatformConfig({
+        agent_definitions: makePlatformConfig().agent_definitions.filter((definition) => definition.type !== "generic"),
+      }),
       makeProjectConfig({ agents: undefined })
     );
 

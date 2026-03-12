@@ -150,7 +150,7 @@ program
   .option("--config <dir>", "Config directory", "config")
   .option("--project <name>", "Project name (loads <name>.yaml or project-<name>.yaml)")
   .option("--dry-run", "Plan only — generate and print the execution plan without running agents")
-  .option("--agent <agent>", "Run a single agent directly, bypassing SDLC orchestration (default: stack-appropriate developer agent)")
+  .option("--agent <agent>", "Run a single agent directly, bypassing SDLC orchestration (default: generic agent)")
   .option("--agent-file <path>", "Path to a YAML/JSON file defining a custom agent inline (used with --agent)")
   .action(async (opts) => {
     const source = opts.source as TaskSource;

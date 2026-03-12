@@ -14,6 +14,9 @@ defaults:
     architect:
       provider: anthropic
       model: claude-sonnet-4-5-20250929
+    generic:
+      provider: anthropic
+      model: claude-sonnet-4-5-20250929
     developer:
       provider: anthropic
       model: claude-sonnet-4-5-20250929
@@ -69,6 +72,9 @@ defaults:
   # Runtime defaults per agent/role (can be overridden per project)
   runtime_per_agent:
     orchestrator:
+      provider: claude-code
+      mode: local_process
+    generic:
       provider: claude-code
       mode: local_process
     developer:
@@ -370,6 +376,22 @@ agent_definitions:
       - ticket_details
       - product-spec (if available)
       - existing codebase structure
+  - type: generic
+    name: Generic Agent
+    role: developer
+    description: >
+      General-purpose coding agent for direct runs. Starts only from the prompt,
+      Linear ticket, or GitHub issue content and does not assume role-specific
+      handoffs or stack plugins.
+    container_image: sprintfoundry/agent-developer:latest
+    capabilities:
+      - Interpret issue or prompt content directly
+      - Explore the repo only when needed
+      - Implement or explain changes without role-specific assumptions
+    output_artifacts:
+      - artifacts/generic-output.md
+    required_inputs:
+      - ticket_details
 
   - type: developer
     name: Developer Agent
