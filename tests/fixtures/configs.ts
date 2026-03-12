@@ -14,6 +14,7 @@ export function makePlatformConfig(
     defaults: {
       model_per_agent: {
         orchestrator: { provider: "anthropic", model: "claude-sonnet-4-5-20250929" },
+        generic: { provider: "anthropic", model: "claude-sonnet-4-5-20250929" },
         developer: { provider: "anthropic", model: "claude-sonnet-4-5-20250929" },
         qa: { provider: "anthropic", model: "claude-sonnet-4-5-20250929" },
         security: { provider: "anthropic", model: "claude-sonnet-4-5-20250929" },
@@ -41,6 +42,7 @@ export function makePlatformConfig(
       },
       runtime_per_agent: {
         orchestrator: { provider: "claude-code", mode: "local_sdk" },
+        generic: { provider: "claude-code", mode: "local_sdk" },
         developer: { provider: "claude-code", mode: "local_sdk" },
         "code-review": { provider: "claude-code", mode: "local_sdk" },
         qa: { provider: "claude-code", mode: "local_sdk" },
@@ -98,6 +100,16 @@ export function makeProjectConfig(
 
 export function defaultAgentDefinitions(): AgentDefinition[] {
   return [
+    {
+      type: "generic",
+      name: "Generic Agent",
+      role: "developer",
+      description: "General-purpose direct-run agent",
+      container_image: "sprintfoundry/agent-developer:latest",
+      capabilities: ["Interpret issue content", "Work without role-specific handoffs"],
+      output_artifacts: ["artifacts/generic-output.md"],
+      required_inputs: ["ticket_details"],
+    },
     {
       type: "product",
       name: "Product Agent",
