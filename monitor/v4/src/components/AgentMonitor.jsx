@@ -29,21 +29,24 @@ export default function AgentMonitor({ runs, onSelectRun }) {
   if (agents.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-24">
-        <div className="w-12 h-12 rounded-lg bg-surface-200 border border-surface-300 flex items-center justify-center mb-3">
-          <span className="text-xl text-ink-300">&#9670;</span>
+        <div className="w-14 h-14 rounded-xl bg-surface-100 border border-surface-200 flex items-center justify-center mb-4">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-ink-300">
+            <circle cx="12" cy="8" r="4" />
+            <path d="M4 20c0-4 4-6 8-6s8 2 8 6" />
+          </svg>
         </div>
-        <p className="text-ink-500 text-sm font-medium">No agent activity</p>
-        <p className="text-ink-400 text-xs mt-1">Agent data appears when runs execute</p>
+        <p className="text-ink-600 text-base font-medium">No agent activity</p>
+        <p className="text-ink-400 text-sm mt-1">Agent data appears when runs execute</p>
       </div>
     )
   }
 
   return (
-    <div className="max-w-[1400px] space-y-5 animate-fade-in">
-      <div className="flex items-center gap-2.5">
-        <div className="w-1.5 h-4 rounded-sm bg-status-planning" />
-        <h2 className="text-sm font-semibold text-ink-900">Agent Fleet</h2>
-        <span className="text-[11px] font-mono text-ink-400 tabular-nums">
+    <div className="max-w-6xl space-y-5 animate-fade-in">
+      <div className="flex items-center gap-3">
+        <div className="w-1 h-5 rounded-full bg-status-planning" />
+        <h2 className="text-base font-semibold text-ink-900">Agent Fleet</h2>
+        <span className="text-sm font-mono text-ink-400 tabular-nums">
           {agents.length} types
         </span>
       </div>
@@ -65,82 +68,80 @@ function AgentCard({ entry, onSelectRun }) {
     : 0
 
   return (
-    <div className={`bg-surface-100 border rounded-xl shadow-card p-4 transition-all duration-150 ${
-      isActive ? 'border-status-running-border ring-1 ring-status-running/10' : 'border-surface-300'
+    <div className={`bg-surface-0 border rounded-xl shadow-card overflow-hidden flex transition-all duration-150 ${
+      isActive ? 'border-status-running-border ring-1 ring-status-running/10' : 'border-surface-200'
     }`}>
-      {/* Header */}
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2">
-          {isActive && <div className="w-2 h-2 rounded-full bg-status-running animate-pulse-soft" />}
-          <span className={`text-sm font-mono font-bold ${ac.text}`}>{entry.agent}</span>
+      {/* Left accent strip using agent color */}
+      <div className={`w-1 flex-shrink-0`} style={{ backgroundColor: ac.accent }} />
+
+      <div className="flex-1 min-w-0 p-4">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            {isActive && <div className="w-2 h-2 rounded-full bg-status-running animate-pulse-soft" />}
+            <span className={`text-sm font-mono font-bold ${ac.text}`}>{entry.agent}</span>
+          </div>
+          {isActive && (
+            <span className="text-2xs font-medium px-1.5 py-px rounded bg-status-running-light text-status-running border border-status-running-border">
+              {entry.running} active
+            </span>
+          )}
         </div>
-        {isActive && (
-          <span className="text-[10px] font-mono px-1.5 py-px rounded bg-status-running-light text-status-running border border-status-running-border">
-            {entry.running} active
-          </span>
+
+        {/* Inline stats — not a grid, just a row */}
+        <div className="flex items-center gap-3 text-xs text-ink-400 mb-3">
+          <span><strong className="text-ink-700 font-mono">{entry.totalRuns}</strong> runs</span>
+          <span className="text-ink-300">&middot;</span>
+          <span><strong className="text-status-success font-mono">{entry.completed}</strong> done</span>
+          <span className="text-ink-300">&middot;</span>
+          <span><strong className="text-status-error font-mono">{entry.failed}</strong> fail</span>
+          {entry.totalTokens > 0 && (
+            <>
+              <span className="text-ink-300">&middot;</span>
+              <span className="font-mono">{formatTokens(entry.totalTokens)} tok</span>
+            </>
+          )}
+        </div>
+
+        {/* Success rate bar */}
+        <div className="flex items-center gap-2 mb-3">
+          <div className="flex-1 h-1 bg-surface-100 rounded-full overflow-hidden">
+            <div className="h-full rounded-full bg-status-success transition-all duration-500" style={{ width: `${successRate}%` }} />
+          </div>
+          <span className="text-2xs font-mono text-ink-400 tabular-nums">{successRate}%</span>
+        </div>
+
+        {/* Active steps */}
+        {entry.activeSteps.length > 0 && (
+          <div className="space-y-1 pt-2.5 border-t border-surface-100">
+            {entry.activeSteps.map(({ step, run }, i) => (
+              <button key={i} onClick={() => onSelectRun(run)}
+                className="w-full text-left flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-status-running-light border border-status-running-border hover:shadow-sm transition-all">
+                <div className="w-1.5 h-1.5 rounded-full bg-status-running animate-pulse" />
+                <span className="text-2xs text-ink-700 truncate flex-1">{run.ticket_title || run.run_id}</span>
+                <span className="text-2xs font-mono text-ink-400">#{step.step_number}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Recent steps */}
+        {entry.recentSteps.length > 0 && !isActive && (
+          <div className="space-y-0.5 pt-2.5 border-t border-surface-100">
+            {entry.recentSteps.slice(0, 3).map(({ step, run }, i) => {
+              const sc = statusColor(step.status)
+              return (
+                <button key={i} onClick={() => onSelectRun(run)}
+                  className="w-full text-left flex items-center gap-2 px-2.5 py-1 rounded-lg hover:bg-surface-50 transition-colors">
+                  <div className={`w-1.5 h-1.5 rounded-full ${sc.dot}`} />
+                  <span className="text-2xs text-ink-500 truncate flex-1">{run.ticket_title || run.run_id}</span>
+                  <span className="text-2xs text-ink-300">{step.started_at ? timeAgo(step.started_at) : ''}</span>
+                </button>
+              )
+            })}
+          </div>
         )}
       </div>
-
-      {/* Stats */}
-      <div className="grid grid-cols-4 gap-2 mb-3">
-        <StatCell label="Runs" value={entry.totalRuns} />
-        <StatCell label="Done" value={entry.completed} color="text-status-success" />
-        <StatCell label="Fail" value={entry.failed} color="text-status-error" />
-        <StatCell label="Tok" value={formatTokens(entry.totalTokens)} />
-      </div>
-
-      {/* Success rate */}
-      <div className="mb-3">
-        <div className="flex items-center justify-between mb-1">
-          <span className="text-[10px] font-mono text-ink-400">Success</span>
-          <span className="text-[10px] font-mono text-ink-700 tabular-nums">{successRate}%</span>
-        </div>
-        <div className="h-1 bg-surface-200 rounded-full overflow-hidden">
-          <div className="h-full rounded-full bg-status-success transition-all duration-500" style={{ width: `${successRate}%` }} />
-        </div>
-      </div>
-
-      {/* Active steps */}
-      {entry.activeSteps.length > 0 && (
-        <div className="space-y-1 pt-2.5 border-t border-surface-300">
-          <p className="text-[10px] uppercase tracking-wider text-ink-400 font-medium mb-1">Running</p>
-          {entry.activeSteps.map(({ step, run }, i) => (
-            <button key={i} onClick={() => onSelectRun(run)}
-              className="w-full text-left flex items-center gap-2 px-2 py-1.5 rounded-md bg-status-running-light border border-status-running-border hover:shadow-sm transition-all">
-              <div className="w-1 h-1 rounded-full bg-status-running animate-pulse" />
-              <span className="text-[10px] font-mono text-ink-700 truncate flex-1">{run.ticket_title || run.run_id}</span>
-              <span className="text-[10px] font-mono text-ink-400">#{step.step_number}</span>
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* Recent */}
-      {entry.recentSteps.length > 0 && !isActive && (
-        <div className="space-y-0.5 pt-2.5 border-t border-surface-300">
-          <p className="text-[10px] uppercase tracking-wider text-ink-400 font-medium mb-1">Recent</p>
-          {entry.recentSteps.slice(0, 3).map(({ step, run }, i) => {
-            const sc = statusColor(step.status)
-            return (
-              <button key={i} onClick={() => onSelectRun(run)}
-                className="w-full text-left flex items-center gap-2 px-2 py-1 rounded-md hover:bg-surface-200 transition-colors">
-                <div className={`w-1.5 h-1.5 rounded-full ${sc.dot}`} />
-                <span className="text-[10px] font-mono text-ink-500 truncate flex-1">{run.ticket_title || run.run_id}</span>
-                <span className="text-[10px] font-mono text-ink-300">{step.started_at ? timeAgo(step.started_at) : ''}</span>
-              </button>
-            )
-          })}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function StatCell({ label, value, color = 'text-ink-900' }) {
-  return (
-    <div className="text-center">
-      <p className={`text-sm font-mono font-semibold tabular-nums ${color}`}>{value}</p>
-      <p className="text-[9px] font-mono text-ink-400 uppercase">{label}</p>
     </div>
   )
 }

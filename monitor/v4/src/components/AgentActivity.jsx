@@ -52,18 +52,7 @@ function getStepNumber(item) {
   return item?.step ?? item?.step_number ?? item?.data?.step ?? item?.data?.step_number ?? null
 }
 
-// ── Classification (mirrors v3 logic) ──
-
-const ICONS = {
-  'Command': '$ ',
-  'File edit': '~ ',
-  'Tool call': '> ',
-  'Thought': '? ',
-  'Message': '> ',
-  'Guardrail': '! ',
-  'Result': '= ',
-  'Session': '# ',
-}
+// ── Classification ──
 
 function classifyItem(item) {
   const nested = item?.item ?? {}
@@ -88,7 +77,6 @@ function classifyItem(item) {
   if (lower === 'thought' || lower === 'reasoning') return { kind: 'Thought', preview: shortText(thought || message), isCode: false, isError: false }
   if (lower.includes('thread.started') || lower.includes('turn.started')) return { kind: 'Session', preview: '', isCode: false, isError: false }
 
-  // Claude SDK JSONL: { type: "assistant", content: [...] }
   if (lower === 'assistant') {
     const content = (Array.isArray(item?.message?.content) && item.message.content) || (Array.isArray(item?.content) && item.content) || []
     const thinking = content.find(c => c?.type === 'thinking')
@@ -109,7 +97,6 @@ function classifyItem(item) {
 
   if (lower === 'result') return { kind: 'Result', preview: shortText(pickStr(item, ['result']) || 'completed'), isCode: false, isError: false }
 
-  // Check for errors
   const isErr = isErrorLike(item)
   return { kind: 'Event', preview: shortText(message || command || thought), isCode: false, isError: isErr }
 }
@@ -121,7 +108,6 @@ function isErrorLike(item) {
   const nested = item?.item ?? {}
   const nestedExit = nested?.exit_code
   if (typeof nestedExit === 'number' && nestedExit !== 0) {
-    // grep/rg returning 1 with no output is not an error
     const cmd = pickStr(nested, ['command', 'cmd']).toLowerCase()
     if (nestedExit === 1 && !String(nested?.aggregated_output || '').trim() && (/\brg\b/.test(cmd) || /\bgrep\b/.test(cmd))) return false
     return true
@@ -132,15 +118,15 @@ function isErrorLike(item) {
 // ── Kind styling ──
 
 const KIND_STYLES = {
-  'Command': { bg: 'bg-slate-50', border: 'border-slate-200', icon: 'text-slate-500', label: 'text-slate-700' },
-  'File edit': { bg: 'bg-amber-50', border: 'border-amber-200', icon: 'text-amber-500', label: 'text-amber-700' },
-  'Tool call': { bg: 'bg-blue-50', border: 'border-blue-200', icon: 'text-blue-500', label: 'text-blue-700' },
-  'Thought': { bg: 'bg-violet-50', border: 'border-violet-200', icon: 'text-violet-400', label: 'text-violet-600' },
-  'Message': { bg: 'bg-emerald-50', border: 'border-emerald-200', icon: 'text-emerald-500', label: 'text-emerald-700' },
-  'Guardrail': { bg: 'bg-red-50', border: 'border-red-200', icon: 'text-red-500', label: 'text-red-700' },
-  'Result': { bg: 'bg-green-50', border: 'border-green-200', icon: 'text-green-500', label: 'text-green-700' },
-  'Session': { bg: 'bg-surface-200', border: 'border-surface-300', icon: 'text-ink-300', label: 'text-ink-400' },
-  'Event': { bg: 'bg-surface-200', border: 'border-surface-300', icon: 'text-ink-400', label: 'text-ink-500' },
+  'Command': { bg: 'bg-slate-50', border: 'border-slate-200', label: 'text-slate-600' },
+  'File edit': { bg: 'bg-amber-50', border: 'border-amber-200', label: 'text-amber-700' },
+  'Tool call': { bg: 'bg-blue-50', border: 'border-blue-200', label: 'text-blue-600' },
+  'Thought': { bg: 'bg-violet-50', border: 'border-violet-200', label: 'text-violet-600' },
+  'Message': { bg: 'bg-emerald-50', border: 'border-emerald-200', label: 'text-emerald-700' },
+  'Guardrail': { bg: 'bg-red-50', border: 'border-red-200', label: 'text-red-700' },
+  'Result': { bg: 'bg-green-50', border: 'border-green-200', label: 'text-green-700' },
+  'Session': { bg: 'bg-surface-100', border: 'border-surface-200', label: 'text-ink-400' },
+  'Event': { bg: 'bg-surface-100', border: 'border-surface-200', label: 'text-ink-500' },
 }
 
 // ── Component ──
@@ -172,7 +158,6 @@ export default function AgentActivity({ projectId, runId, stepNumber }) {
       .catch(() => { setItems([]); setLoading(false) })
   }, [projectId, runId, stepNumber])
 
-  // Auto-scroll to bottom on new items
   useEffect(() => {
     if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight
   }, [items])
@@ -188,16 +173,16 @@ export default function AgentActivity({ projectId, runId, stepNumber }) {
 
   if (loading) {
     return (
-      <div className="py-6 text-center">
-        <p className="text-xs text-ink-400 animate-pulse">Loading agent activity...</p>
+      <div className="py-8 text-center">
+        <p className="text-sm text-ink-400 animate-pulse">Loading agent activity...</p>
       </div>
     )
   }
 
   if (items.length === 0) {
     return (
-      <div className="py-8 text-center">
-        <p className="text-xs text-ink-300 italic">No structured activity captured for this step.</p>
+      <div className="py-10 text-center">
+        <p className="text-sm text-ink-300 italic">No structured activity captured for this step.</p>
       </div>
     )
   }
@@ -212,22 +197,22 @@ export default function AgentActivity({ projectId, runId, stepNumber }) {
           <div key={index} className={`rounded-lg border ${style.border} ${cls.isError ? 'border-red-300 bg-red-50/50' : style.bg} overflow-hidden transition-all`}>
             <button
               onClick={() => toggleExpand(index)}
-              className="w-full text-left flex items-start gap-2.5 px-3 py-2 hover:bg-black/[0.02] transition-colors"
+              className="w-full text-left flex items-start gap-3 px-3.5 py-2.5 hover:bg-black/[0.02] transition-colors"
             >
-              <span className={`text-[10px] font-mono font-bold mt-px flex-shrink-0 w-14 ${style.label}`}>
+              <span className={`text-xs font-mono font-semibold mt-px flex-shrink-0 w-16 ${style.label}`}>
                 {cls.kind}
               </span>
-              <span className={`text-[11px] leading-snug flex-1 min-w-0 ${cls.isCode ? 'font-mono text-ink-700' : 'text-ink-600'} ${cls.preview ? '' : 'italic text-ink-300'}`}>
+              <span className={`text-xs leading-snug flex-1 min-w-0 ${cls.isCode ? 'font-mono text-ink-700' : 'text-ink-600'} ${cls.preview ? '' : 'italic text-ink-300'}`}>
                 {cls.preview || '(empty)'}
               </span>
-              <span className="text-[9px] font-mono text-ink-300 flex-shrink-0 mt-px">
+              <span className="text-[10px] font-mono text-ink-300 flex-shrink-0 mt-px">
                 #{visibleIdx + 1}
               </span>
             </button>
 
             {expanded && (
-              <div className="border-t border-surface-300 bg-surface-50">
-                <pre className="px-3 py-2 text-[10px] font-mono text-ink-600 leading-relaxed whitespace-pre-wrap break-words max-h-64 overflow-y-auto">
+              <div className="border-t border-surface-200 bg-surface-50">
+                <pre className="px-4 py-3 text-[11px] font-mono text-ink-600 leading-relaxed whitespace-pre-wrap break-words max-h-64 overflow-y-auto">
                   {JSON.stringify(item, null, 2)}
                 </pre>
               </div>

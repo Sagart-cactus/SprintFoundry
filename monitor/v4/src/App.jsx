@@ -30,7 +30,7 @@ export default function App() {
   }
 
   return (
-    <div className="h-screen flex flex-col overflow-hidden">
+    <div className="h-screen flex flex-col overflow-hidden bg-surface-50">
       <Topbar
         view={view}
         onViewChange={setView}
@@ -53,9 +53,9 @@ export default function App() {
           searchQuery={searchQuery}
         />
 
-        <main className="flex-1 overflow-y-auto p-5 bg-surface-50">
+        <main className="flex-1 overflow-y-auto p-6 bg-surface-50">
           {loading ? (
-            <div className="space-y-3 animate-pulse">
+            <div className="space-y-3 animate-pulse max-w-5xl">
               {[1, 2, 3].map(i => (
                 <div key={i} className="h-28 bg-surface-200 rounded-xl" />
               ))}

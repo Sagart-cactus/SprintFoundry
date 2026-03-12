@@ -6,8 +6,15 @@
   * {
     box-sizing: border-box;
   }
+  html {
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
   body {
     overflow: hidden;
+    background: #F9FAFB;
+    color: #111827;
   }
   ::-webkit-scrollbar {
     width: 6px;
@@ -17,10 +24,10 @@
     background: transparent;
   }
   ::-webkit-scrollbar-thumb {
-    background: rgba(0, 0, 0, 0.08);
+    background: rgba(0, 0, 0, 0.1);
     border-radius: 3px;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: rgba(0, 0, 0, 0.14);
+    background: rgba(0, 0, 0, 0.18);
   }
 }

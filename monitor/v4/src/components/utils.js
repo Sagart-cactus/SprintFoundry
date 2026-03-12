@@ -61,11 +61,11 @@ export function statusColor(status) {
     default:
       return {
         dot: 'bg-ink-300',
-        text: 'text-ink-400',
+        text: 'text-ink-500',
         bar: 'bg-ink-300',
-        bg: 'bg-surface-200',
+        bg: 'bg-surface-100',
         border: 'border-surface-300',
-        badge: 'bg-surface-200 text-ink-500 border-surface-300',
+        badge: 'bg-surface-100 text-ink-500 border-surface-300',
       }
   }
 }
@@ -97,13 +97,13 @@ const AGENT_STYLES = {
   'code-review': { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200', accent: '#d97706' },
   devops: { bg: 'bg-slate-100', text: 'text-slate-700', border: 'border-slate-300', accent: '#475569' },
   'ui-ux': { bg: 'bg-pink-50', text: 'text-pink-700', border: 'border-pink-200', accent: '#db2777' },
-  orchestrator: { bg: 'bg-brand-light', text: 'text-brand-text', border: 'border-brand-medium', accent: '#ff4d00' },
+  orchestrator: { bg: 'bg-brand-light', text: 'text-brand-text', border: 'border-brand-medium', accent: '#4F46E5' },
 }
 
 export function agentColor(agentType) {
   const base = (agentType || '').split('-')[0]
   return AGENT_STYLES[agentType] || AGENT_STYLES[base] || {
-    bg: 'bg-surface-200', text: 'text-ink-700', border: 'border-surface-300', accent: '#6b6b63',
+    bg: 'bg-surface-100', text: 'text-ink-700', border: 'border-surface-300', accent: '#6b7280',
   }
 }
 
@@ -160,6 +160,19 @@ export function isEmptyRun(run) {
   const status = String(run.status ?? '').toLowerCase()
   const stepCount = Number(run.step_count || run.steps?.length || 0)
   return (!status || status === 'unknown') && stepCount === 0
+}
+
+// ── Source helpers ──
+
+const SOURCE_META = {
+  linear: { label: 'Linear', color: 'text-violet-600', bg: 'bg-violet-50', border: 'border-violet-200' },
+  github: { label: 'GitHub', color: 'text-ink-700', bg: 'bg-surface-100', border: 'border-surface-300' },
+  jira: { label: 'Jira', color: 'text-blue-600', bg: 'bg-blue-50', border: 'border-blue-200' },
+  prompt: { label: 'CLI', color: 'text-ink-500', bg: 'bg-surface-100', border: 'border-surface-200' },
+}
+
+export function sourceStyle(ticketSource) {
+  return SOURCE_META[ticketSource] || SOURCE_META.prompt
 }
 
 // ── Event helpers ──
