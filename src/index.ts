@@ -27,6 +27,7 @@ import { defaultTrackerModule } from "./plugins/tracker-default/index.js";
 import { consoleNotifierModule } from "./plugins/notifier-console/index.js";
 import { githubSCMModule } from "./plugins/scm-github/index.js";
 import { startDispatchControllerServer } from "./service/dispatch-controller.js";
+import { resolveDefaultDirectAgent } from "./service/direct-agent-default.js";
 
 const RUN_SANDBOX_MODE_ENV = "SPRINTFOUNDRY_RUN_SANDBOX_MODE";
 const WHOLE_RUN_SANDBOX_MODE = "k8s-whole-run";
@@ -149,7 +150,7 @@ program
   .option("--config <dir>", "Config directory", "config")
   .option("--project <name>", "Project name (loads <name>.yaml or project-<name>.yaml)")
   .option("--dry-run", "Plan only — generate and print the execution plan without running agents")
-  .option("--agent <agent>", "Run a single agent directly, bypassing SDLC orchestration")
+  .option("--agent <agent>", "Run a single agent directly, bypassing SDLC orchestration (default: stack-appropriate developer agent)")
   .option("--agent-file <path>", "Path to a YAML/JSON file defining a custom agent inline (used with --agent)")
   .action(async (opts) => {
     const source = opts.source as TaskSource;
@@ -168,6 +169,8 @@ program
     const executionBackendName = resolveExecutionBackendName(platform, project);
     const executionBackend = createExecutionBackend(platform, project);
     const service = new OrchestrationService(platform, project, registry, executionBackend);
+    const directAgent = opts.agent || (!opts.dryRun ? resolveDefaultDirectAgent(platform, project) : undefined);
+    const directAgentWasDefaulted = !opts.agent && Boolean(directAgent);
 
     const ticketId = opts.ticket ?? `prompt-${Date.now()}`;
 
@@ -179,7 +182,11 @@ program
     if (project.stack) console.log(`  Stack: ${project.stack}`);
     if (project.agents) console.log(`  Agents: ${project.agents.join(", ")}`);
     if (opts.dryRun) console.log(`  Mode: dry-run (plan only)`);
-    if (opts.agent) console.log(`  Direct agent: ${opts.agent}${opts.agentFile ? ` (from ${opts.agentFile})` : ""}`);
+    if (directAgent) {
+      console.log(
+        `  Direct agent: ${directAgent}${directAgentWasDefaulted ? " (default)" : ""}${opts.agentFile ? ` (from ${opts.agentFile})` : ""}`
+      );
+    }
     console.log("");
 
     let run: TaskRun;
@@ -199,20 +206,20 @@ program
         );
         run = await service.handleTask(ticketId, source, opts.prompt, {
           dryRun: !!opts.dryRun,
-          agent: opts.agent,
+          agent: directAgent,
           agentFile: opts.agentFile,
         });
       } else {
         run = await service.handleTask(ticketId, source, opts.prompt, {
           dryRun: !!opts.dryRun,
-          agent: opts.agent,
+          agent: directAgent,
           agentFile: opts.agentFile,
         });
       }
     } else {
       run = await service.handleTask(ticketId, source, opts.prompt, {
         dryRun: !!opts.dryRun,
-        agent: opts.agent,
+        agent: directAgent,
         agentFile: opts.agentFile,
       });
     }
