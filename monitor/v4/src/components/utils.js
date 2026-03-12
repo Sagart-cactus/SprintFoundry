@@ -51,12 +51,12 @@ export function statusColor(status) {
     case 'needs_rework':
     case 'rework':
       return {
-        dot: 'bg-orange-500',
-        text: 'text-orange-600',
-        bar: 'bg-orange-400',
-        bg: 'bg-orange-50',
-        border: 'border-orange-200',
-        badge: 'bg-orange-50 text-orange-600 border-orange-200',
+        dot: 'bg-status-rework',
+        text: 'text-status-rework',
+        bar: 'bg-status-rework',
+        bg: 'bg-status-rework-light',
+        border: 'border-status-rework-border',
+        badge: 'bg-status-rework-light text-status-rework border-status-rework-border',
       }
     default:
       return {

@@ -209,7 +209,7 @@ export default function AgentActivity({ projectId, runId, stepNumber }) {
         const expanded = expandedIds.has(index)
 
         return (
-          <div key={index} className={`rounded-xl border ${style.border} ${cls.isError ? 'border-red-300 bg-red-50/50' : style.bg} overflow-hidden transition-all`}>
+          <div key={index} className={`rounded-lg border ${style.border} ${cls.isError ? 'border-red-300 bg-red-50/50' : style.bg} overflow-hidden transition-all`}>
             <button
               onClick={() => toggleExpand(index)}
               className="w-full text-left flex items-start gap-2.5 px-3 py-2 hover:bg-black/[0.02] transition-colors"

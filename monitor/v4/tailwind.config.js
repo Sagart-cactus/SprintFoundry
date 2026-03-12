@@ -4,24 +4,24 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        display: ['"Syne"', 'system-ui', 'sans-serif'],
+        display: ['"DM Sans"', 'system-ui', 'sans-serif'],
         body: ['"DM Sans"', 'system-ui', 'sans-serif'],
         mono: ['"JetBrains Mono"', '"Fira Code"', 'monospace'],
       },
       colors: {
         surface: {
-          50: '#FAFAF8',
+          50: '#F8F9FA',
           100: '#FFFFFF',
-          200: '#F3F2EF',
-          300: '#E8E6E1',
-          400: '#D5D3CD',
+          200: '#F1F3F5',
+          300: '#E1E4E8',
+          400: '#D0D4DA',
         },
         ink: {
-          900: '#1A1A17',
-          700: '#3D3D37',
-          500: '#6B6B63',
-          400: '#8E8E86',
-          300: '#ABABAA',
+          900: '#141821',
+          700: '#343A46',
+          500: '#5C6370',
+          400: '#7E8694',
+          300: '#A0A8B4',
         },
         brand: {
           DEFAULT: '#FF4D00',
@@ -46,16 +46,19 @@ export default {
           planning: '#7C3AED',
           'planning-light': '#F3EFFE',
           'planning-border': '#C4B5FD',
+          rework: '#D97706',
+          'rework-light': '#FFFBEB',
+          'rework-border': '#FCD34D',
         },
       },
       boxShadow: {
-        card: '0 1px 3px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.03)',
-        'card-hover': '0 4px 16px rgba(0,0,0,0.08), 0 1px 4px rgba(0,0,0,0.04)',
-        panel: '0 8px 32px rgba(0,0,0,0.06)',
+        card: '0 1px 2px rgba(0,0,0,0.04), 0 2px 8px rgba(0,0,0,0.03)',
+        'card-hover': '0 2px 8px rgba(0,0,0,0.08), 0 1px 3px rgba(0,0,0,0.04)',
+        panel: '0 4px 24px rgba(0,0,0,0.06)',
       },
       keyframes: {
         'fade-in': {
-          from: { opacity: '0', transform: 'translateY(6px)' },
+          from: { opacity: '0', transform: 'translateY(4px)' },
           to: { opacity: '1', transform: 'translateY(0)' },
         },
         'pulse-soft': {
@@ -64,7 +67,7 @@ export default {
         },
       },
       animation: {
-        'fade-in': 'fade-in 0.25s ease-out',
+        'fade-in': 'fade-in 0.2s ease-out',
         'pulse-soft': 'pulse-soft 2s ease-in-out infinite',
       },
     },

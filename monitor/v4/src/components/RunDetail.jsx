@@ -6,10 +6,8 @@ import FileDiffs from './FileDiffs'
 
 function getDefaultStepNumber(steps) {
   if (steps.length === 0) return null
-
   const running = steps.find(s => s.status === 'running')
   const failed = steps.find(s => s.status === 'failed')
-
   return running?.step_number ?? failed?.step_number ?? steps[0]?.step_number ?? null
 }
 
@@ -33,7 +31,6 @@ export default function RunDetail({ projectId, runId }) {
 
   useEffect(() => {
     const hasSelectedStep = steps.some(s => s.step_number === selectedStep)
-
     if (selectedStep == null || !hasSelectedStep) {
       setSelectedStep(getDefaultStepNumber(steps))
     }
@@ -45,13 +42,9 @@ export default function RunDetail({ projectId, runId }) {
     setStepResult(null)
     setStepLog('')
     fetchStepResult(projectId, runId, selectedStep)
-      .then(d => {
-        if (!cancelled) setStepResult(d.result)
-      })
+      .then(d => { if (!cancelled) setStepResult(d.result) })
       .catch(() => {})
-    return () => {
-      cancelled = true
-    }
+    return () => { cancelled = true }
   }, [selectedStep, projectId, runId])
 
   useEffect(() => {
@@ -60,15 +53,9 @@ export default function RunDetail({ projectId, runId }) {
     setStepLog('')
     const kind = logTab === 'stdout' ? 'agent_stdout' : 'agent_stderr'
     fetchStepLog(projectId, runId, selectedStep, kind)
-      .then(log => {
-        if (!cancelled) setStepLog(log)
-      })
-      .catch(() => {
-        if (!cancelled) setStepLog('(no log available)')
-      })
-    return () => {
-      cancelled = true
-    }
+      .then(log => { if (!cancelled) setStepLog(log) })
+      .catch(() => { if (!cancelled) setStepLog('(no log available)') })
+    return () => { cancelled = true }
   }, [selectedStep, logTab, projectId, runId])
 
   useEffect(() => {
@@ -77,9 +64,9 @@ export default function RunDetail({ projectId, runId }) {
 
   if (loading || !run) {
     return (
-      <div className="space-y-4 animate-pulse">
-        <div className="h-20 bg-surface-200 rounded-2xl" />
-        <div className="h-64 bg-surface-200 rounded-2xl" />
+      <div className="space-y-3 animate-pulse">
+        <div className="h-20 bg-surface-200 rounded-xl" />
+        <div className="h-64 bg-surface-200 rounded-xl" />
       </div>
     )
   }
@@ -90,58 +77,56 @@ export default function RunDetail({ projectId, runId }) {
   const totalTokens = steps.reduce((sum, s) => sum + (s.tokens || 0), 0)
 
   return (
-    <div className="max-w-[1400px] space-y-5 animate-fade-in">
+    <div className="max-w-[1400px] space-y-4 animate-fade-in">
       {/* Run header */}
-      <div className="bg-surface-100 border border-surface-300 rounded-2xl shadow-card p-5">
-        <div className="flex items-start justify-between gap-4 mb-4">
-          <div>
-            <h2 className="font-display font-bold text-lg text-ink-900 leading-tight">
+      <div className="bg-surface-100 border border-surface-300 rounded-xl shadow-card p-4">
+        <div className="flex items-start justify-between gap-4 mb-3">
+          <div className="min-w-0">
+            <h2 className="font-display font-bold text-base text-ink-900 leading-tight truncate">
               {run.ticket_title || run.run_id}
             </h2>
-            <div className="flex items-center gap-2.5 mt-1.5 flex-wrap">
-              <span className="text-xs font-mono text-ink-400 bg-surface-200 px-2 py-0.5 rounded">{run.project_id}</span>
+            <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+              <span className="text-xs font-mono text-ink-500 bg-surface-200 px-1.5 py-px rounded">{run.project_id}</span>
               {run.ticket_id && <span className="text-xs font-mono text-ink-400">{run.ticket_id}</span>}
               {plan?.classification && (
-                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-brand-light text-brand-text border border-brand-medium">
+                <span className="text-[10px] font-mono px-1.5 py-px rounded bg-brand-light text-brand-text border border-brand-medium">
                   {plan.classification}
                 </span>
               )}
               {run.resumed && (
-                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 border border-blue-200">
-                  resumed &times;{run.resumed_count || 1}
+                <span className="text-[10px] font-mono px-1.5 py-px rounded bg-blue-50 text-blue-600 border border-blue-200">
+                  resumed ×{run.resumed_count || 1}
                 </span>
               )}
             </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 flex-shrink-0">
             {run.pr_url && (
               <a href={run.pr_url} target="_blank" rel="noreferrer"
-                className="text-[11px] font-mono text-status-running hover:underline font-medium">
-                View PR &rarr;
+                className="text-[11px] font-mono text-status-running hover:underline font-medium px-2.5 py-1 rounded-md bg-status-running-light border border-status-running-border">
+                View PR →
               </a>
             )}
-            <span className={`text-[11px] font-mono font-semibold px-2.5 py-1 rounded-full border ${color.badge}`}>
+            <span className={`text-[11px] font-mono font-semibold px-2.5 py-1 rounded border ${color.badge}`}>
               {statusLabel(run.status)}
             </span>
           </div>
         </div>
 
-        {/* Metrics */}
-        <div className="flex items-center gap-5 text-xs font-mono flex-wrap">
+        {/* Metrics row */}
+        <div className="flex items-center gap-4 text-xs font-mono text-ink-400 mb-3 pb-3 border-b border-surface-300">
           <Chip label="Steps" value={`${completedSteps}/${totalSteps}`} />
           <Chip label="Tokens" value={formatTokens(totalTokens)} />
           {run.started_at && <Chip label="Started" value={formatTimestamp(run.started_at)} />}
           {run.branch && <Chip label="Branch" value={run.branch} />}
         </div>
 
-        {/* Full pipeline */}
-        <div className="mt-4 pt-4 border-t border-surface-300">
-          <FullPipeline steps={steps} selectedStep={selectedStep} onSelectStep={setSelectedStep} stepModels={run.step_models} />
-        </div>
+        {/* Pipeline */}
+        <FullPipeline steps={steps} selectedStep={selectedStep} onSelectStep={setSelectedStep} stepModels={run.step_models} />
       </div>
 
       {/* Two-column layout */}
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-5">
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
         {/* Step detail */}
         <div className="lg:col-span-3 space-y-4">
           {currentStep ? (
@@ -156,7 +141,7 @@ export default function RunDetail({ projectId, runId }) {
               runId={runId}
             />
           ) : (
-            <div className="bg-surface-100 border border-surface-300 rounded-2xl p-8 text-center">
+            <div className="bg-surface-100 border border-surface-300 rounded-xl p-8 text-center">
               <p className="text-ink-400 text-sm">Select a step from the pipeline above</p>
             </div>
           )}
@@ -173,22 +158,28 @@ export default function RunDetail({ projectId, runId }) {
       </div>
 
       {/* File diffs */}
-      <details className="bg-surface-100 border border-surface-300 rounded-2xl shadow-card overflow-hidden">
-        <summary className="px-5 py-3 text-xs font-semibold uppercase tracking-wider text-ink-400 cursor-pointer hover:text-ink-700 transition-colors">
-          Workspace Files &amp; Diffs
+      <details className="bg-surface-100 border border-surface-300 rounded-xl shadow-card overflow-hidden group">
+        <summary className="px-4 py-3 text-xs font-semibold text-ink-500 cursor-pointer hover:text-ink-700 transition-colors flex items-center gap-2">
+          <svg className="w-3 h-3 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+          </svg>
+          Workspace Files & Diffs
         </summary>
-        <div className="px-5 pb-5 border-t border-surface-300 mt-0 pt-4">
+        <div className="px-4 pb-4 border-t border-surface-300 pt-3">
           <FileDiffs projectId={projectId} runId={runId} />
         </div>
       </details>
 
       {/* Plan reasoning */}
       {plan?.reasoning && (
-        <details className="bg-surface-100 border border-surface-300 rounded-2xl shadow-card overflow-hidden">
-          <summary className="px-5 py-3 text-xs font-semibold uppercase tracking-wider text-ink-400 cursor-pointer hover:text-ink-700 transition-colors">
+        <details className="bg-surface-100 border border-surface-300 rounded-xl shadow-card overflow-hidden group">
+          <summary className="px-4 py-3 text-xs font-semibold text-ink-500 cursor-pointer hover:text-ink-700 transition-colors flex items-center gap-2">
+            <svg className="w-3 h-3 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+            </svg>
             Plan Reasoning
           </summary>
-          <div className="px-5 pb-5 border-t border-surface-300">
+          <div className="px-4 pb-4 border-t border-surface-300">
             <p className="text-xs text-ink-700 leading-relaxed whitespace-pre-wrap mt-3">{plan.reasoning}</p>
           </div>
         </details>
@@ -199,7 +190,7 @@ export default function RunDetail({ projectId, runId }) {
 
 function FullPipeline({ steps, selectedStep, onSelectStep, stepModels }) {
   return (
-    <div className="flex items-center gap-1.5 flex-wrap">
+    <div className="flex items-center gap-1 flex-wrap">
       {steps.map((step, i) => {
         const color = statusColor(step.status)
         const ac = agentColor(step.agent)
@@ -208,11 +199,11 @@ function FullPipeline({ steps, selectedStep, onSelectStep, stepModels }) {
         const model = stepModels?.[String(step.step_number)] || ''
 
         return (
-          <div key={step.step_number ?? i} className="flex items-center gap-1.5">
+          <div key={step.step_number ?? i} className="flex items-center gap-1">
             <button
               onClick={() => onSelectStep(step.step_number)}
               title={`Step ${step.step_number}: ${step.agent}${model ? ` (${model})` : ''} — ${step.status}`}
-              className={`flex items-center gap-2 h-8 px-3 rounded-xl border transition-all duration-150 ${
+              className={`flex items-center gap-1.5 h-7 px-2.5 rounded-lg border transition-all duration-100 ${
                 isSelected
                   ? `${ac.bg} ${ac.border} ${ac.text} ring-2 ring-brand/15`
                   : isRunning
@@ -221,19 +212,16 @@ function FullPipeline({ steps, selectedStep, onSelectStep, stepModels }) {
               }`}
             >
               {isRunning && <div className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />}
-              <span className="text-[11px] font-mono leading-none text-ink-400">{step.step_number}</span>
+              <span className="text-[10px] font-mono text-ink-400">{step.step_number}</span>
               <span className={`text-[11px] font-mono font-medium ${isSelected || isRunning ? '' : color.text}`}>
                 {step.agent}
               </span>
               {step.status === 'completed' && <span className="text-[10px] text-status-success">&#10003;</span>}
               {step.status === 'failed' && <span className="text-[10px] text-status-error">&#10007;</span>}
-              {step.is_rework && <span className="text-[10px] text-orange-500">&#8634;</span>}
+              {step.is_rework && <span className="text-[10px] text-status-rework">&#8634;</span>}
             </button>
             {i < steps.length - 1 && (
-              <svg width="12" height="8" className="text-surface-400 flex-shrink-0">
-                <path d="M0 4 L10 4" stroke="currentColor" strokeWidth="1" fill="none" />
-                <path d="M7 1.5 L10 4 L7 6.5" stroke="currentColor" strokeWidth="1" fill="none" />
-              </svg>
+              <span className="text-surface-400 text-xs">›</span>
             )}
           </div>
         )
@@ -250,22 +238,22 @@ function StepDetail({ step, stepResult, stepLog, logTab, onLogTab, stepModel, pr
     : step.started_at ? Date.now() - new Date(step.started_at).getTime() : null
 
   return (
-    <div className="bg-surface-100 border border-surface-300 rounded-2xl shadow-card overflow-hidden">
+    <div className="bg-surface-100 border border-surface-300 rounded-xl shadow-card overflow-hidden">
       {/* Header */}
-      <div className={`px-5 py-4 border-b border-surface-300 ${color.bg}`}>
+      <div className={`px-4 py-3 border-b border-surface-300 ${color.bg}`}>
         <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className={`w-2.5 h-2.5 rounded-full ${color.dot} ${step.status === 'running' ? 'animate-pulse-soft' : ''}`} />
+          <div className="flex items-center gap-2.5">
+            <div className={`w-2 h-2 rounded-full ${color.dot} ${step.status === 'running' ? 'animate-pulse-soft' : ''}`} />
             <span className={`text-sm font-mono font-bold ${ac.text}`}>{step.agent}</span>
             <span className="text-[10px] font-mono text-ink-400">step {step.step_number}</span>
           </div>
           <div className="flex items-center gap-2">
             {stepModel && (
-              <span className="text-[10px] font-mono text-ink-400 bg-surface-100/80 px-2 py-0.5 rounded-full border border-surface-300">
+              <span className="text-[10px] font-mono text-ink-400 bg-surface-100/80 px-1.5 py-px rounded border border-surface-300">
                 {stepModel}
               </span>
             )}
-            <span className={`text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full border ${color.badge}`}>
+            <span className={`text-[10px] font-mono font-semibold px-2 py-0.5 rounded border ${color.badge}`}>
               {statusLabel(step.status)}
             </span>
           </div>
@@ -274,29 +262,29 @@ function StepDetail({ step, stepResult, stepLog, logTab, onLogTab, stepModel, pr
 
       {/* Task */}
       {step.task && (
-        <div className="px-5 py-3 border-b border-surface-300">
+        <div className="px-4 py-2.5 border-b border-surface-300">
           <p className="text-xs text-ink-700 leading-relaxed">{step.task}</p>
         </div>
       )}
 
       {/* Metrics */}
-      <div className="px-5 py-2.5 border-b border-surface-300 flex items-center gap-5 text-[11px] font-mono text-ink-400 flex-wrap">
+      <div className="px-4 py-2 border-b border-surface-300 flex items-center gap-4 text-[11px] font-mono text-ink-400 flex-wrap">
         {step.tokens > 0 && <span>{formatTokens(step.tokens)} tokens</span>}
         {duration && <span>{formatDuration(duration)}</span>}
         {step.started_at && <span>started {formatTimestamp(step.started_at)}</span>}
         {step.resumed && <span className="text-blue-600">resumed</span>}
-        {step.is_rework && <span className="text-orange-500">rework</span>}
+        {step.is_rework && <span className="text-status-rework">rework</span>}
       </div>
 
       {/* Tabs */}
-      <div className="px-5 py-2 border-b border-surface-300 flex items-center gap-1">
+      <div className="px-4 py-1.5 border-b border-surface-300 flex items-center gap-0.5">
         {['result', 'activity', 'stdout', 'stderr'].map(tab => (
           <button
             key={tab}
             onClick={() => onLogTab(tab)}
-            className={`px-3 py-1 text-[11px] font-mono rounded-lg transition-all duration-150 capitalize ${
+            className={`px-2.5 py-1 text-[11px] font-mono rounded-md transition-all duration-100 capitalize ${
               logTab === tab
-                ? 'bg-brand-light text-brand-text border border-brand-medium'
+                ? 'bg-ink-900 text-white'
                 : 'text-ink-400 hover:text-ink-700 hover:bg-surface-200'
             }`}
           >
@@ -306,7 +294,7 @@ function StepDetail({ step, stepResult, stepLog, logTab, onLogTab, stepModel, pr
       </div>
 
       {/* Content */}
-      <div className="p-5 max-h-[50vh] overflow-y-auto">
+      <div className="p-4 max-h-[50vh] overflow-y-auto">
         {logTab === 'result' ? (
           <StepResultView result={stepResult} />
         ) : logTab === 'activity' ? (
@@ -325,9 +313,9 @@ function StepResultView({ result }) {
   if (!result) return <p className="text-xs text-ink-300 italic">No result available yet</p>
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <div className="flex items-center gap-2">
-        <span className="text-[10px] uppercase tracking-wider text-ink-400">Status</span>
+        <span className="text-[10px] uppercase tracking-wider text-ink-400 font-medium">Status</span>
         <span className={`text-xs font-mono font-semibold ${
           result.status === 'complete' ? 'text-status-success' :
           result.status === 'failed' ? 'text-status-error' :
@@ -337,8 +325,8 @@ function StepResultView({ result }) {
 
       {result.summary && (
         <div>
-          <p className="text-[10px] uppercase tracking-wider text-ink-400 mb-1">Summary</p>
-          <p className="text-xs text-ink-700 leading-relaxed whitespace-pre-wrap bg-surface-200 rounded-xl p-3 border border-surface-300">
+          <p className="text-[10px] uppercase tracking-wider text-ink-400 font-medium mb-1">Summary</p>
+          <p className="text-xs text-ink-700 leading-relaxed whitespace-pre-wrap bg-surface-50 rounded-lg p-3 border border-surface-300">
             {result.summary}
           </p>
         </div>
@@ -353,10 +341,10 @@ function StepResultView({ result }) {
 
       {result.issues?.length > 0 && (
         <div>
-          <p className="text-[10px] uppercase tracking-wider text-status-error mb-1.5">Issues ({result.issues.length})</p>
-          <div className="space-y-1.5">
+          <p className="text-[10px] uppercase tracking-wider text-status-error font-medium mb-1">Issues ({result.issues.length})</p>
+          <div className="space-y-1">
             {result.issues.map((issue, i) => (
-              <div key={i} className="px-3 py-2 rounded-xl bg-status-error-light border border-status-error-border">
+              <div key={i} className="px-3 py-2 rounded-lg bg-status-error-light border border-status-error-border">
                 <p className="text-[11px] text-status-error leading-relaxed">{issue}</p>
               </div>
             ))}
@@ -365,8 +353,8 @@ function StepResultView({ result }) {
       )}
 
       {result.rework_reason && (
-        <div className="px-3 py-2 rounded-xl bg-status-warning-light border border-status-warning-border">
-          <p className="text-[10px] uppercase tracking-wider text-status-warning mb-1">Rework Reason</p>
+        <div className="px-3 py-2 rounded-lg bg-status-warning-light border border-status-warning-border">
+          <p className="text-[10px] uppercase tracking-wider text-status-warning font-medium mb-1">Rework Reason</p>
           <p className="text-[11px] text-ink-700 leading-relaxed">{result.rework_reason}</p>
         </div>
       )}
@@ -377,10 +365,10 @@ function StepResultView({ result }) {
 function FileList({ label, files, color }) {
   return (
     <div>
-      <p className="text-[10px] uppercase tracking-wider text-ink-400 mb-1.5">{label} ({files.length})</p>
-      <div className="space-y-1">
+      <p className="text-[10px] uppercase tracking-wider text-ink-400 font-medium mb-1">{label} ({files.length})</p>
+      <div className="space-y-0.5">
         {files.map((f, i) => (
-          <div key={i} className="flex items-center gap-2 px-2.5 py-1 rounded-lg bg-surface-200 border border-surface-300">
+          <div key={i} className="flex items-center gap-2 px-2.5 py-1 rounded-md bg-surface-200 border border-surface-300">
             <span className={`text-[10px] ${color}`}>&#9632;</span>
             <span className="text-[11px] font-mono text-ink-700 truncate">{f}</span>
           </div>
@@ -410,22 +398,22 @@ function EventFeed({ events, feedRef }) {
   )
 
   return (
-    <div className="bg-surface-100 border border-surface-300 rounded-2xl shadow-card flex flex-col h-full max-h-[70vh]">
-      <div className="px-4 py-3 border-b border-surface-300 flex items-center justify-between">
-        <h3 className="text-[10px] font-semibold uppercase tracking-widest text-ink-400">Live Events</h3>
-        <span className="text-[10px] font-mono text-ink-300">{significant.length}</span>
+    <div className="bg-surface-100 border border-surface-300 rounded-xl shadow-card flex flex-col h-full max-h-[70vh]">
+      <div className="px-4 py-2.5 border-b border-surface-300 flex items-center justify-between">
+        <h3 className="text-[11px] font-semibold uppercase tracking-wider text-ink-400">Events</h3>
+        <span className="text-[10px] font-mono text-ink-300 tabular-nums">{significant.length}</span>
       </div>
-      <div ref={feedRef} className="flex-1 overflow-y-auto p-3 space-y-0.5">
+      <div ref={feedRef} className="flex-1 overflow-y-auto p-2 space-y-px">
         {significant.length === 0 ? (
           <p className="text-xs text-ink-300 italic text-center py-8">No events yet</p>
         ) : (
           significant.map((event, i) => {
             const dotColor = eventDotColor(event.event_type)
             return (
-              <div key={`${event.timestamp}-${i}`} className="flex items-start gap-2.5 py-1.5 px-2 rounded-lg hover:bg-surface-200 transition-colors">
+              <div key={`${event.timestamp}-${i}`} className="flex items-start gap-2 py-1.5 px-2 rounded-md hover:bg-surface-200 transition-colors">
                 <div className={`w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0 ${dotColor}`} />
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5">
                     <span className="text-[11px] font-medium text-ink-700">{eventLabel(event.event_type)}</span>
                     {event.data?.agent && <span className="text-[10px] font-mono text-ink-400">{event.data.agent}</span>}
                     {event.data?.step != null && <span className="text-[10px] font-mono text-ink-300">#{event.data.step}</span>}
@@ -456,8 +444,8 @@ function ResumePanel({ projectId, runId, steps }) {
   }
 
   return (
-    <div className="bg-status-warning-light border border-status-warning-border rounded-2xl p-4">
-      <div className="flex items-center gap-2 mb-3">
+    <div className="bg-status-warning-light border border-status-warning-border rounded-xl p-4">
+      <div className="flex items-center gap-2 mb-2.5">
         <div className="w-2 h-2 rounded-full bg-status-warning" />
         <h3 className="text-xs font-semibold text-status-warning">Resume This Run</h3>
         {failedStep && (
@@ -471,12 +459,12 @@ function ResumePanel({ projectId, runId, steps }) {
         onChange={e => setPrompt(e.target.value)}
         placeholder="Additional context for resume (optional)..."
         rows={2}
-        className="w-full bg-surface-100 border border-surface-300 rounded-xl px-3 py-2 text-xs font-mono text-ink-700 placeholder:text-ink-300 focus:outline-none focus:border-brand/40 focus:ring-2 focus:ring-brand/10 resize-none"
+        className="w-full bg-surface-100 border border-surface-300 rounded-lg px-3 py-2 text-xs font-mono text-ink-700 placeholder:text-ink-300 focus:outline-none focus:border-brand/40 focus:ring-1 focus:ring-brand/10 resize-none"
       />
       <button
         onClick={handleResume}
         disabled={resuming}
-        className="mt-2 h-8 px-4 rounded-xl text-xs font-semibold bg-brand-light text-brand-text border border-brand-medium hover:bg-brand-medium transition-all disabled:opacity-50 cursor-pointer"
+        className="mt-2 h-7 px-3 rounded-md text-xs font-semibold bg-status-warning text-white hover:bg-status-warning/90 transition-all disabled:opacity-50 cursor-pointer"
       >
         {resuming ? 'Resuming...' : 'Resume Run'}
       </button>

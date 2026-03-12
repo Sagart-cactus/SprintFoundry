@@ -32,14 +32,14 @@ export default function Sidebar({ runs, view, selectedRun, onSelectRun, onViewCh
   const completed = filtered.filter(r => r.status === 'completed')
 
   return (
-    <aside className="w-60 flex-shrink-0 border-r border-surface-300 bg-surface-100 overflow-y-auto">
+    <aside className="w-64 flex-shrink-0 border-r border-surface-300 bg-surface-100 overflow-y-auto">
       {/* Project filter */}
       {projects.length > 1 && (
-        <div className="p-3 pb-0">
+        <div className="px-3 pt-3">
           <select
             value={projectFilter}
             onChange={e => setProjectFilter(e.target.value)}
-            className="w-full h-7 text-[11px] font-mono bg-surface-200 border border-surface-300 rounded-lg px-2 text-ink-700 focus:outline-none focus:border-brand/40"
+            className="w-full h-7 text-xs font-mono bg-surface-50 border border-surface-300 rounded-md px-2 text-ink-700 focus:outline-none focus:border-brand/40"
           >
             <option value="all">All projects</option>
             {projects.map(p => <option key={p} value={p}>{p}</option>)}
@@ -47,7 +47,7 @@ export default function Sidebar({ runs, view, selectedRun, onSelectRun, onViewCh
         </div>
       )}
 
-      <div className="p-3">
+      <div className="p-2.5">
         {active.length > 0 && (
           <RunGroup label="Active" count={active.length} runs={active} selectedRun={selectedRun} onSelectRun={onSelectRun} />
         )}
@@ -61,12 +61,12 @@ export default function Sidebar({ runs, view, selectedRun, onSelectRun, onViewCh
           <div className="mt-2">
             <button
               onClick={() => setShowEmpty(!showEmpty)}
-              className="w-full text-center text-[10px] text-ink-400 hover:text-ink-700 py-2 border border-dashed border-surface-300 rounded-lg hover:bg-surface-200 transition-colors"
+              className="w-full text-center text-[10px] text-ink-400 hover:text-ink-700 py-1.5 border border-dashed border-surface-300 rounded-md hover:bg-surface-200 transition-colors"
             >
               {showEmpty ? 'Hide' : 'Show'} {empty.length} empty run{empty.length > 1 ? 's' : ''}
             </button>
             {showEmpty && (
-              <div className="mt-1.5 space-y-0.5">
+              <div className="mt-1.5 space-y-px">
                 {empty.map(run => (
                   <SidebarItem key={`${run.project_id}/${run.run_id}`} run={run} active={false} onClick={() => onSelectRun(run)} />
                 ))}
@@ -86,12 +86,12 @@ export default function Sidebar({ runs, view, selectedRun, onSelectRun, onViewCh
 
 function RunGroup({ label, count, runs, selectedRun, onSelectRun }) {
   return (
-    <div className="mb-4">
-      <div className="flex items-center justify-between px-2 mb-1.5">
-        <h3 className="text-[10px] font-semibold uppercase tracking-widest text-ink-400">{label}</h3>
-        <span className="text-[10px] font-mono text-ink-300">{count}</span>
+    <div className="mb-3">
+      <div className="flex items-center justify-between px-2 mb-1">
+        <h3 className="text-[10px] font-semibold uppercase tracking-wider text-ink-400">{label}</h3>
+        <span className="text-[10px] font-mono text-ink-300 tabular-nums">{count}</span>
       </div>
-      <div className="space-y-0.5">
+      <div className="space-y-px">
         {runs.map(run => (
           <SidebarItem
             key={`${run.project_id}/${run.run_id}`}
@@ -115,7 +115,7 @@ function SidebarItem({ run, active, onClick }) {
   return (
     <button
       onClick={onClick}
-      className={`w-full text-left px-2.5 py-2 rounded-xl transition-all duration-150 group ${
+      className={`w-full text-left px-2.5 py-2 rounded-lg transition-all duration-100 group ${
         active
           ? 'bg-brand-light border border-brand-medium'
           : 'hover:bg-surface-200 border border-transparent'
@@ -132,13 +132,13 @@ function SidebarItem({ run, active, onClick }) {
               {run.project_id}
             </span>
             {totalSteps > 0 && (
-              <span className="text-[10px] font-mono text-ink-300">
+              <span className="text-[10px] font-mono text-ink-300 tabular-nums">
                 {completedSteps}/{totalSteps}
               </span>
             )}
           </div>
           {currentStep && (
-            <div className="flex items-center gap-1 mt-1">
+            <div className="flex items-center gap-1 mt-0.5">
               <div className="w-1 h-1 rounded-full bg-status-running animate-pulse" />
               <span className="text-[10px] text-ink-500 truncate">{currentStep.agent}</span>
             </div>
@@ -147,7 +147,7 @@ function SidebarItem({ run, active, onClick }) {
       </div>
 
       {totalSteps > 0 && (
-        <div className="mt-1.5 h-[3px] w-full bg-surface-300 rounded-full overflow-hidden">
+        <div className="mt-1.5 h-[2px] w-full bg-surface-300 rounded-full overflow-hidden">
           <div
             className={`h-full rounded-full transition-all duration-500 ${color.bar}`}
             style={{ width: `${(completedSteps / totalSteps) * 100}%` }}

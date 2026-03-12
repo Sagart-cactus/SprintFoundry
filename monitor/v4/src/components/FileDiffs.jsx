@@ -66,7 +66,7 @@ export default function FileDiffs({ projectId, runId }) {
         const isLoading = loadingDiff === file.path
 
         return (
-          <div key={file.path} className="border border-surface-300 rounded-xl overflow-hidden bg-surface-100">
+          <div key={file.path} className="border border-surface-300 rounded-lg overflow-hidden bg-surface-100">
             <button
               onClick={() => loadDiff(file.path)}
               className="w-full text-left flex items-center gap-2 px-3 py-2 hover:bg-surface-200 transition-colors"

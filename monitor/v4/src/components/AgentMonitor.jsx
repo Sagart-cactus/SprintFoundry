@@ -29,8 +29,8 @@ export default function AgentMonitor({ runs, onSelectRun }) {
   if (agents.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-24">
-        <div className="w-14 h-14 rounded-2xl bg-surface-200 border border-surface-300 flex items-center justify-center mb-4">
-          <span className="text-2xl text-ink-300">&#9670;</span>
+        <div className="w-12 h-12 rounded-lg bg-surface-200 border border-surface-300 flex items-center justify-center mb-3">
+          <span className="text-xl text-ink-300">&#9670;</span>
         </div>
         <p className="text-ink-500 text-sm font-medium">No agent activity</p>
         <p className="text-ink-400 text-xs mt-1">Agent data appears when runs execute</p>
@@ -39,15 +39,16 @@ export default function AgentMonitor({ runs, onSelectRun }) {
   }
 
   return (
-    <div className="max-w-[1400px] space-y-6 animate-fade-in">
-      <div className="flex items-center gap-3">
-        <h2 className="text-xs font-semibold uppercase tracking-widest text-ink-400">Agent Fleet</h2>
-        <span className="text-[10px] font-mono text-ink-300 bg-surface-200 px-2 py-0.5 rounded-full border border-surface-300">
+    <div className="max-w-[1400px] space-y-5 animate-fade-in">
+      <div className="flex items-center gap-2.5">
+        <div className="w-1.5 h-4 rounded-sm bg-status-planning" />
+        <h2 className="text-sm font-semibold text-ink-900">Agent Fleet</h2>
+        <span className="text-[11px] font-mono text-ink-400 tabular-nums">
           {agents.length} types
         </span>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
         {agents.map(entry => (
           <AgentCard key={entry.agent} entry={entry} onSelectRun={onSelectRun} />
         ))}
@@ -64,17 +65,17 @@ function AgentCard({ entry, onSelectRun }) {
     : 0
 
   return (
-    <div className={`bg-surface-100 border rounded-2xl shadow-card p-4 transition-all duration-200 ${
+    <div className={`bg-surface-100 border rounded-xl shadow-card p-4 transition-all duration-150 ${
       isActive ? 'border-status-running-border ring-1 ring-status-running/10' : 'border-surface-300'
     }`}>
       {/* Header */}
       <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2">
           {isActive && <div className="w-2 h-2 rounded-full bg-status-running animate-pulse-soft" />}
           <span className={`text-sm font-mono font-bold ${ac.text}`}>{entry.agent}</span>
         </div>
         {isActive && (
-          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-status-running-light text-status-running border border-status-running-border">
+          <span className="text-[10px] font-mono px-1.5 py-px rounded bg-status-running-light text-status-running border border-status-running-border">
             {entry.running} active
           </span>
         )}
@@ -84,15 +85,15 @@ function AgentCard({ entry, onSelectRun }) {
       <div className="grid grid-cols-4 gap-2 mb-3">
         <StatCell label="Runs" value={entry.totalRuns} />
         <StatCell label="Done" value={entry.completed} color="text-status-success" />
-        <StatCell label="Failed" value={entry.failed} color="text-status-error" />
-        <StatCell label="Tokens" value={formatTokens(entry.totalTokens)} />
+        <StatCell label="Fail" value={entry.failed} color="text-status-error" />
+        <StatCell label="Tok" value={formatTokens(entry.totalTokens)} />
       </div>
 
       {/* Success rate */}
       <div className="mb-3">
         <div className="flex items-center justify-between mb-1">
-          <span className="text-[10px] font-mono text-ink-400">Success rate</span>
-          <span className="text-[10px] font-mono text-ink-700">{successRate}%</span>
+          <span className="text-[10px] font-mono text-ink-400">Success</span>
+          <span className="text-[10px] font-mono text-ink-700 tabular-nums">{successRate}%</span>
         </div>
         <div className="h-1 bg-surface-200 rounded-full overflow-hidden">
           <div className="h-full rounded-full bg-status-success transition-all duration-500" style={{ width: `${successRate}%` }} />
@@ -101,11 +102,11 @@ function AgentCard({ entry, onSelectRun }) {
 
       {/* Active steps */}
       {entry.activeSteps.length > 0 && (
-        <div className="space-y-1.5 pt-2 border-t border-surface-300">
-          <p className="text-[10px] uppercase tracking-wider text-ink-400 mb-1">Currently Running</p>
+        <div className="space-y-1 pt-2.5 border-t border-surface-300">
+          <p className="text-[10px] uppercase tracking-wider text-ink-400 font-medium mb-1">Running</p>
           {entry.activeSteps.map(({ step, run }, i) => (
             <button key={i} onClick={() => onSelectRun(run)}
-              className="w-full text-left flex items-center gap-2 px-2 py-1.5 rounded-lg bg-status-running-light border border-status-running-border hover:shadow-sm transition-all">
+              className="w-full text-left flex items-center gap-2 px-2 py-1.5 rounded-md bg-status-running-light border border-status-running-border hover:shadow-sm transition-all">
               <div className="w-1 h-1 rounded-full bg-status-running animate-pulse" />
               <span className="text-[10px] font-mono text-ink-700 truncate flex-1">{run.ticket_title || run.run_id}</span>
               <span className="text-[10px] font-mono text-ink-400">#{step.step_number}</span>
@@ -116,13 +117,13 @@ function AgentCard({ entry, onSelectRun }) {
 
       {/* Recent */}
       {entry.recentSteps.length > 0 && !isActive && (
-        <div className="space-y-1 pt-2 border-t border-surface-300">
-          <p className="text-[10px] uppercase tracking-wider text-ink-400 mb-1">Recent</p>
+        <div className="space-y-0.5 pt-2.5 border-t border-surface-300">
+          <p className="text-[10px] uppercase tracking-wider text-ink-400 font-medium mb-1">Recent</p>
           {entry.recentSteps.slice(0, 3).map(({ step, run }, i) => {
             const sc = statusColor(step.status)
             return (
               <button key={i} onClick={() => onSelectRun(run)}
-                className="w-full text-left flex items-center gap-2 px-2 py-1 rounded-lg hover:bg-surface-200 transition-colors">
+                className="w-full text-left flex items-center gap-2 px-2 py-1 rounded-md hover:bg-surface-200 transition-colors">
                 <div className={`w-1.5 h-1.5 rounded-full ${sc.dot}`} />
                 <span className="text-[10px] font-mono text-ink-500 truncate flex-1">{run.ticket_title || run.run_id}</span>
                 <span className="text-[10px] font-mono text-ink-300">{step.started_at ? timeAgo(step.started_at) : ''}</span>
@@ -138,7 +139,7 @@ function AgentCard({ entry, onSelectRun }) {
 function StatCell({ label, value, color = 'text-ink-900' }) {
   return (
     <div className="text-center">
-      <p className={`text-sm font-mono font-semibold ${color}`}>{value}</p>
+      <p className={`text-sm font-mono font-semibold tabular-nums ${color}`}>{value}</p>
       <p className="text-[9px] font-mono text-ink-400 uppercase">{label}</p>
     </div>
   )

@@ -5,7 +5,6 @@ import Sidebar from './components/Sidebar'
 import RunDashboard from './components/RunDashboard'
 import RunDetail from './components/RunDetail'
 import AgentMonitor from './components/AgentMonitor'
-import StatusBar from './components/StatusBar'
 
 export default function App() {
   const { runs, loading, sseStatus, refresh } = useRuns()
@@ -41,6 +40,7 @@ export default function App() {
         onSearchChange={setSearchQuery}
         onBack={view === 'detail' ? goBack : null}
         selectedRun={selectedRun}
+        onRefresh={refresh}
       />
 
       <div className="flex-1 flex overflow-hidden">
@@ -53,11 +53,11 @@ export default function App() {
           searchQuery={searchQuery}
         />
 
-        <main className="flex-1 overflow-y-auto p-6 bg-surface-50">
+        <main className="flex-1 overflow-y-auto p-5 bg-surface-50">
           {loading ? (
-            <div className="space-y-4 animate-pulse">
+            <div className="space-y-3 animate-pulse">
               {[1, 2, 3].map(i => (
-                <div key={i} className="h-32 bg-surface-200 rounded-2xl" />
+                <div key={i} className="h-28 bg-surface-200 rounded-xl" />
               ))}
             </div>
           ) : view === 'detail' && selectedRun ? (
@@ -69,8 +69,6 @@ export default function App() {
           )}
         </main>
       </div>
-
-      <StatusBar sseStatus={sseStatus} stats={stats} onRefresh={refresh} />
     </div>
   )
 }
