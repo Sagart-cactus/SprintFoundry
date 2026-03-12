@@ -148,6 +148,14 @@ describe("KubernetesPodExecutionBackend", () => {
         limits: { cpu: "3", memory: "6Gi" },
       },
       quota_scope: "tenant-a-build",
+      provisioning_timing_ms: {
+        service_account_create: expect.any(Number),
+        workspace_volume_create: expect.any(Number),
+        egress_policy_create: expect.any(Number),
+        pod_create: expect.any(Number),
+        pod_ready_wait: expect.any(Number),
+        total: expect.any(Number),
+      },
     });
     expect(manifest.spec.containers[0].env).toEqual([
       { name: "SPRINTFOUNDRY_SECRET_PROFILE", value: "github-only" },

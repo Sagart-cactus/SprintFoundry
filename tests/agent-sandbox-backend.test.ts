@@ -65,6 +65,11 @@ describe("AgentSandboxExecutionBackend", () => {
       claim_name: "sf-claim-run-1",
       template_name: "typescript-dev",
       warm_pool_name: "ts-pool",
+      provisioning_timing_ms: {
+        claim_create: expect.any(Number),
+        claim_bind_wait: expect.any(Number),
+        total: expect.any(Number),
+      },
     });
   });
 

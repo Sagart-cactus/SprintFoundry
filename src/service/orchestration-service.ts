@@ -1922,6 +1922,7 @@ export class OrchestrationService {
 
     this.setRunEnvironment(run, prepared);
     this.applyRunEnvironmentMetadata(run, prepared);
+    this.recordSandboxProvisioningMetrics(prepared);
     if (existing) {
       await this.emitEvent(run.run_id, "sandbox.resumed", this.buildSandboxEventData(run, {
         checkpoint_generation: prepared.checkpoint_generation,
@@ -1934,6 +1935,25 @@ export class OrchestrationService {
     }
     this.persistSession(run, { workspace_path: workspacePath });
     return prepared;
+  }
+
+  private recordSandboxProvisioningMetrics(handle: RunEnvironmentHandle): void {
+    const rawTimings = handle.metadata["provisioning_timing_ms"];
+    if (!rawTimings || typeof rawTimings !== "object") {
+      return;
+    }
+
+    for (const [stage, durationMs] of Object.entries(rawTimings as Record<string, unknown>)) {
+      if (typeof durationMs !== "number" || !Number.isFinite(durationMs) || durationMs < 0) {
+        continue;
+      }
+      this.metricsService.recordSandboxProvisioning({
+        project_id: this.projectConfig.project_id,
+        execution_backend: handle.execution_backend,
+        stage,
+        durationMs,
+      });
+    }
   }
 
   private async createRunEnvironment(

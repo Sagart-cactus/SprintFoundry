@@ -29,11 +29,18 @@ export class AgentSandboxExecutionBackend implements ExecutionBackend {
     _plan: ExecutionPlan,
     workspacePath: string
   ): Promise<RunEnvironmentHandle> {
+    const provisioningTimingMs: Record<string, number> = {};
+    const provisionStartedAt = Date.now();
     const claimName = this.buildClaimName(run.run_id);
     const templateName = this.platformConfig.k8s?.agent_sandbox?.template_name?.trim() || "default";
     const manifest = this.buildSandboxClaimManifest(run, claimName, templateName);
+    const claimCreateStartedAt = Date.now();
     await this.client.createSandboxClaim(this.namespace, manifest);
+    provisioningTimingMs.claim_create = Date.now() - claimCreateStartedAt;
+    const bindWaitStartedAt = Date.now();
     const binding = await this.client.waitForSandboxBinding(this.namespace, claimName);
+    provisioningTimingMs.claim_bind_wait = Date.now() - bindWaitStartedAt;
+    provisioningTimingMs.total = Date.now() - provisionStartedAt;
 
     return {
       run_id: run.run_id,
@@ -49,6 +56,7 @@ export class AgentSandboxExecutionBackend implements ExecutionBackend {
         template_name: templateName,
         bound_sandbox_name: binding.sandboxName,
         warm_pool_name: this.platformConfig.k8s?.agent_sandbox?.warm_pool_name,
+        provisioning_timing_ms: provisioningTimingMs,
       },
     };
   }
