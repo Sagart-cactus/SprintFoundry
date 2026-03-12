@@ -49,6 +49,23 @@ kubectl -n sprintfoundry-system create secret generic sprintfoundry-system-secre
 - Base manifests use `sprintfoundry-runner:latest`.
 - The run pod template in `base/job-template.yaml` shows EmptyDir, Secret env mount, ConfigMap mount, resources, and Karpenter toleration.
 
+## Provisioning Metrics
+
+SprintFoundry exports sandbox provisioning latency through:
+
+- `sprintfoundry_sandbox_provision_duration_seconds`
+
+The histogram is labelled by `execution_backend` and `stage`. Current stages include:
+
+- `service_account_create`
+- `workspace_volume_create`
+- `egress_policy_create`
+- `pod_create`
+- `pod_ready_wait`
+- `claim_create`
+- `claim_bind_wait`
+- `total`
+
 ## ExternalSecrets Prerequisite
 
 Project onboarding templates assume ExternalSecrets Operator is installed and a

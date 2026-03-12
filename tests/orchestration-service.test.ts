@@ -364,6 +364,66 @@ describe("OrchestrationService", () => {
     });
   });
 
+  it("records backend provisioning metrics when the sandbox reports sub-stage timings", async () => {
+    const workspacePath = await fs.mkdtemp(path.join(os.tmpdir(), "sf-run-env-metrics-"));
+    const metricsSpy = vi.fn();
+    const preparedHandle: RunEnvironmentHandle = {
+      run_id: "run-1",
+      project_id: makeProjectConfig().project_id,
+      sandbox_id: "sandbox-existing",
+      execution_backend: "k8s-pod",
+      workspace_path: workspacePath,
+      checkpoint_generation: 0,
+      metadata: {
+        provisioning_timing_ms: {
+          workspace_volume_create: 120,
+          pod_ready_wait: 850,
+          total: 1100,
+        },
+      },
+    };
+    const backend: ExecutionBackend = {
+      prepareRunEnvironment: vi.fn(async () => preparedHandle),
+      executeStep: vi.fn(),
+      pauseRun: vi.fn(),
+      resumeRun: vi.fn(async () => preparedHandle),
+      teardownRun: vi.fn(async () => {}),
+    };
+
+    service = new OrchestrationService(
+      makePlatformConfig(),
+      makeProjectConfig(),
+      undefined,
+      backend
+    );
+    (service as any).metricsService.recordSandboxProvisioning = metricsSpy;
+
+    const run = (service as any).createRun("ticket-1");
+    run.ticket = makeTicket();
+
+    await (service as any).prepareRunEnvironment(run, makePlan(), workspacePath);
+
+    expect(metricsSpy).toHaveBeenCalledTimes(3);
+    expect(metricsSpy).toHaveBeenCalledWith({
+      project_id: "test-project",
+      execution_backend: "k8s-pod",
+      stage: "workspace_volume_create",
+      durationMs: 120,
+    });
+    expect(metricsSpy).toHaveBeenCalledWith({
+      project_id: "test-project",
+      execution_backend: "k8s-pod",
+      stage: "pod_ready_wait",
+      durationMs: 850,
+    });
+    expect(metricsSpy).toHaveBeenCalledWith({
+      project_id: "test-project",
+      execution_backend: "k8s-pod",
+      stage: "total",
+      durationMs: 1100,
+    });
+  });
+
   it("handleTask with source=prompt creates ticket from prompt text", async () => {
     const plan = makeDevQaPlan();
     mockOrchestratorAgent.generatePlan.mockResolvedValue(plan);

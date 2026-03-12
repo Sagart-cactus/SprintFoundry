@@ -59,6 +59,8 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
     plan: ExecutionPlan,
     workspacePath: string
   ): Promise<RunEnvironmentHandle> {
+    const provisioningTimingMs: Record<string, number> = {};
+    const provisionStartedAt = Date.now();
     const sandboxId = this.buildSandboxId(run.run_id);
     const pvcName = `${sandboxId}-workspace`.slice(0, 63);
     const image = this.resolveSandboxImage(plan);
@@ -81,20 +83,32 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
       isolationLevel
     );
 
+    const serviceAccountStartedAt = Date.now();
     await this.client.createServiceAccount(this.namespace, serviceAccountManifest);
+    provisioningTimingMs.service_account_create = Date.now() - serviceAccountStartedAt;
+
+    const pvcStartedAt = Date.now();
     await this.client.createPvc(this.namespace, pvcManifest);
+    provisioningTimingMs.workspace_volume_create = Date.now() - pvcStartedAt;
     try {
       if (egressPolicy) {
+        const egressPolicyStartedAt = Date.now();
         await this.client.createEgressPolicy(this.namespace, egressPolicy);
+        provisioningTimingMs.egress_policy_create = Date.now() - egressPolicyStartedAt;
       }
+      const podCreateStartedAt = Date.now();
       await this.client.createPod(this.namespace, manifest);
+      provisioningTimingMs.pod_create = Date.now() - podCreateStartedAt;
+      const podReadyStartedAt = Date.now();
       await this.client.waitForPodReady(this.namespace, sandboxId);
+      provisioningTimingMs.pod_ready_wait = Date.now() - podReadyStartedAt;
     } catch (error) {
       await this.safeDeleteEgressPolicy(this.buildEgressPolicyName(sandboxId));
       await this.safeDeleteServiceAccount(serviceAccountName);
       await this.safeDeletePvc(pvcName);
       throw error;
     }
+    provisioningTimingMs.total = Date.now() - provisionStartedAt;
 
     return {
       run_id: run.run_id,
@@ -117,6 +131,7 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
         egress_policy_name: egressPolicy ? this.buildEgressPolicyName(sandboxId) : undefined,
         resource_policy: this.resolvePodResources(),
         quota_scope: this.platformConfig.k8s?.quota_scope,
+        provisioning_timing_ms: provisioningTimingMs,
       },
     };
   }

@@ -51,6 +51,7 @@ export class MetricsService {
   private gitErrorsTotal: Counter;
   private prCreatedTotal: Counter;
   private workspacePrepDurationSeconds: Histogram;
+  private sandboxProvisionDurationSeconds: Histogram;
 
   // ---- Agent activity ----
   private agentToolCallsTotal: Counter;
@@ -149,6 +150,10 @@ export class MetricsService {
       description: "Time to prepare the agent workspace (context writing, file setup)",
       unit: "s",
     });
+    this.sandboxProvisionDurationSeconds = this.meter.createHistogram("sprintfoundry_sandbox_provision_duration_seconds", {
+      description: "Provisioning latency for pod and agent sandbox backends, split by backend stage",
+      unit: "s",
+    });
 
     // Agent activity
     this.agentToolCallsTotal = this.meter.createCounter("sprintfoundry_agent_tool_calls_total", {
@@ -193,6 +198,17 @@ export class MetricsService {
     if (planSteps !== undefined) {
       this.planStepsCount.record(planSteps, { project_id: attrs.project_id });
     }
+  }
+
+  recordSandboxProvisioning(attrs: {
+    project_id: string;
+    execution_backend: string;
+    stage: string;
+    durationMs: number;
+  }): void {
+    if (!this.enabled) return;
+    const { durationMs, ...labels } = attrs;
+    this.sandboxProvisionDurationSeconds.record(durationMs / 1000, labels);
   }
 
   // ---- Step / agent execution ----
