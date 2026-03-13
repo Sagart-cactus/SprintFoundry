@@ -1,0 +1,53 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "sprintfoundry.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sprintfoundry.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className | quote }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /api/dispatch
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "sprintfoundry.fullname" . }}-dispatch-controller
+                port:
+                  number: {{ .Values.dispatchController.port }}
+          - path: /api/webhooks
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "sprintfoundry.fullname" . }}-dispatch-controller
+                port:
+                  number: {{ .Values.dispatchController.port }}
+          - path: /api/internal
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "sprintfoundry.fullname" . }}-event-api
+                port:
+                  number: {{ .Values.eventApi.port }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "sprintfoundry.fullname" . }}-monitor
+                port:
+                  number: {{ .Values.monitor.port }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

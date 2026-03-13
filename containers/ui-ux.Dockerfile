@@ -1,7 +1,8 @@
 # SprintFoundry — UI/UX Agent
 # Frontend design tooling for component specs and previews.
 
-FROM sprintfoundry/agent-base:latest
+ARG BASE_IMAGE=sprintfoundry/agent-base:latest
+FROM ${BASE_IMAGE}
 
 USER root
 

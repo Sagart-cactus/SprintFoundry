@@ -1,0 +1,136 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "sprintfoundry.fullname" . }}-dispatch-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sprintfoundry.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dispatch-controller
+spec:
+  replicas: {{ .Values.dispatchController.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "sprintfoundry.name" . }}-dispatch-controller
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "sprintfoundry.name" . }}-dispatch-controller
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: dispatch-controller
+    spec:
+      serviceAccountName: {{ include "sprintfoundry.serviceAccountName" . }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: dispatch-controller
+          image: {{ include "sprintfoundry.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - dispatch
+            - --host
+            - 0.0.0.0
+            - --port
+            - {{ .Values.dispatchController.port | quote }}
+            - --config
+            - /config
+          ports:
+            - containerPort: {{ .Values.dispatchController.port }}
+              name: http
+          env:
+            - name: SPRINTFOUNDRY_K8S_MODE
+              value: "true"
+            - name: SPRINTFOUNDRY_RUNNER_IMAGE
+              value: {{ include "sprintfoundry.image" . }}
+            - name: SPRINTFOUNDRY_EVENT_SINK_URL
+              value: {{ include "sprintfoundry.eventSinkUrl" . | quote }}
+            - name: SPRINTFOUNDRY_DATABASE_URL
+              value: {{ include "sprintfoundry.databaseUrl" . | quote }}
+            - name: SPRINTFOUNDRY_REDIS_URL
+              value: {{ include "sprintfoundry.redisUrl" . | quote }}
+            - name: SPRINTFOUNDRY_INTERNAL_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "sprintfoundry.secretName" . }}
+                  key: SPRINTFOUNDRY_INTERNAL_API_TOKEN
+                  optional: true
+            {{- if .Values.snapshot.enabled }}
+            - name: SPRINTFOUNDRY_SNAPSHOT_BUCKET
+              value: {{ .Values.snapshot.bucket | quote }}
+            {{- if .Values.snapshot.s3Endpoint }}
+            - name: SPRINTFOUNDRY_SNAPSHOT_S3_ENDPOINT
+              value: {{ .Values.snapshot.s3Endpoint | quote }}
+            {{- end }}
+            {{- if .Values.snapshot.s3EndpointInCluster }}
+            - name: SPRINTFOUNDRY_SNAPSHOT_S3_ENDPOINT_IN_CLUSTER
+              value: {{ .Values.snapshot.s3EndpointInCluster | quote }}
+            {{- end }}
+            - name: SPRINTFOUNDRY_SNAPSHOT_S3_REGION
+              value: {{ .Values.snapshot.s3Region | quote }}
+            {{- if .Values.snapshot.s3ForcePathStyle }}
+            - name: SPRINTFOUNDRY_SNAPSHOT_S3_FORCE_PATH_STYLE
+              value: "true"
+            {{- end }}
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "sprintfoundry.snapshotSecretName" . }}
+                  key: {{ .Values.snapshot.existingSecretAccessKeyIdKey | default "AWS_ACCESS_KEY_ID" }}
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "sprintfoundry.snapshotSecretName" . }}
+                  key: {{ .Values.snapshot.existingSecretSecretAccessKeyKey | default "AWS_SECRET_ACCESS_KEY" }}
+            {{- end }}
+            {{- if .Values.artifactUpload.enabled }}
+            - name: SPRINTFOUNDRY_ARTIFACT_BUCKET
+              value: {{ .Values.artifactUpload.bucket | quote }}
+            {{- end }}
+            {{- if .Values.otel.enabled }}
+            - name: SPRINTFOUNDRY_OTEL_ENABLED
+              value: "1"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.otel.endpoint | quote }}
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: {{ .Values.otel.protocol | quote }}
+            {{- end }}
+            {{- with .Values.dispatchController.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.dispatchController.resources | nindent 12 }}
+          volumeMounts:
+            - name: platform-config
+              mountPath: /config/platform.yaml
+              subPath: platform.yaml
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: platform-config
+          configMap:
+            name: {{ include "sprintfoundry.platformConfigMapName" . }}
+      {{- with .Values.dispatchController.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.dispatchController.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.dispatchController.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

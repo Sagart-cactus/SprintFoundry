@@ -1,0 +1,84 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "sprintfoundry.fullname" . }}-monitor
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sprintfoundry.labels" . | nindent 4 }}
+    app.kubernetes.io/component: monitor
+spec:
+  replicas: {{ .Values.monitor.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "sprintfoundry.name" . }}-monitor
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "sprintfoundry.name" . }}-monitor
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: monitor
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: monitor
+          image: {{ include "sprintfoundry.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - monitor
+            - --port
+            - {{ .Values.monitor.port | quote }}
+          ports:
+            - containerPort: {{ .Values.monitor.port }}
+              name: http
+          env:
+            - name: MONITOR_PORT
+              value: {{ .Values.monitor.port | quote }}
+            - name: SPRINTFOUNDRY_DATABASE_URL
+              value: {{ include "sprintfoundry.databaseUrl" . | quote }}
+            - name: SPRINTFOUNDRY_REDIS_URL
+              value: {{ include "sprintfoundry.redisUrl" . | quote }}
+            - name: SPRINTFOUNDRY_MONITOR_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "sprintfoundry.secretName" . }}
+                  key: SPRINTFOUNDRY_MONITOR_API_TOKEN
+                  optional: true
+            - name: SPRINTFOUNDRY_MONITOR_WRITE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "sprintfoundry.secretName" . }}
+                  key: SPRINTFOUNDRY_MONITOR_WRITE_TOKEN
+                  optional: true
+            {{- with .Values.monitor.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.monitor.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      {{- with .Values.monitor.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.monitor.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.monitor.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

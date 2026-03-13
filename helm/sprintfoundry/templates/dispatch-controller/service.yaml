@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "sprintfoundry.fullname" . }}-dispatch-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sprintfoundry.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dispatch-controller
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: {{ include "sprintfoundry.name" . }}-dispatch-controller
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: http
+      port: {{ .Values.dispatchController.port }}
+      targetPort: http

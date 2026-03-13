@@ -1,0 +1,24 @@
+apiVersion: v2
+name: sprintfoundry
+description: A multi-agent orchestration platform for AI-powered software development
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/Sagart-cactus/SprintFoundry
+keywords:
+  - ai
+  - agents
+  - orchestration
+  - claude
+  - development
+maintainers:
+  - name: SprintFoundry
+dependencies:
+  - name: postgresql
+    version: "~16"
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled
+  - name: redis
+    version: "~20"
+    repository: https://charts.bitnami.com/bitnami
+    condition: redis.enabled
