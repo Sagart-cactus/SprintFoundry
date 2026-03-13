@@ -463,6 +463,70 @@ describe("OrchestrationService", () => {
     });
   });
 
+  it("does not re-record provisioning metrics when resuming an existing run environment", async () => {
+    const workspacePath = await fs.mkdtemp(path.join(os.tmpdir(), "sf-run-env-metrics-resume-"));
+    const metricsSpy = vi.fn();
+    const initialHandle: RunEnvironmentHandle = {
+      run_id: "run-1",
+      project_id: makeProjectConfig().project_id,
+      sandbox_id: "sandbox-existing",
+      execution_backend: "k8s-pod",
+      workspace_path: workspacePath,
+      checkpoint_generation: 0,
+      metadata: {
+        provisioning_timing_ms: {
+          total: 1100,
+        },
+      },
+    };
+    const resumedHandle: RunEnvironmentHandle = {
+      ...initialHandle,
+      checkpoint_generation: 1,
+    };
+    const backend: ExecutionBackend = {
+      prepareRunEnvironment: vi.fn(async () => initialHandle),
+      executeStep: vi.fn(),
+      pauseRun: vi.fn(),
+      resumeRun: vi.fn(async () => resumedHandle),
+      teardownRun: vi.fn(async () => {}),
+    };
+
+    service = new OrchestrationService(
+      makePlatformConfig(),
+      makeProjectConfig(),
+      undefined,
+      backend
+    );
+    (service as any).metricsService.recordSandboxProvisioning = metricsSpy;
+
+    const run = (service as any).createRun("ticket-1");
+    run.ticket = makeTicket();
+    run.run_environment = initialHandle;
+
+    await (service as any).prepareRunEnvironment(run, makePlan(), workspacePath);
+
+    expect(metricsSpy).not.toHaveBeenCalled();
+  });
+
+  it("dry-run with a direct agent returns the same synthetic direct plan shape as execution mode", async () => {
+    const run = await service.handleTask("prompt-1", "prompt", "Create a file", {
+      dryRun: true,
+      agent: "developer",
+    });
+
+    expect(run.status).toBe("completed");
+    expect(run.plan?.classification).toBe("direct");
+    expect(run.validated_plan?.classification).toBe("direct");
+    expect(run.validated_plan?.steps).toHaveLength(1);
+    expect(run.validated_plan?.steps[0]).toMatchObject({
+      step_number: 1,
+      agent: "developer",
+      task: "Create a file",
+    });
+    expect(mockOrchestratorAgent.generatePlan).not.toHaveBeenCalled();
+    expect(mockAgentRunner.run).not.toHaveBeenCalled();
+  });
+
   it("handleTask with source=prompt creates ticket from prompt text", async () => {
     const plan = makeDevQaPlan();
     mockOrchestratorAgent.generatePlan.mockResolvedValue(plan);

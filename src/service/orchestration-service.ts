@@ -566,6 +566,7 @@ export class OrchestrationService {
       // 4a. Direct single-agent mode (bypasses orchestrator + plan validator)
       if (opts?.agent) {
         if (opts?.dryRun) {
+          await this.prepareDirectAgentPlan(run, opts.agent, ticket, opts.agentFile);
           run.status = "completed";
           console.log(`[orchestrator] Dry-run mode — skipping direct agent execution.`);
           return run;
@@ -664,7 +665,24 @@ export class OrchestrationService {
     workspacePath: string,
     agentFile?: string
   ): Promise<TaskRun> {
-    // If an inline agent file was provided, load and register it temporarily
+    const plan = await this.prepareDirectAgentPlan(run, agentId, ticket, agentFile);
+    run.status = "executing";
+
+    await this.executePlan(run, plan, workspacePath);
+
+    if ((run.status as string) === "completed") {
+      await this.finalizeCompletedRun(run, workspacePath);
+    }
+
+    return run;
+  }
+
+  private async prepareDirectAgentPlan(
+    run: TaskRun,
+    agentId: string,
+    ticket: TicketDetails,
+    agentFile?: string
+  ): Promise<ExecutionPlan> {
     if (agentFile) {
       try {
         const raw = await fs.readFile(agentFile, "utf-8");
@@ -678,7 +696,6 @@ export class OrchestrationService {
       }
     }
 
-    // Validate agent ID exists in the catalog
     const agentDef = this.platformConfig.agent_definitions.find((a) => a.type === agentId);
     if (!agentDef) {
       const available = this.platformConfig.agent_definitions.map((a) => a.type).join(", ");
@@ -687,7 +704,6 @@ export class OrchestrationService {
 
     console.log(`[orchestrator] Direct mode: running agent '${agentId}' (role: ${agentDef.role})`);
 
-    // Build a synthetic single-step plan — no LLM, no validator
     const plan: ExecutionPlan = {
       plan_id: `direct-${Date.now()}`,
       ticket_id: ticket.id,
@@ -709,17 +725,8 @@ export class OrchestrationService {
 
     run.plan = plan;
     run.validated_plan = plan;
-    run.status = "executing";
-
     await this.emitEvent(run.run_id, "task.plan_generated", { plan });
-
-    await this.executePlan(run, plan, workspacePath);
-
-    if ((run.status as string) === "completed") {
-      await this.finalizeCompletedRun(run, workspacePath);
-    }
-
-    return run;
+    return plan;
   }
 
   // ---- Plan Execution Engine ----
@@ -1930,7 +1937,9 @@ export class OrchestrationService {
 
     this.setRunEnvironment(run, prepared);
     this.applyRunEnvironmentMetadata(run, prepared);
-    this.recordSandboxProvisioningMetrics(prepared);
+    if (!existing) {
+      this.recordSandboxProvisioningMetrics(prepared);
+    }
     if (existing) {
       await this.emitEvent(run.run_id, "sandbox.resumed", this.buildSandboxEventData(run, {
         checkpoint_generation: prepared.checkpoint_generation,
