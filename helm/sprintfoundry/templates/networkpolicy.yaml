@@ -1,0 +1,31 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "sprintfoundry.fullname" . }}-default
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sprintfoundry.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes:
+    - Ingress
+  ingress:
+    # Allow traffic between SprintFoundry services
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+    # Allow ingress controller traffic
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - port: {{ .Values.dispatchController.port }}
+          protocol: TCP
+        - port: {{ .Values.eventApi.port }}
+          protocol: TCP
+        - port: {{ .Values.monitor.port }}
+          protocol: TCP
+{{- end }}

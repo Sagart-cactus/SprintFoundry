@@ -1,0 +1,77 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "sprintfoundry.fullname" . }}-event-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sprintfoundry.labels" . | nindent 4 }}
+    app.kubernetes.io/component: event-api
+spec:
+  replicas: {{ .Values.eventApi.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "sprintfoundry.name" . }}-event-api
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "sprintfoundry.name" . }}-event-api
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: event-api
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: event-api
+          image: {{ include "sprintfoundry.eventApiImage" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - node
+            - dist/service/event-ingestion-server.js
+          ports:
+            - containerPort: {{ .Values.eventApi.port }}
+              name: http
+          env:
+            - name: SPRINTFOUNDRY_EVENT_API_PORT
+              value: {{ .Values.eventApi.port | quote }}
+            - name: SPRINTFOUNDRY_DATABASE_URL
+              value: {{ include "sprintfoundry.databaseUrl" . | quote }}
+            - name: SPRINTFOUNDRY_REDIS_URL
+              value: {{ include "sprintfoundry.redisUrl" . | quote }}
+            - name: SPRINTFOUNDRY_INTERNAL_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "sprintfoundry.secretName" . }}
+                  key: SPRINTFOUNDRY_INTERNAL_API_TOKEN
+                  optional: true
+            {{- with .Values.eventApi.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.eventApi.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      {{- with .Values.eventApi.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.eventApi.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.eventApi.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -1,0 +1,295 @@
+# =============================================================================
+# SprintFoundry Helm Chart — values.yaml
+# =============================================================================
+
+# -- Global settings shared across all sub-charts
+global:
+  imageRegistry: ""
+  imagePullSecrets: []
+
+# -- Container image for all SprintFoundry services
+image:
+  repository: ghcr.io/sagart-cactus/sprintfoundry-runner
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# -- Image used for the event-api service (defaults to main image if empty)
+eventApiImage:
+  repository: ""
+  tag: ""
+
+# =============================================================================
+# Dispatch Controller
+# =============================================================================
+dispatchController:
+  replicas: 1
+  port: 4320
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  extraEnv: []
+
+# =============================================================================
+# Event API
+# =============================================================================
+eventApi:
+  replicas: 1
+  port: 3001
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  extraEnv: []
+
+# =============================================================================
+# Monitor UI
+# =============================================================================
+monitor:
+  replicas: 1
+  port: 4310
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  extraEnv: []
+
+# =============================================================================
+# System-level Secrets (control plane only)
+# =============================================================================
+# These are for inter-service auth and the monitor dashboard.
+# LLM API keys (Anthropic, OpenAI) and integration tokens (GitHub, Linear, Jira)
+# belong in per-project secrets — see the "projects" section below.
+secrets:
+  # -- Create a Secret for system-level tokens
+  create: true
+  # -- Use an existing Secret instead of creating one
+  existingSecret: ""
+  # -- Inter-service authentication token
+  internalApiToken: ""
+  # -- Monitor dashboard read token
+  monitorApiToken: ""
+  # -- Monitor dashboard write token
+  monitorWriteToken: ""
+
+# =============================================================================
+# Per-Project Configuration
+# =============================================================================
+# Each project gets its own namespace, secret (with API keys), configmap, and
+# resource quota. The dispatch-controller creates agent Jobs in the project's
+# namespace and injects the project secret via envFrom.
+#
+# Three patterns for managing API keys:
+#   1. Inline (dev/testing): set apiKeys directly in values
+#   2. Existing Secret (staging): pre-create the Secret, reference via existingSecret
+#   3. ExternalSecrets (production): enable externalSecret, point to AWS SM / Vault
+projects: []
+  # - id: "my-project"
+  #   # -- Namespace for this project's agent Jobs (defaults to project id)
+  #   namespace: ""
+  #   # -- API keys injected into agent Jobs as environment variables
+  #   apiKeys:
+  #     anthropicKey: ""            # ANTHROPIC_API_KEY — required for Claude agents
+  #     openaiKey: ""               # OPENAI_API_KEY — optional, for Codex runtime
+  #     googleKey: ""               # GOOGLE_API_KEY — optional, for Gemini
+  #     githubToken: ""             # GITHUB_TOKEN — for repo access and PR creation
+  #     linearApiKey: ""            # LINEAR_API_KEY — for Linear ticket integration
+  #     jiraApiToken: ""            # JIRA_API_TOKEN — for Jira ticket integration
+  #   # -- Use an existing Secret instead (skips creating one)
+  #   existingSecret: ""
+  #   # -- Use ExternalSecrets operator (recommended for production)
+  #   externalSecret:
+  #     enabled: false
+  #     secretStoreRef:
+  #       kind: ClusterSecretStore
+  #       name: sprintfoundry-aws-secretsmanager
+  #     remoteRef: "sprintfoundry/projects/my-project"
+  #   # -- Project config content (contents of project.yaml)
+  #   config: {}
+  #   # -- Use an existing ConfigMap instead
+  #   existingConfigMap: ""
+  #   # -- Resource quota for this project's namespace
+  #   resourceQuota:
+  #     enabled: true
+  #     cpu: "20"
+  #     memory: "40Gi"
+  #     maxJobs: 50
+
+# =============================================================================
+# Agent Job Defaults
+# =============================================================================
+# These configure defaults for agent sandbox Pods/Jobs that the
+# dispatch-controller creates dynamically at runtime.
+# The chart does NOT create agent Jobs — it only provides RBAC and config.
+agentJob:
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "2"
+      memory: "4Gi"
+  workspace:
+    storageClass: ""
+    size: "10Gi"
+    accessMode: ReadWriteOnce
+  ttlSecondsAfterFinished: 1800
+  backoffLimit: 0
+  tolerations:
+    - key: sprintfoundry.io/run
+      operator: Equal
+      value: "true"
+      effect: NoSchedule
+  nodeSelector: {}
+  runtimeClass: ""
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1001
+    readOnlyRootFilesystem: true
+  serviceAccountMode: per_run
+  automountServiceAccountToken: false
+
+# =============================================================================
+# PVC Snapshot to S3
+# =============================================================================
+# When enabled, the dispatch-controller watches for completed agent Jobs and
+# creates snapshot exporter Jobs that tar.gz workspace PVC contents to S3.
+snapshot:
+  enabled: false
+  bucket: ""
+  s3Endpoint: ""
+  s3EndpointInCluster: ""
+  s3Region: "us-east-1"
+  s3ForcePathStyle: false
+  # -- AWS credentials (or use existingSecret / IRSA)
+  awsAccessKeyId: ""
+  awsSecretAccessKey: ""
+  existingSecret: ""
+  existingSecretAccessKeyIdKey: "AWS_ACCESS_KEY_ID"
+  existingSecretSecretAccessKeyKey: "AWS_SECRET_ACCESS_KEY"
+
+# =============================================================================
+# Artifact Upload to S3 (separate from snapshots)
+# =============================================================================
+artifactUpload:
+  enabled: false
+  bucket: ""
+
+# =============================================================================
+# PostgreSQL (Bitnami sub-chart)
+# =============================================================================
+postgresql:
+  enabled: true
+  auth:
+    username: sf
+    password: sf
+    database: sprintfoundry
+
+# -- Use an external PostgreSQL instead of the sub-chart
+externalDatabase:
+  host: ""
+  port: 5432
+  user: ""
+  password: ""
+  database: ""
+  # -- Use an existing secret for the password
+  existingSecret: ""
+  existingSecretPasswordKey: "password"
+
+# =============================================================================
+# Redis (Bitnami sub-chart)
+# =============================================================================
+redis:
+  enabled: true
+  architecture: standalone
+  auth:
+    enabled: false
+
+# -- Use an external Redis instead of the sub-chart
+externalRedis:
+  host: ""
+  port: 6379
+  password: ""
+
+# =============================================================================
+# Database Migration
+# =============================================================================
+migration:
+  enabled: true
+  # -- Additional annotations for the migration Job
+  annotations: {}
+
+# =============================================================================
+# Platform Configuration
+# =============================================================================
+platformConfig:
+  # -- Use an existing ConfigMap instead of creating one
+  existingConfigMap: ""
+  # -- Inline platform.yaml content (used if existingConfigMap is empty)
+  # Defaults to the full production platform config if left empty ({}).
+  # Override individual sections as needed.
+  content: {}
+
+# =============================================================================
+# RBAC
+# =============================================================================
+rbac:
+  # -- Create ClusterRole and ClusterRoleBinding for the dispatch-controller
+  create: true
+
+# =============================================================================
+# Service Account
+# =============================================================================
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# =============================================================================
+# Ingress
+# =============================================================================
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+    # kubernetes.io/ingress.class: nginx
+  host: sprintfoundry.local
+  tls: []
+    # - secretName: sprintfoundry-tls
+    #   hosts:
+    #     - sprintfoundry.local
+
+# =============================================================================
+# Network Policies
+# =============================================================================
+networkPolicy:
+  enabled: false
+
+ciliumNetworkPolicy:
+  enabled: false
+
+# =============================================================================
+# OpenTelemetry
+# =============================================================================
+otel:
+  enabled: false
+  endpoint: "http://otel-collector:4318"
+  protocol: "http/protobuf"

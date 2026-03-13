@@ -1,0 +1,308 @@
+{{- if not .Values.platformConfig.existingConfigMap }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "sprintfoundry.platformConfigMapName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sprintfoundry.labels" . | nindent 4 }}
+data:
+  platform.yaml: |
+    {{- if .Values.platformConfig.content }}
+    {{- .Values.platformConfig.content | toYaml | nindent 4 }}
+    {{- else }}
+    # ============================================================
+    # SprintFoundry — Platform Configuration (defaults)
+    # ============================================================
+
+    defaults:
+      model_per_agent:
+        orchestrator:
+          provider: anthropic
+          model: claude-sonnet-4-5-20250929
+        product:
+          provider: anthropic
+          model: claude-sonnet-4-5-20250929
+        architect:
+          provider: anthropic
+          model: claude-sonnet-4-5-20250929
+        developer:
+          provider: anthropic
+          model: claude-sonnet-4-5-20250929
+        qa:
+          provider: anthropic
+          model: claude-sonnet-4-5-20250929
+        code-review:
+          provider: anthropic
+          model: claude-sonnet-4-5-20250929
+        security:
+          provider: anthropic
+          model: claude-sonnet-4-5-20250929
+        ui-ux:
+          provider: anthropic
+          model: claude-sonnet-4-5-20250929
+        devops:
+          provider: anthropic
+          model: claude-sonnet-4-5-20250929
+
+      budgets:
+        per_agent_tokens: 500000
+        per_task_total_tokens: 3000000
+        per_task_max_cost_usd: 25.00
+
+      timeouts:
+        agent_timeout_minutes: 30
+        task_timeout_minutes: 180
+        human_gate_timeout_hours: 48
+
+      max_rework_cycles: 2
+
+      guardrails:
+        deny_commands: []
+        allow_paths: []
+        deny_paths: []
+
+      agent_cli_flags:
+        max_budget_usd: 5.00
+        output_format: json
+        skip_permissions: true
+
+      container_resources:
+        memory: 4g
+        cpus: "2"
+        network: bridge
+
+      runtime_per_agent:
+        orchestrator:
+          provider: claude-code
+          mode: local_process
+        developer:
+          provider: claude-code
+          mode: local_process
+        qa:
+          provider: claude-code
+          mode: local_process
+        code-review:
+          provider: claude-code
+          mode: local_process
+        security:
+          provider: claude-code
+          mode: local_process
+        product:
+          provider: claude-code
+          mode: local_process
+        architect:
+          provider: claude-code
+          mode: local_process
+        ui-ux:
+          provider: claude-code
+          mode: local_process
+        devops:
+          provider: claude-code
+          mode: local_process
+
+      planner_runtime:
+        provider: claude-code
+        mode: local_process
+
+      codex_skills_enabled: false
+
+    workspace:
+      strategy: tmpdir
+      base_repo_dir: /var/cache/sprintfoundry/repos
+
+    events_dir: .sprintfoundry/events
+
+    k8s:
+      namespace: {{ .Release.Namespace }}
+      workspace_storage_class: {{ .Values.agentJob.workspace.storageClass | quote }}
+      workspace_size: {{ .Values.agentJob.workspace.size | quote }}
+      pod_resources:
+        requests:
+          cpu: {{ .Values.agentJob.resources.requests.cpu | quote }}
+          memory: {{ .Values.agentJob.resources.requests.memory | quote }}
+        limits:
+          cpu: {{ .Values.agentJob.resources.limits.cpu | quote }}
+          memory: {{ .Values.agentJob.resources.limits.memory | quote }}
+      service_account_mode: {{ .Values.agentJob.serviceAccountMode }}
+      automount_service_account_token: {{ .Values.agentJob.automountServiceAccountToken }}
+      default_secret_profile: default
+      secret_profiles:
+        default: []
+
+    lifecycle:
+      enabled: false
+      poll_interval_ms: 30000
+
+    rules:
+      - id: always-qa-after-code
+        description: "A QA-role agent must always run after code changes are produced"
+        condition:
+          type: always
+        action:
+          type: require_role
+          role: qa
+        enforced: true
+
+      - id: security-on-auth
+        description: "Security agent must run when ticket touches auth/payments"
+        condition:
+          type: label_contains
+          value: security
+        action:
+          type: require_agent
+          agent: security
+        enforced: true
+
+      - id: code-review-on-p0
+        description: "Code review agent must run for P0 tickets"
+        condition:
+          type: priority_is
+          values: ["p0"]
+        action:
+          type: require_role
+          role: code-review
+        enforced: true
+
+      - id: human-gate-p0
+        description: "P0 features always require human approval before merge"
+        condition:
+          type: priority_is
+          values: ["p0"]
+        action:
+          type: require_human_gate
+          after_agent: qa
+        enforced: true
+
+    agent_definitions:
+      - type: product
+        name: Product Agent
+        role: product
+        description: "Analyzes tickets, writes product specs and user stories."
+        container_image: sprintfoundry/agent-product:latest
+        capabilities:
+          - Analyze feature requests and bug reports
+          - Write product requirement documents
+          - Define user stories and acceptance criteria
+        output_artifacts:
+          - artifacts/product-spec.md
+          - artifacts/user-stories.md
+        required_inputs:
+          - ticket_details
+
+      - type: architect
+        name: Architecture Agent
+        role: architect
+        description: "Makes technical architecture decisions, designs data models and API contracts."
+        container_image: sprintfoundry/agent-architect:latest
+        capabilities:
+          - Design system architecture
+          - Create data models
+          - Define API contracts
+          - Write architecture decision records
+        output_artifacts:
+          - artifacts/architecture.md
+          - artifacts/api-contracts.yaml
+          - artifacts/data-model.md
+        required_inputs:
+          - ticket_details
+
+      - type: developer
+        name: Developer Agent
+        role: developer
+        stack: js
+        description: "Implements features, fixes bugs, writes production code."
+        container_image: sprintfoundry/agent-developer:latest
+        capabilities:
+          - Write production TypeScript/JavaScript code
+          - Build React/Next.js frontend components
+          - Build API routes and server-side logic
+          - Fix bugs in existing code
+        output_artifacts:
+          - src/
+          - artifacts/handoff/dev-to-qa.md
+        required_inputs:
+          - ticket_details
+          - relevant source files
+
+      - type: qa
+        name: QA Agent
+        role: qa
+        stack: js
+        description: "Writes and runs tests, validates code against requirements."
+        container_image: sprintfoundry/agent-qa:latest
+        capabilities:
+          - Write unit tests
+          - Write integration/API tests
+          - Write E2E tests
+          - Run test suites and report results
+        output_artifacts:
+          - tests/
+          - artifacts/test-report.json
+          - artifacts/bugs.md
+        required_inputs:
+          - ticket_details
+          - source code
+          - acceptance criteria
+
+      - type: security
+        name: Security Agent
+        role: security
+        description: "Scans code for vulnerabilities, reviews auth flows."
+        container_image: sprintfoundry/agent-security:latest
+        capabilities:
+          - Static analysis security scanning
+          - Dependency vulnerability checking
+          - Auth flow review
+          - Secret detection
+        output_artifacts:
+          - artifacts/security-report.json
+        required_inputs:
+          - source code
+
+      - type: code-review
+        name: Code Review Agent
+        role: code-review
+        description: "Senior engineer code review for quality and architecture."
+        container_image: sprintfoundry/agent-code-review:latest
+        capabilities:
+          - Code quality review
+          - Error handling verification
+          - Performance anti-pattern detection
+        output_artifacts:
+          - artifacts/code-review-report.md
+        required_inputs:
+          - source code
+
+      - type: ui-ux
+        name: UI/UX Agent
+        role: ui-ux
+        description: "Designs user interfaces and component specifications."
+        container_image: sprintfoundry/agent-ui-ux:latest
+        capabilities:
+          - Create wireframes and user flows
+          - Design component specifications
+          - Review accessibility
+        output_artifacts:
+          - artifacts/ui-specs/
+          - artifacts/component-specs.md
+        required_inputs:
+          - ticket_details
+
+      - type: devops
+        name: DevOps Agent
+        role: devops
+        description: "Handles CI/CD pipelines and infrastructure-as-code."
+        container_image: sprintfoundry/agent-devops:latest
+        capabilities:
+          - Create/modify CI/CD pipelines
+          - Write Dockerfiles
+          - Configure cloud infrastructure
+        output_artifacts:
+          - infra/
+          - .github/workflows/
+        required_inputs:
+          - architecture docs
+          - source code
+    {{- end }}
+{{- end }}

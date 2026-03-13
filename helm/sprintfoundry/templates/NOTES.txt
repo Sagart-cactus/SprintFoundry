@@ -1,0 +1,50 @@
+SprintFoundry has been installed.
+
+=== Services ===
+
+Dispatch Controller: {{ include "sprintfoundry.fullname" . }}-dispatch-controller:{{ .Values.dispatchController.port }}
+Event API:          {{ include "sprintfoundry.fullname" . }}-event-api:{{ .Values.eventApi.port }}
+Monitor UI:         {{ include "sprintfoundry.fullname" . }}-monitor:{{ .Values.monitor.port }}
+
+=== Access ===
+
+{{- if .Values.ingress.enabled }}
+The services are accessible via ingress at: {{ .Values.ingress.host }}
+  - Dispatch API:  https://{{ .Values.ingress.host }}/api/dispatch
+  - Webhooks:      https://{{ .Values.ingress.host }}/api/webhooks
+  - Event API:     https://{{ .Values.ingress.host }}/api/internal
+  - Monitor UI:    https://{{ .Values.ingress.host }}/
+{{- else }}
+To access the monitor UI locally:
+  kubectl port-forward svc/{{ include "sprintfoundry.fullname" . }}-monitor {{ .Values.monitor.port }}:{{ .Values.monitor.port }} -n {{ .Release.Namespace }}
+  Then open: http://localhost:{{ .Values.monitor.port }}
+
+To access the dispatch controller:
+  kubectl port-forward svc/{{ include "sprintfoundry.fullname" . }}-dispatch-controller {{ .Values.dispatchController.port }}:{{ .Values.dispatchController.port }} -n {{ .Release.Namespace }}
+{{- end }}
+
+=== Projects ===
+
+{{- if .Values.projects }}
+Configured projects:
+{{- range .Values.projects }}
+  - {{ .id }} (namespace: {{ default .id .namespace }})
+{{- end }}
+{{- else }}
+No projects configured. Add projects to values.yaml or create project
+namespaces, secrets, and configmaps manually. See the chart README for details.
+
+Example:
+  projects:
+    - id: my-project
+      apiKeys:
+        anthropicKey: sk-ant-...
+        githubToken: ghp_...
+{{- end }}
+
+=== Next Steps ===
+
+1. Configure at least one project with API keys
+2. Set up a webhook (GitHub/Linear) pointing to:
+   {{ include "sprintfoundry.fullname" . }}-dispatch-controller:{{ .Values.dispatchController.port }}/api/webhooks
+3. Monitor runs at the Monitor UI
