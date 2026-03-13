@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>SprintFoundry — AI Agents That Ship Your Code</title>
-  <meta name="description" content="SprintFoundry orchestrates specialized AI agents to turn tickets into tested pull requests, with live monitor visibility, runtime skill metadata, and OpenTelemetry + Grafana observability." />
+  <meta name="description" content="SprintFoundry is a K8s-native AI agent orchestration platform that turns tickets into tested pull requests. Pluggable execution backends (local, Docker, Kubernetes), Mission Control v4 dashboard, snapshot recovery, and OpenTelemetry observability." />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 44' fill='none'%3E%3Cpath d='M5 16 L13 22 L5 28' stroke='%2394a3b8' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M17 12 L27 22 L17 32' stroke='%2364748b' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M29 8 L43 22 L29 36' stroke='%23f97316' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -925,6 +925,12 @@
       }
       .reveal { opacity: 1; transform: none; }
     }
+
+    .mon-chip.backend {
+      border-color: rgba(139,92,246,0.3);
+      background: rgba(139,92,246,0.08);
+      color: #8b5cf6;
+    }
   </style>
 </head>
 <body>
@@ -943,7 +949,7 @@
       <ul class="nav-links">
         <li><a href="#how">How it works</a></li>
         <li><a href="#whats-new">What's new</a></li>
-        <li><a href="#runtime">Runtimes</a></li>
+        <li><a href="#runtime">Execution</a></li>
         <li><a href="#observability">Observability</a></li>
         <li><a href="#features">Features</a></li>
         <li><a href="#quickstart">Quickstart</a></li>
@@ -959,7 +965,7 @@
     <ul class="nav-mobile-links">
       <li><a href="#how">How it works</a></li>
       <li><a href="#whats-new">What's new</a></li>
-      <li><a href="#runtime">Runtimes</a></li>
+      <li><a href="#runtime">Execution</a></li>
       <li><a href="#observability">Observability</a></li>
       <li><a href="#features">Features</a></li>
       <li><a href="#quickstart">Quickstart</a></li>
@@ -976,7 +982,7 @@
         <div class="hero-content">
           <div class="hero-eyebrow">
             <div class="eyebrow-dot"></div>
-            <span class="eyebrow-text">v0.5.0 shipped</span>
+            <span class="eyebrow-text">K8s-native execution live</span>
           </div>
           <h1 class="hero-headline">
             TICKET<br>IN.<br>
@@ -984,7 +990,7 @@
             OUT.
           </h1>
           <p class="hero-sub">
-            SprintFoundry orchestrates <strong>10 built-in agents</strong> (plus custom ones) to turn backlog tickets into tested, reviewed pull requests with streaming tool activity, runtime skill metadata, and OTel-ready telemetry.
+            SprintFoundry orchestrates <strong>10 built-in agents</strong> across <strong>pluggable execution backends</strong> (local, Docker, Kubernetes) to turn backlog tickets into tested, reviewed pull requests — with Mission Control v4 dashboard, snapshot recovery, and OTel-ready telemetry.
           </p>
           <div class="hero-actions">
             <a href="#quickstart" class="btn btn-primary">Start building →</a>
@@ -996,12 +1002,12 @@
               <div class="stat-label">Built-in agents</div>
             </div>
             <div class="stat">
-              <div class="stat-val">4</div>
-              <div class="stat-label">Ticket sources</div>
+              <div class="stat-val">3</div>
+              <div class="stat-label">Execution backends</div>
             </div>
             <div class="stat">
-              <div class="stat-val">2</div>
-              <div class="stat-label">Runtime providers</div>
+              <div class="stat-val">4</div>
+              <div class="stat-label">Ticket sources</div>
             </div>
           </div>
         </div>
@@ -1013,8 +1019,8 @@
               <!-- Topbar -->
               <div class="mon-topbar">
                   <div>
-                    <div class="mon-title">Run Monitor</div>
-                    <div class="mon-subtitle">Live runs + runtime skill telemetry</div>
+                    <div class="mon-title">Mission Control</div>
+                    <div class="mon-subtitle">Live runs + execution backends + SSE streaming</div>
                   </div>
                 <span class="mon-badge executing">3 active</span>
               </div>
@@ -1040,9 +1046,10 @@
                     <span class="mon-chip running">developer</span>
                     <span class="mon-chip">qa</span>
                     <span class="mon-chip">security</span>
+                    <span class="mon-chip backend">k8s</span>
                   </div>
-                  <div class="mon-card-meta" style="margin-top:5px">Runtime skills: secure-api, code-quality, architecture-alignment · hashes tracked</div>
-                  <div class="mon-card-meta" style="margin-top:5px" id="monAgent1">Active: developer · codex/gpt-5.3-codex · skills:3 · 00:04:12</div>
+                  <div class="mon-card-meta" style="margin-top:5px">Runtime: claude-code · Backend: k8s · Namespace: sf-prod · PVC: run-423-ws</div>
+                  <div class="mon-card-meta" style="margin-top:5px" id="monAgent1">Active: developer · claude-sonnet-4-5 · sandbox: k8s-pod · 00:04:12</div>
                 </div>
 
                 <div class="mon-run-card">
@@ -1061,8 +1068,9 @@
                     <span class="mon-chip">product</span>
                     <span class="mon-chip">developer</span>
                     <span class="mon-chip">qa</span>
+                    <span class="mon-chip backend">docker</span>
                   </div>
-                  <div class="mon-card-meta" style="margin-top:5px">Active: orchestrator · gpt-5.3-codex · 00:00:41</div>
+                  <div class="mon-card-meta" style="margin-top:5px">Active: orchestrator · claude-sonnet-4-5 · backend: docker · 00:00:41</div>
                 </div>
                 <div class="mon-run-card">
                   <div class="mon-card-head">
@@ -1080,8 +1088,9 @@
                     <span class="mon-chip running">architect</span>
                     <span class="mon-chip">developer</span>
                     <span class="mon-chip">qa</span>
+                    <span class="mon-chip backend">local</span>
                   </div>
-                  <div class="mon-card-meta" style="margin-top:5px">Active: architect · claude-sonnet-4-5 · 00:02:14</div>
+                  <div class="mon-card-meta" style="margin-top:5px">Active: architect · claude-sonnet-4-5 · backend: local · 00:02:14</div>
                 </div>
 
                 <!-- Completed lane -->
@@ -1121,7 +1130,7 @@
               </div>
               <!-- Statusbar -->
               <div class="mon-statusbar">
-                <span id="monStatus">5 runs · 3 active · OTel enabled</span>
+                <span id="monStatus">5 runs · 3 active · 2 k8s · 1 docker · SSE live</span>
                 <span id="monRefresh">refreshed just now</span>
               </div>
             </div>
@@ -1164,31 +1173,46 @@
   <section id="whats-new">
     <div class="container">
       <div class="section-header reveal">
-        <span class="section-label">Latest release</span>
-        <h2 class="section-title">WHAT'S NEW SINCE V0.4</h2>
-        <p class="section-sub">SprintFoundry has shipped significant platform updates after the last website refresh. Here are the highest-impact additions now live.</p>
+        <span class="section-label">March 2026</span>
+        <h2 class="section-title">WHAT'S NEW THIS WEEK</h2>
+        <p class="section-sub">49 commits shipped since March 6. K8s-native execution, Mission Control v4, snapshot recovery, and more.</p>
       </div>
       <div class="release-grid">
         <article class="release-card reveal">
-          <div class="release-kicker">v0.5.0</div>
-          <h3 class="release-title">Hybrid Skills for Claude + Codex</h3>
-          <p class="release-desc">Runtime-agnostic skill assignments now stage repo-native skills for both runtimes, with per-skill hashes and warnings surfaced in monitor metadata.</p>
+          <div class="release-kicker">execution</div>
+          <h3 class="release-title">Pluggable Execution Backends</h3>
+          <p class="release-desc">A clean contract layer lets the orchestration service dispatch agent work to local processes, Docker containers, or Kubernetes pods — chosen per-project via env var, YAML, or CLI flag.</p>
         </article>
         <article class="release-card reveal reveal-delay-1">
-          <div class="release-kicker">v0.5.0</div>
-          <h3 class="release-title">OpenTelemetry + Grafana Stack</h3>
-          <p class="release-desc">Service-level orchestration metrics and runtime pass-through telemetry can now flow into OTLP collectors, Prometheus, and the bundled Grafana dashboard.</p>
+          <div class="release-kicker">k8s</div>
+          <h3 class="release-title">Kubernetes Pod Execution</h3>
+          <p class="release-desc">PVC-backed workspaces, service account secret projection, namespace isolation, configurable egress network policies, and pod-level sandbox recovery.</p>
         </article>
         <article class="release-card reveal reveal-delay-2">
-          <div class="release-kicker">v0.4+</div>
-          <h3 class="release-title">Operator Workflow Upgrades</h3>
-          <p class="release-desc">`doctor` preflight checks, custom agent creation, and direct single-agent execution make setup and targeted runs much faster for real teams.</p>
+          <div class="release-kicker">dashboard</div>
+          <h3 class="release-title">Mission Control v4 Dashboard</h3>
+          <p class="release-desc">Complete React + Vite + Tailwind rewrite. Run dashboard with filtering, run detail with agent activity and file diffs, agent monitoring view, real-time SSE streaming.</p>
+        </article>
+        <article class="release-card reveal">
+          <div class="release-kicker">reliability</div>
+          <h3 class="release-title">Whole-Run Snapshot & Recovery</h3>
+          <p class="release-desc">Export and restore entire run state. Resume interrupted runs from the last checkpoint. PVC snapshot plans for K8s workspaces keep agent work durable.</p>
+        </article>
+        <article class="release-card reveal reveal-delay-1">
+          <div class="release-kicker">cli</div>
+          <h3 class="release-title">Generic Direct-Run Agent</h3>
+          <p class="release-desc">Skip the full SDLC orchestration pipeline for targeted tasks. Run any agent directly from the CLI with a prompt — the default mode for single-agent runs.</p>
+        </article>
+        <article class="release-card reveal reveal-delay-2">
+          <div class="release-kicker">observability</div>
+          <h3 class="release-title">Sandbox Lifecycle Metrics</h3>
+          <p class="release-desc">Track sandbox creation, attachment, teardown, and recovery events through the OTel pipeline. Per-backend provisioning timing surfaced in metrics.</p>
         </article>
       </div>
       <div class="release-links reveal reveal-delay-3">
         <a href="https://github.com/Sagart-cactus/SprintFoundry/releases">Release notes ↗</a>
-        <a href="https://github.com/Sagart-cactus/SprintFoundry/blob/main/docs/metrics.md">Metrics docs ↗</a>
-        <a href="https://github.com/Sagart-cactus/SprintFoundry/blob/main/docs/skills-hybrid-execution-plan.md">Skills rollout docs ↗</a>
+        <a href="https://github.com/Sagart-cactus/SprintFoundry/blob/main/docs/decisions.md">Execution backends docs ↗</a>
+        <a href="https://github.com/Sagart-cactus/SprintFoundry/blob/main/docs/sprintfoundry-k8s-multitenant-plan.md">K8s multi-tenant plan ↗</a>
       </div>
     </div>
   </section>
@@ -1358,50 +1382,46 @@
     <div class="container">
       <div class="runtime-grid">
         <div class="reveal">
-          <span class="section-label">Runtime flexibility</span>
-          <h2 class="section-title" style="font-size: clamp(30px, 4vw, 50px);">YOUR AI.<br>YOUR WAY.</h2>
-          <p class="section-sub" style="margin-bottom: 32px;">Use Anthropic/OpenAI per agent, set models in YAML, and override planner/runtime per project.</p>
+          <span class="section-label">Execution backends</span>
+          <h2 class="section-title" style="font-size: clamp(30px, 4vw, 50px);">LOCAL. DOCKER.<br>K8S.</h2>
+          <p class="section-sub" style="margin-bottom: 32px;">A pluggable execution contract lets you run agents anywhere — from local processes for development to Kubernetes pods for production. Switch backends per-project with a single config line.</p>
           <ul class="runtime-points">
-            <li><div><strong>Per-agent runtime overrides.</strong> Mix `claude-code` and `codex` in one run graph, including planner override.</div></li>
-            <li><div><strong>Model pinning per role.</strong> Set exact model IDs with `model_overrides` for each agent.</div></li>
-            <li><div><strong>Runtime skill metadata in monitor.</strong> Inspect staged skill names, warnings, and hashes per step for Claude and Codex.</div></li>
-            <li><div><strong>BYOK + session auth.</strong> Use `SPRINTFOUNDRY_*` keys or logged-in local sessions where supported.</div></li>
+            <li><div><strong>Three backends, one contract.</strong> LocalExecutionBackend, DockerExecutionBackend, and KubernetesPodExecutionBackend all implement the same ExecutionBackend interface.</div></li>
+            <li><div><strong>K8s-native isolation.</strong> Namespace isolation, egress network profiles, service account secret projection, and configurable isolation levels.</div></li>
+            <li><div><strong>PVC-backed workspaces.</strong> Agent workspaces persist on Kubernetes PersistentVolumeClaims, enabling recovery, reattach, and snapshot export.</div></li>
+            <li><div><strong>Sandbox lifecycle management.</strong> prepareRunEnvironment, executeStep, pauseRun, resumeRun, teardownRun — all handled by the backend.</div></li>
           </ul>
         </div>
         <div class="runtime-matrix reveal reveal-delay-2">
           <div class="runtime-cell">
-            <div class="rc-label">Runtime A</div>
-            <div class="rc-title">Claude Code Runtime</div>
-            <p class="rc-desc">Supports `local_process` (CLI subprocess), `local_sdk` (in-process SDK), and optional `container` mode for isolation.</p>
+            <div class="rc-label">BACKEND: LOCAL</div>
+            <div class="rc-title">Local Execution</div>
+            <p class="rc-desc">CLI subprocess or in-process SDK. Zero infrastructure. Ideal for development and single-agent direct runs.</p>
             <div class="rc-models">
-              <span class="rc-model claude">claude-sonnet-4-5-20250929</span>
-              <span class="rc-model claude">claude-opus-4-5-20250929</span>
+              <span class="rc-model claude">local_process</span>
+              <span class="rc-model claude">local_sdk</span>
+              <span class="rc-model claude">zero-config</span>
             </div>
           </div>
           <div class="runtime-cell">
-            <div class="rc-label">Runtime B</div>
-            <div class="rc-title">Codex Runtime</div>
-            <p class="rc-desc">Supports `local_process` (`codex exec`) and `local_sdk`, with reasoning-effort controls for Codex models.</p>
+            <div class="rc-label">BACKEND: DOCKER</div>
+            <div class="rc-title">Docker Execution</div>
+            <p class="rc-desc">Each agent runs in an isolated container with mounted workspace volume. Provides process and filesystem isolation without K8s overhead.</p>
             <div class="rc-models">
-              <span class="rc-model codex">gpt-5.3-codex</span>
-              <span class="rc-model codex">reasoning configurable</span>
+              <span class="rc-model codex">container isolation</span>
+              <span class="rc-model codex">volume mounts</span>
             </div>
           </div>
-          <div class="runtime-cell" style="grid-column: 1 / -1; border-top: 1px solid var(--border);">
-            <div class="rc-label">Execution modes</div>
-            <div style="display:grid; grid-template-columns: repeat(3,1fr); gap: 16px; margin-top: 4px;">
-              <div>
-                <div class="rc-title" style="font-size:13px">local_process</div>
-                <p class="rc-desc" style="font-size:12px">CLI subprocess mode (`claude` / `codex exec`) with full run artifacts and logging.</p>
-              </div>
-              <div>
-                <div class="rc-title" style="font-size:13px">local_sdk</div>
-                <p class="rc-desc" style="font-size:12px">In-process SDK runtime with guardrails, lower overhead, and streamed responses.</p>
-              </div>
-              <div>
-                <div class="rc-title" style="font-size:13px">container</div>
-                <p class="rc-desc" style="font-size:12px">Optional isolated mode for Claude runtime (available, but not required for local runs).</p>
-              </div>
+          <div class="runtime-cell highlight" style="grid-column: 1 / -1; border-color: var(--border-hot);">
+            <div class="rc-label" style="color: var(--forge);">BACKEND: K8S</div>
+            <div class="rc-title">Kubernetes Pod Execution</div>
+            <p class="rc-desc">Production-grade agent orchestration. PVC-backed workspaces, service account secret projection, namespace isolation, egress network policies, and pod-level sandbox recovery and reattach.</p>
+            <div class="rc-models">
+              <span class="rc-model claude">PVC workspaces</span>
+              <span class="rc-model claude">secret projection</span>
+              <span class="rc-model codex">namespace isolation</span>
+              <span class="rc-model codex">egress policies</span>
+              <span class="rc-model claude">sandbox recovery</span>
             </div>
           </div>
         </div>
@@ -1463,6 +1483,7 @@
             <li><div><strong>Planner + validator split.</strong> Orchestrator plans steps; rules enforce required safety checks.</div></li>
             <li><div><strong>Artifacts + events are auditable.</strong> Workspace outputs and run events/logs feed monitor and review.</div></li>
             <li><div><strong>Human gates + rework are native.</strong> Runs can pause for review and re-route failed work.</div></li>
+            <li><div><strong>Pluggable execution backends.</strong> Switch from local to Docker to K8s per project. Same contract, same agent code, different isolation levels.</div></li>
           </ul>
         </div>
         <div class="arch-diagram reveal reveal-delay-2">
@@ -1490,6 +1511,16 @@
               <span style="background: var(--bg2); padding: 2px 8px; border-radius: 2px; font-size: 10px;">qa</span>
               <span style="background: var(--bg2); padding: 2px 8px; border-radius: 2px; font-size: 10px;">security</span>
               <span style="background: var(--bg2); padding: 2px 8px; border-radius: 2px; font-size: 10px;">devops</span>
+            </div>
+          </div>
+          <div class="layer-arrow">↓</div>
+          <div class="arch-layer" style="border-color: rgba(139,92,246,0.3); background: rgba(139,92,246,0.04);">
+            <div class="layer-label">execution backends</div>
+            <div class="layer-name" style="color: #8b5cf6;">Pluggable Sandbox Backends</div>
+            <div style="font-size: 11px; color: var(--muted); margin-top: 6px; display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px;">
+              <span style="background: var(--bg2); padding: 2px 8px; border-radius: 2px; font-size: 10px;">local</span>
+              <span style="background: var(--bg2); padding: 2px 8px; border-radius: 2px; font-size: 10px;">docker</span>
+              <span style="background: var(--bg2); padding: 2px 8px; border-radius: 2px; font-size: 10px; border: 1px solid rgba(139,92,246,0.3);">kubernetes</span>
             </div>
           </div>
           <div class="layer-arrow">↓</div>
@@ -1524,10 +1555,10 @@
           <span class="feature-tag">Deterministic gates</span>
         </div>
         <div class="feature-card reveal reveal-delay-2">
-          <div class="feature-icon"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="6" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="6" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="10" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="6" x2="15" y2="6"/><line x1="17" y1="16" x2="23" y2="16"/></svg></div>
-          <div class="feature-title">Per-Agent Runtime Overrides</div>
-          <p class="feature-desc">Run each step on `claude-code` or `codex` with `local_process` / `local_sdk` (+ optional container mode).</p>
-          <span class="feature-tag">Mix providers</span>
+          <div class="feature-icon"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>
+          <div class="feature-title">K8s-Native Execution</div>
+          <p class="feature-desc">Run agents as Kubernetes pods with PVC workspaces, namespace isolation, egress policies, and service account secret projection.</p>
+          <span class="feature-tag">Production-grade</span>
         </div>
         <div class="feature-card reveal reveal-delay-3">
           <div class="feature-icon"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div>
@@ -1566,10 +1597,10 @@
           <span class="feature-tag">Traceable output</span>
         </div>
         <div class="feature-card reveal reveal-delay-3">
-          <div class="feature-icon"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg></div>
-          <div class="feature-title">Plugin + Skill System</div>
-          <p class="feature-desc">Use runtime-agnostic skill assignments with repo-native discovery for Codex and Claude, plus warnings/hashes surfaced in monitor for auditability.</p>
-          <span class="feature-tag">Extensible</span>
+          <div class="feature-icon"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg></div>
+          <div class="feature-title">Snapshot & Recovery</div>
+          <p class="feature-desc">Export and restore whole-run state. Resume interrupted runs from checkpoints. PVC snapshots for K8s workspace durability.</p>
+          <span class="feature-tag">Fault-tolerant</span>
         </div>
         <div class="feature-card reveal reveal-delay-4">
           <div class="feature-icon"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></div>
@@ -1578,10 +1609,10 @@
           <span class="feature-tag">Fast onboarding</span>
         </div>
         <div class="feature-card reveal reveal-delay-5">
-          <div class="feature-icon"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></div>
-          <div class="feature-title">Custom Agent Catalog</div>
-          <p class="feature-desc">Agent IDs are free-form. Add stack-specific agents and tune catalog per project.</p>
-          <span class="feature-tag">Beyond defaults</span>
+          <div class="feature-icon"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></div>
+          <div class="feature-title">Direct Agent Mode</div>
+          <p class="feature-desc">Skip full SDLC orchestration. Run any agent directly from CLI for targeted tasks — the default for single-agent runs.</p>
+          <span class="feature-tag">Flexible workflow</span>
         </div>
       </div>
     </div>
@@ -1666,6 +1697,17 @@
 <span class="code-cmd">sprintfoundry</span> run <span class="code-flag">--project</span> <span class="code-str">my-saas-app</span> \
   <span class="code-flag">--source</span> linear <span class="code-flag">--ticket</span> <span class="code-str">LIN-423</span> <span class="code-flag">--dry-run</span>
 
+<span class="code-comment"># Run with Docker execution backend</span>
+<span class="code-cmd">SPRINTFOUNDRY_EXECUTION_BACKEND</span>=docker <span class="code-cmd">sprintfoundry</span> run \
+  <span class="code-flag">--project</span> <span class="code-str">my-saas-app</span> <span class="code-flag">--source</span> linear <span class="code-flag">--ticket</span> <span class="code-str">LIN-423</span>
+
+<span class="code-comment"># Run with Kubernetes execution backend</span>
+<span class="code-cmd">SPRINTFOUNDRY_EXECUTION_BACKEND</span>=k8s <span class="code-cmd">sprintfoundry</span> run \
+  <span class="code-flag">--project</span> <span class="code-str">my-saas-app</span> <span class="code-flag">--source</span> linear <span class="code-flag">--ticket</span> <span class="code-str">LIN-423</span>
+
+<span class="code-comment"># Export a run snapshot for recovery</span>
+<span class="code-cmd">sprintfoundry</span> snapshot <span class="code-flag">--export</span> <span class="code-str">run-423</span>
+
 <span class="code-comment"># Run a single agent (skip full SDLC)</span>
 <span class="code-cmd">sprintfoundry</span> run <span class="code-flag">--project</span> <span class="code-str">my-saas-app</span> \
   <span class="code-flag">--source</span> prompt <span class="code-flag">--prompt</span> <span class="code-str">"Review auth logic"</span> <span class="code-flag">--agent</span> <span class="code-str">security</span>
@@ -1706,7 +1748,7 @@
             Read release notes
           </a>
         </div>
-        <p class="cta-note">Open source · Self-hosted · BYOK · No vendor lock-in</p>
+        <p class="cta-note">Open source · Self-hosted · BYOK · K8s-native · No vendor lock-in</p>
       </div>
     </div>
   </section>
@@ -1754,7 +1796,7 @@
       const m = String(Math.floor(runSec / 60)).padStart(2, '0');
       const s = String(runSec % 60).padStart(2, '0');
       const el = document.getElementById('monAgent1');
-      if (el) el.textContent = `Active: developer · codex/gpt-5.3-codex · skills:3 · 00:${m}:${s}`;
+      if (el) el.textContent = `Active: developer · claude-sonnet-4-5 · k8s-pod · 00:${m}:${s}`;
       // Slowly advance the progress bar
       const bar = document.getElementById('monBar1');
       if (bar) {
@@ -1770,7 +1812,7 @@
           <span class="mon-chip done">developer</span>
           <span class="mon-chip running">qa</span>
           <span class="mon-chip">security</span>`;
-        if (el) el.textContent = 'Active: qa · claude/local_sdk · skills:2 · 00:00:03';
+        if (el) el.textContent = 'Active: qa · claude-sonnet-4-5 · k8s-pod · 00:00:03';
         const bar2 = document.getElementById('monBar1');
         if (bar2) bar2.style.width = '75%';
         runSec = 0;
