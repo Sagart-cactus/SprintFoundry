@@ -174,6 +174,52 @@ describe("SessionManager", () => {
     expect(session!.workspace_path).toBe("/tmp/ws2");
   });
 
+  it("marks terminal runs as pending snapshot by default", async () => {
+    const mgr = new SessionManager(testDir);
+    const run = makeRun({
+      run_id: "run-terminal-snapshot",
+      status: "completed",
+      completed_at: new Date("2026-02-27T10:05:00Z"),
+    });
+
+    await mgr.persist(run, { workspace_path: "/tmp/ws-terminal" });
+
+    const session = await mgr.get("run-terminal-snapshot");
+    expect(session?.terminal_workflow_state).toBe("terminal_pending_snapshot");
+    expect(session?.durable_snapshot).toBeNull();
+  });
+
+  it("preserves existing snapshot metadata across normal run persistence", async () => {
+    const mgr = new SessionManager(testDir);
+    const run = makeRun({
+      run_id: "run-preserve-snapshot",
+      status: "completed",
+      completed_at: new Date("2026-02-27T10:05:00Z"),
+    });
+
+    await mgr.persist(run, { workspace_path: "/tmp/ws-preserve" });
+    await mgr.updateSnapshotState("run-preserve-snapshot", {
+      terminal_workflow_state: "snapshot_completed",
+      durable_snapshot: {
+        status: "completed",
+        backend: "s3",
+        bucket: "snapshot-bucket",
+        terminal_status: "completed",
+        manifest_key: "manifest.json",
+        archive_key: "workspace.tar.gz",
+        session_key: "session.json",
+        exported_at: "2026-02-27T10:06:00.000Z",
+      },
+    });
+
+    run.total_tokens_used = 42;
+    await mgr.persist(run, { workspace_path: "/tmp/ws-preserve" });
+
+    const session = await mgr.get("run-preserve-snapshot");
+    expect(session?.terminal_workflow_state).toBe("snapshot_completed");
+    expect(session?.durable_snapshot?.manifest_key).toBe("manifest.json");
+  });
+
   it("returns null for nonexistent session", async () => {
     const mgr = new SessionManager(testDir);
     const session = await mgr.get("nonexistent");

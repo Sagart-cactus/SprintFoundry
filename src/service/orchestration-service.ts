@@ -64,6 +64,12 @@ import type {
 
 const RUN_STATE_DIR = ".sprintfoundry";
 const RUN_STATE_FILE = "run-state.json";
+const SKIP_PR_FINALIZATION_ENV = "SPRINTFOUNDRY_SKIP_PR_FINALIZATION";
+
+function isTruthy(value: string | undefined): boolean {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
+}
 
 interface ExecutePlanOptions {
   initialCompletedSteps?: Set<number>;
@@ -310,6 +316,11 @@ export class OrchestrationService {
   }
 
   private async finalizeCompletedRun(run: TaskRun, workspacePath: string): Promise<void> {
+    if (isTruthy(process.env[SKIP_PR_FINALIZATION_ENV])) {
+      this.persistSession(run, { workspace_path: workspacePath });
+      return;
+    }
+
     if (!run.pr_url) {
       const gitStart = Date.now();
       try {
@@ -701,14 +712,7 @@ export class OrchestrationService {
     await this.executePlan(run, plan, workspacePath);
 
     if ((run.status as string) === "completed") {
-      const prUrl = await this.createPullRequest(workspacePath, run);
-      run.pr_url = prUrl;
-      await this.emitEvent(run.run_id, "pr.created", { prUrl });
-      await this.updateTicketStatus(ticket, "in_review", prUrl);
-      await this.sendNotification(`Task ${ticket.id} completed. PR: ${prUrl}`);
-
-      // Start lifecycle monitoring for this PR (non-blocking)
-      this.startLifecycleWatch(run, workspacePath);
+      await this.finalizeCompletedRun(run, workspacePath);
     }
 
     return run;

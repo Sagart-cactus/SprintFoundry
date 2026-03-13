@@ -563,6 +563,12 @@ export type EventType =
   | "agent_guardrail_block"
   | "agent.token_limit_warning"
   | "agent.token_limit_exceeded"
+  | "workspace.snapshot.started"
+  | "workspace.snapshot.completed"
+  | "workspace.snapshot.failed"
+  | "workspace.snapshot.restored"
+  | "workspace.cleanup.completed"
+  | "workspace.cleanup.failed"
   | "human_gate.requested"
   | "human_gate.approved"
   | "human_gate.rejected"
@@ -595,6 +601,31 @@ export interface ActivityDetection {
   detail?: string;
 }
 
+export type TerminalWorkflowState =
+  | "running"
+  | "terminal_pending_snapshot"
+  | "snapshot_uploading"
+  | "snapshot_completed"
+  | "cleanup_completed"
+  | "snapshot_failed";
+
+export interface DurableSnapshotMetadata {
+  status: "pending" | "uploading" | "completed" | "failed";
+  backend: "s3";
+  bucket: string;
+  endpoint?: string | null;
+  region?: string | null;
+  manifest_key?: string | null;
+  archive_key?: string | null;
+  session_key?: string | null;
+  archive_sha256?: string | null;
+  archive_size_bytes?: number | null;
+  terminal_status: "completed" | "failed" | "cancelled";
+  exported_at?: string | null;
+  restore_hint?: string | null;
+  error?: string | null;
+}
+
 export interface RunSessionMetadata {
   run_id: string;
   project_id: string;
@@ -614,6 +645,8 @@ export interface RunSessionMetadata {
   updated_at: string;
   completed_at: string | null;
   error: string | null;
+  terminal_workflow_state?: TerminalWorkflowState;
+  durable_snapshot?: DurableSnapshotMetadata | null;
 }
 
 // ----- Reaction Engine Configuration -----
