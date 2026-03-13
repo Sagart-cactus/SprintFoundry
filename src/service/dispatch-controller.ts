@@ -131,7 +131,19 @@ export interface K8sJobManifest {
           imagePullPolicy: string;
           command: string[];
           args: string[];
-          env: Array<{ name: string; value: string }>;
+          env: Array<
+            | { name: string; value: string }
+            | {
+                name: string;
+                valueFrom: {
+                  secretKeyRef: {
+                    name: string;
+                    key: string;
+                    optional?: boolean;
+                  };
+                };
+              }
+          >;
           envFrom: Array<{ secretRef: { name: string } }>;
           volumeMounts: Array<{ name: string; mountPath: string; readOnly?: boolean }>;
           resources: {
@@ -445,7 +457,6 @@ export function buildK8sJobManifest(task: DispatchQueueItem, options?: {
   workspaceSizeLimit?: string;
   workspaceStorageClassName?: string;
   eventSinkUrl?: string;
-  internalApiToken?: string;
 }): K8sJobManifest {
   const namespace = asString(options?.namespace) || "default";
   const image = asString(options?.image) || "sprintfoundry-runner:latest";
@@ -453,7 +464,6 @@ export function buildK8sJobManifest(task: DispatchQueueItem, options?: {
   const projectConfigMapName = asString(options?.projectConfigMapName) || `sprintfoundry-project-${task.project_id}-config`;
   const workspacePvcName = makeRunWorkspacePvcName(task.run_id);
   const eventSinkUrl = asString(options?.eventSinkUrl) || asString(process.env[EVENT_SINK_URL_ENV]);
-  const internalApiToken = asString(options?.internalApiToken) || asString(process.env[INTERNAL_API_TOKEN_ENV]);
 
   const args = ["run", "--source", task.source, "--config", "/config"];
 
@@ -518,8 +528,17 @@ export function buildK8sJobManifest(task: DispatchQueueItem, options?: {
                 { name: "HOME", value: "/workspace/home" },
                 { name: "CODEX_HOME", value: "/workspace/home/.codex" },
                 ...(eventSinkUrl ? [{ name: EVENT_SINK_URL_ENV, value: eventSinkUrl }] : []),
-                ...(eventSinkUrl && internalApiToken
-                  ? [{ name: INTERNAL_API_TOKEN_ENV, value: internalApiToken }]
+                ...(eventSinkUrl
+                  ? [{
+                      name: INTERNAL_API_TOKEN_ENV,
+                      valueFrom: {
+                        secretKeyRef: {
+                          name: projectSecretName,
+                          key: INTERNAL_API_TOKEN_ENV,
+                          optional: true,
+                        },
+                      },
+                    }]
                   : []),
                 ...(asString(process.env[SKIP_PR_FINALIZATION_ENV])
                   ? [{ name: SKIP_PR_FINALIZATION_ENV, value: asString(process.env[SKIP_PR_FINALIZATION_ENV]) }]
@@ -1089,7 +1108,6 @@ class DispatchController implements DispatchControllerRuntime {
       const secretName = asString(process.env.SPRINTFOUNDRY_K8S_PROJECT_SECRET_NAME) || `sprintfoundry-project-${task.project_id}-secrets`;
       const configMapName = asString(process.env.SPRINTFOUNDRY_K8S_PROJECT_CONFIGMAP_NAME) || `sprintfoundry-project-${task.project_id}-config`;
       const eventSinkUrl = asString(process.env[EVENT_SINK_URL_ENV]) || asString(project?.eventSinkUrl);
-      const internalApiToken = asString(process.env[INTERNAL_API_TOKEN_ENV]);
       const manifest = buildK8sJobManifest(task, {
         namespace,
         image: this.runnerImage,
@@ -1097,7 +1115,6 @@ class DispatchController implements DispatchControllerRuntime {
         projectConfigMapName: configMapName,
         serviceAccountName: asString(process.env.SPRINTFOUNDRY_K8S_SERVICE_ACCOUNT) || undefined,
         eventSinkUrl: eventSinkUrl || undefined,
-        internalApiToken: internalApiToken || undefined,
       });
       await this.createK8sJob(manifest, task, namespace);
       return;

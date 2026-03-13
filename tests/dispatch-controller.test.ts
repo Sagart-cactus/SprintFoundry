@@ -645,14 +645,22 @@ describe("dispatch-controller", () => {
         projectSecretName: "proj-secret",
         projectConfigMapName: "proj-config",
         eventSinkUrl: "https://sink.example/events",
-        internalApiToken: "internal-token",
       },
     );
 
     expect(manifest.spec.template.spec.containers[0]?.env).toEqual(
       expect.arrayContaining([
         { name: "SPRINTFOUNDRY_EVENT_SINK_URL", value: "https://sink.example/events" },
-        { name: "SPRINTFOUNDRY_INTERNAL_API_TOKEN", value: "internal-token" },
+        {
+          name: "SPRINTFOUNDRY_INTERNAL_API_TOKEN",
+          valueFrom: {
+            secretKeyRef: {
+              name: "proj-secret",
+              key: "SPRINTFOUNDRY_INTERNAL_API_TOKEN",
+              optional: true,
+            },
+          },
+        },
       ]),
     );
   });
@@ -721,7 +729,16 @@ describe("dispatch-controller", () => {
     expect(createdJobs[0]?.spec.template.spec.containers[0]?.env).toEqual(
       expect.arrayContaining([
         { name: "SPRINTFOUNDRY_EVENT_SINK_URL", value: "https://sink.example/from-config" },
-        { name: "SPRINTFOUNDRY_INTERNAL_API_TOKEN", value: "internal-token" },
+        {
+          name: "SPRINTFOUNDRY_INTERNAL_API_TOKEN",
+          valueFrom: {
+            secretKeyRef: {
+              name: "sprintfoundry-project-live-gaps-worktree-secrets",
+              key: "SPRINTFOUNDRY_INTERNAL_API_TOKEN",
+              optional: true,
+            },
+          },
+        },
       ]),
     );
 
