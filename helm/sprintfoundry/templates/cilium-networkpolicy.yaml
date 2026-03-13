@@ -1,0 +1,32 @@
+{{- if .Values.ciliumNetworkPolicy.enabled }}
+# Template for Cilium FQDN-based egress policies for agent Jobs.
+# The dispatch-controller creates per-run CiliumNetworkPolicies dynamically.
+# This template serves as documentation and a default policy for the
+# control plane namespace.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "sprintfoundry.fullname" . }}-control-plane-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sprintfoundry.labels" . | nindent 4 }}
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  egress:
+    - toFQDNs:
+        - matchName: api.anthropic.com
+        - matchName: api.openai.com
+        - matchName: github.com
+        - matchName: api.github.com
+        - matchName: api.linear.app
+    - toEndpoints:
+        - matchLabels:
+            "k8s:io.kubernetes.pod.namespace": kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+{{- end }}

@@ -1,0 +1,98 @@
+{{- range .Values.projects }}
+{{- $project := . }}
+{{- $ns := default $project.id $project.namespace }}
+---
+# Namespace for project: {{ $project.id }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $ns }}
+  labels:
+    sprintfoundry.io/project-id: {{ $project.id | quote }}
+---
+{{- if and (not $project.existingSecret) (not (and $project.externalSecret $project.externalSecret.enabled)) }}
+# Secret with API keys for project: {{ $project.id }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sprintfoundry-project-{{ $project.id }}-secrets
+  namespace: {{ $ns }}
+  labels:
+    sprintfoundry.io/project-id: {{ $project.id | quote }}
+type: Opaque
+stringData:
+  {{- if and $project.apiKeys $project.apiKeys.anthropicKey }}
+  ANTHROPIC_API_KEY: {{ $project.apiKeys.anthropicKey | quote }}
+  {{- end }}
+  {{- if and $project.apiKeys $project.apiKeys.openaiKey }}
+  OPENAI_API_KEY: {{ $project.apiKeys.openaiKey | quote }}
+  {{- end }}
+  {{- if and $project.apiKeys $project.apiKeys.googleKey }}
+  GOOGLE_API_KEY: {{ $project.apiKeys.googleKey | quote }}
+  {{- end }}
+  {{- if and $project.apiKeys $project.apiKeys.githubToken }}
+  GITHUB_TOKEN: {{ $project.apiKeys.githubToken | quote }}
+  {{- end }}
+  {{- if and $project.apiKeys $project.apiKeys.linearApiKey }}
+  LINEAR_API_KEY: {{ $project.apiKeys.linearApiKey | quote }}
+  {{- end }}
+  {{- if and $project.apiKeys $project.apiKeys.jiraApiToken }}
+  JIRA_API_TOKEN: {{ $project.apiKeys.jiraApiToken | quote }}
+  {{- end }}
+{{- end }}
+---
+{{- if and $project.externalSecret $project.externalSecret.enabled }}
+# ExternalSecret for project: {{ $project.id }}
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: project-external-secrets
+  namespace: {{ $ns }}
+  labels:
+    sprintfoundry.io/project-id: {{ $project.id | quote }}
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: {{ $project.externalSecret.secretStoreRef.kind | default "ClusterSecretStore" }}
+    name: {{ $project.externalSecret.secretStoreRef.name }}
+  target:
+    name: sprintfoundry-project-{{ $project.id }}-secrets
+    creationPolicy: Owner
+  dataFrom:
+    - find:
+        path: {{ $project.externalSecret.remoteRef | quote }}
+{{- end }}
+---
+{{- if and (not $project.existingConfigMap) $project.config }}
+# ConfigMap for project: {{ $project.id }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sprintfoundry-project-{{ $project.id }}-config
+  namespace: {{ $ns }}
+  labels:
+    sprintfoundry.io/project-id: {{ $project.id | quote }}
+data:
+  project.yaml: |
+    {{- $project.config | toYaml | nindent 4 }}
+{{- end }}
+---
+{{- $rq := $project.resourceQuota | default dict }}
+{{- if ne (default true $rq.enabled) false }}
+# ResourceQuota for project: {{ $project.id }}
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: project-quota
+  namespace: {{ $ns }}
+  labels:
+    sprintfoundry.io/project-id: {{ $project.id | quote }}
+spec:
+  hard:
+    requests.cpu: {{ default "20" $rq.cpu | quote }}
+    limits.cpu: {{ default "20" $rq.cpu | quote }}
+    requests.memory: {{ default "40Gi" $rq.memory }}
+    limits.memory: {{ default "40Gi" $rq.memory }}
+    count/jobs.batch: {{ default "50" $rq.maxJobs | quote }}
+{{- end }}
+{{- end }}

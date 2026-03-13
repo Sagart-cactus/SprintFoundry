@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "sprintfoundry.fullname" . }}-test
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sprintfoundry.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  containers:
+    - name: test
+      image: busybox:1.36
+      command: ["sh", "-c"]
+      args:
+        - |
+          echo "Testing dispatch-controller..."
+          wget -q --spider --timeout=5 http://{{ include "sprintfoundry.fullname" . }}-dispatch-controller:{{ .Values.dispatchController.port }}/healthz || exit 1
+          echo "dispatch-controller: OK"
+
+          echo "Testing event-api..."
+          wget -q --spider --timeout=5 http://{{ include "sprintfoundry.fullname" . }}-event-api:{{ .Values.eventApi.port }}/healthz || exit 1
+          echo "event-api: OK"
+
+          echo "Testing monitor..."
+          wget -q --spider --timeout=5 http://{{ include "sprintfoundry.fullname" . }}-monitor:{{ .Values.monitor.port }}/healthz || exit 1
+          echo "monitor: OK"
+
+          echo "All services healthy."
