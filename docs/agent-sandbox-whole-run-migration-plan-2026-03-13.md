@@ -144,6 +144,84 @@ The sandbox becomes the whole-run host and owns:
 - artifacts
 - workspace-scoped runtime state such as `.codex-home`
 
+### Skills injection and staging
+
+This migration must preserve the current runtime skill model rather than re-invent it.
+
+Current SprintFoundry behavior:
+
+- the runner resolves runtime skills per agent before execution
+- Codex skills are staged into `<workspace>/.codex-home/skills`
+- Claude skills are staged into `<workspace>/.claude/skills`
+- the instruction file in the workspace gets a `## Runtime Skills` section for traceability
+
+For Agent Sandbox whole-run hosting, the same resolution chain should remain:
+
+1. platform skill catalog baked into the runner image
+2. project config mounted into the sandbox
+3. project-specific skill sources mounted into the sandbox
+4. repo-native skills discovered after clone
+5. skill assignments and guardrails evaluated inside the sandbox
+
+Design implications:
+
+- do not couple skills to the Sandbox CRD itself
+- keep skills as runner-level workspace preparation
+- ensure the sandbox template mounts any project-level custom skill sources the same way the current Job path does
+- include runtime skill metadata and staged skill hashes in exported snapshot manifests
+- treat `.codex-home/**` and `.claude/**` as resumable workspace state, not disposable cache
+
+### Resume scenarios
+
+This migration needs to support three distinct resume/continuation cases.
+
+#### 1. In-cluster run recovery while the run is still executing
+
+Goal:
+
+- the same run continues after sandbox pod restart or temporary deactivation
+
+Requirements:
+
+- the workspace volume remains attached to the sandbox identity
+- SprintFoundry finds `.sprintfoundry/run-state.json` or rebuilds from `.events.jsonl`
+- runtime session metadata remains in `.sprintfoundry/sessions.json`
+- step execution still resolves to `local` inside the reactivated sandbox
+
+This is the closest replacement for today’s whole-run Job + PVC recovery behavior.
+
+#### 2. Portable local continuation after terminal run state
+
+Goal:
+
+- a completed, failed, or cancelled Kubernetes run can be continued on a developer machine
+
+Requirements:
+
+- export the workspace snapshot plus `.sprintfoundry/sessions.json`
+- restore the snapshot to a local workspace path
+- validate local runtime prerequisites
+- continue with manual `claude --resume <session_id>` or `codex exec resume <session_id>` for completed runs
+- continue with `sprintfoundry resume <run_id>` only for failed/cancelled runs unless resume semantics are expanded later
+
+This is the scenario validated in the PVC snapshot spike and should remain first-class in the migration.
+
+#### 3. Compatibility-safe restore when runtime inputs changed
+
+Goal:
+
+- avoid restoring into a local or reactivated environment that is missing required runtime assets
+
+Compatibility checks should cover:
+
+- runtime provider and mode
+- model/provider availability
+- plugin availability
+- skill availability and staged skill hash mismatches
+- presence of repo-native skills referenced by the original run
+
+This is especially important because skill staging is part of the effective runtime context.
+
 ## Migration Principles
 
 1. Do not keep two Kubernetes outer-hosting models indefinitely.
@@ -372,6 +450,16 @@ Mitigation:
 
 - test PVC binding and restore behavior early in kind
 - keep snapshot/export as a first-class requirement, not a later add-on
+
+### Risk: Over-assuming sandbox hibernation
+
+Agent Sandbox appears to support pause/resume style lifecycle management, but deep hibernation and automatic resume should not be treated as a guaranteed production-grade restore mechanism without validation.
+
+Mitigation:
+
+- treat `replicas: 0 -> 1` style deactivation/reactivation as an optimization, not the only recovery path
+- keep exported workspace snapshots as the source of truth for portable resume
+- validate any claimed hibernation flow in kind before removing alternative restore paths
 
 ## Recommended Rollout Order
 
