@@ -20,6 +20,27 @@ Primary target:
 - one PVC per run mounted at `/workspace`
 - local step execution inside the runner pod
 
+## Spike Result
+
+Live kind spike completed on 2026-03-13:
+
+- launched a whole-run direct-agent Codex job on `kind` in `sf-whole-run-e2e`
+- copied the workspace from the PVC before the job completed
+- resumed locally with `codex exec resume <session_id>` against the copied workspace
+- verified the local resumed run could continue work in the copied workspace
+- also tested the same `session_id` in an empty local directory
+
+Observed result:
+
+- workspace copy from PVC is sufficient to continue useful work locally
+- provider-side `codex resume <session_id>` by itself did not recover meaningful prior task context in an empty directory
+- the practical recovery mechanism is therefore **workspace restore first**, with runtime session resume treated as a best-effort accelerator rather than the source of truth
+
+Implication:
+
+- the durable storage design should optimize for restoring the run workspace and SprintFoundry/runtime metadata
+- it should not assume Claude/Codex remote session state alone is enough for cross-machine recovery
+
 ## Current State
 
 The current whole-run flow already puts the critical run state on the per-run PVC:
