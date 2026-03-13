@@ -1,7 +1,8 @@
 # SprintFoundry — Architecture Agent
 # Includes diagramming tools for architecture documentation.
 
-FROM sprintfoundry/agent-base:latest
+ARG BASE_IMAGE=sprintfoundry/agent-base:latest
+FROM ${BASE_IMAGE}
 
 USER root
 

@@ -1,7 +1,8 @@
 # SprintFoundry — QA Agent
 # Testing environment with vitest, playwright, and browser dependencies.
 
-FROM sprintfoundry/agent-base:latest
+ARG BASE_IMAGE=sprintfoundry/agent-base:latest
+FROM ${BASE_IMAGE}
 
 USER root
 
