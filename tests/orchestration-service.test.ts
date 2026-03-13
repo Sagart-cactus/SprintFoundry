@@ -488,6 +488,52 @@ describe("OrchestrationService", () => {
     expect(mockAgentRunner.run).toHaveBeenCalled();
   });
 
+  it("can skip PR finalization when explicitly requested by env", async () => {
+    process.env.SPRINTFOUNDRY_SKIP_PR_FINALIZATION = "1";
+    try {
+      const plan = makeDevQaPlan();
+      mockOrchestratorAgent.generatePlan.mockResolvedValue(plan);
+      mockAgentRunner.run.mockResolvedValue({
+        agentResult: makeResult(),
+        tokens_used: 1000,
+        cost_usd: 0.03,
+        duration_seconds: 10,
+        container_id: "local-1",
+      });
+
+      const run = await service.handleTask("p1", "prompt", "Build a thing");
+
+      expect(run.status).toBe("completed");
+      expect(run.pr_url).toBeNull();
+      expect(mockGitManager.createPullRequest).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.SPRINTFOUNDRY_SKIP_PR_FINALIZATION;
+    }
+  });
+
+  it("can skip PR finalization for direct runs when explicitly requested by env", async () => {
+    process.env.SPRINTFOUNDRY_SKIP_PR_FINALIZATION = "1";
+    try {
+      mockAgentRunner.run.mockResolvedValue({
+        agentResult: makeResult(),
+        tokens_used: 1000,
+        cost_usd: 0.03,
+        duration_seconds: 10,
+        container_id: "local-1",
+      });
+
+      const run = await service.handleTask("p1", "prompt", "Build a thing", {
+        agent: "developer",
+      });
+
+      expect(run.status).toBe("completed");
+      expect(run.pr_url).toBeNull();
+      expect(mockGitManager.createPullRequest).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.SPRINTFOUNDRY_SKIP_PR_FINALIZATION;
+    }
+  });
+
   it("resumeTask resumes from requested failed step and injects operator prompt", async () => {
     const workspacePath = await fs.mkdtemp(path.join(os.tmpdir(), "sf-resume-test-"));
     const plan = makePlan({

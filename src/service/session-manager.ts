@@ -8,9 +8,11 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import * as os from "os";
 import type {
+  DurableSnapshotMetadata,
   TaskRun,
   RunSessionMetadata,
   RunStatus,
+  TerminalWorkflowState,
 } from "../shared/types.js";
 import type { EventSinkClient } from "./event-sink-client.js";
 
@@ -35,6 +37,7 @@ export class SessionManager {
    */
   async persist(run: TaskRun, extra?: { workspace_path?: string; branch?: string }): Promise<void> {
     await fs.mkdir(this.sessionsDir, { recursive: true });
+    const existing = await this.readRaw(run.run_id);
 
     const currentStep = run.steps.length > 0
       ? Math.max(...run.steps.filter((s) => s.status === "running").map((s) => s.step_number), 0)
@@ -63,23 +66,39 @@ export class SessionManager {
       updated_at: new Date().toISOString(),
       completed_at: run.completed_at instanceof Date ? run.completed_at.toISOString() : null,
       error: run.error,
+      terminal_workflow_state: this.resolveTerminalWorkflowState(run.status, existing),
+      durable_snapshot: existing?.durable_snapshot ?? null,
     };
 
     await this.save(metadata);
+  }
+
+  async updateSnapshotState(
+    runId: string,
+    update: {
+      terminal_workflow_state?: TerminalWorkflowState;
+      durable_snapshot?: DurableSnapshotMetadata | null;
+    }
+  ): Promise<RunSessionMetadata | null> {
+    return this.patch(runId, (current) => ({
+      ...current,
+      ...(update.terminal_workflow_state
+        ? { terminal_workflow_state: update.terminal_workflow_state }
+        : {}),
+      ...(Object.prototype.hasOwnProperty.call(update, "durable_snapshot")
+        ? { durable_snapshot: update.durable_snapshot ?? null }
+        : {}),
+      updated_at: new Date().toISOString(),
+    }));
   }
 
   /**
    * Read session metadata for a specific run.
    */
   async get(runId: string): Promise<RunSessionMetadata | null> {
-    const filePath = this.getSessionPath(runId);
-    try {
-      const raw = await fs.readFile(filePath, "utf-8");
-      const session = JSON.parse(raw) as RunSessionMetadata;
-      return await this.reconcileFromWorkspaceEvents(session);
-    } catch {
-      return null;
-    }
+    const session = await this.readRaw(runId);
+    if (!session) return null;
+    return this.reconcileFromWorkspaceEvents(session);
   }
 
   /**
@@ -151,6 +170,10 @@ export class SessionManager {
     return true;
   }
 
+  async upsertMetadata(session: RunSessionMetadata): Promise<void> {
+    await this.save(session);
+  }
+
   private async save(session: RunSessionMetadata): Promise<void> {
     const filePath = this.getSessionPath(session.run_id);
     let writeError: unknown = null;
@@ -169,6 +192,17 @@ export class SessionManager {
     await this.save(session);
   }
 
+  private async patch(
+    runId: string,
+    updater: (current: RunSessionMetadata) => RunSessionMetadata
+  ): Promise<RunSessionMetadata | null> {
+    const current = await this.readRaw(runId);
+    if (!current) return null;
+    const next = updater(current);
+    await this.update(next);
+    return next;
+  }
+
   private async upsertToSink(session: RunSessionMetadata): Promise<void> {
     if (!this.sinkClient) return;
 
@@ -185,6 +219,26 @@ export class SessionManager {
 
   private getSessionPath(runId: string): string {
     return path.join(this.sessionsDir, `${runId}.json`);
+  }
+
+  private async readRaw(runId: string): Promise<RunSessionMetadata | null> {
+    const filePath = this.getSessionPath(runId);
+    try {
+      const raw = await fs.readFile(filePath, "utf-8");
+      return JSON.parse(raw) as RunSessionMetadata;
+    } catch {
+      return null;
+    }
+  }
+
+  private resolveTerminalWorkflowState(
+    status: RunStatus,
+    existing: RunSessionMetadata | null
+  ): TerminalWorkflowState {
+    if (status === "completed" || status === "failed" || status === "cancelled") {
+      return existing?.terminal_workflow_state ?? "terminal_pending_snapshot";
+    }
+    return "running";
   }
 
   private async reconcileFromWorkspaceEvents(

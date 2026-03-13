@@ -24,6 +24,7 @@ const WHOLE_RUN_SANDBOX_MODE = "k8s-whole-run";
 const RUNS_ROOT_ENV = "SPRINTFOUNDRY_RUNS_ROOT";
 const SESSIONS_DIR_ENV = "SPRINTFOUNDRY_SESSIONS_DIR";
 const AUTO_RESUME_ENV = "SPRINTFOUNDRY_AUTO_RESUME_EXISTING_RUN";
+const SKIP_PR_FINALIZATION_ENV = "SPRINTFOUNDRY_SKIP_PR_FINALIZATION";
 
 export interface DispatchControllerStartOptions {
   host?: string;
@@ -509,6 +510,9 @@ export function buildK8sJobManifest(task: DispatchQueueItem, options?: {
                 { name: AUTO_RESUME_ENV, value: "1" },
                 { name: "HOME", value: "/workspace/home" },
                 { name: "CODEX_HOME", value: "/workspace/home/.codex" },
+                ...(asString(process.env[SKIP_PR_FINALIZATION_ENV])
+                  ? [{ name: SKIP_PR_FINALIZATION_ENV, value: asString(process.env[SKIP_PR_FINALIZATION_ENV]) }]
+                  : []),
                 { name: "SPRINTFOUNDRY_OTEL_ENABLED", value: process.env.SPRINTFOUNDRY_OTEL_ENABLED ?? "0" },
                 { name: "OTEL_EXPORTER_OTLP_ENDPOINT", value: process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? "http://otel-collector.monitoring.svc.cluster.local:4318" },
                 { name: "OTEL_EXPORTER_OTLP_PROTOCOL", value: process.env.OTEL_EXPORTER_OTLP_PROTOCOL ?? "http/protobuf" },

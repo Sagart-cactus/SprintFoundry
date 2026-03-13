@@ -28,6 +28,10 @@ import { consoleNotifierModule } from "./plugins/notifier-console/index.js";
 import { githubSCMModule } from "./plugins/scm-github/index.js";
 import { startDispatchControllerServer } from "./service/dispatch-controller.js";
 import { resolveDefaultDirectAgent } from "./service/direct-agent-default.js";
+import { RunSnapshotExportService } from "./service/run-snapshot-export-service.js";
+import { RunSnapshotStore } from "./service/run-snapshot-store.js";
+import { WorkspaceManager } from "./service/workspace-manager.js";
+import { K8sRunSnapshotController } from "./service/k8s-run-snapshot-controller.js";
 
 const RUN_SANDBOX_MODE_ENV = "SPRINTFOUNDRY_RUN_SANDBOX_MODE";
 const WHOLE_RUN_SANDBOX_MODE = "k8s-whole-run";
@@ -173,6 +177,41 @@ program
     const directAgentWasDefaulted = !opts.agent && Boolean(directAgent);
 
     const ticketId = opts.ticket ?? `prompt-${Date.now()}`;
+    const sessionManager = new SessionManager();
+    let currentRunId = process.env.SPRINTFOUNDRY_RUN_ID?.trim() || "";
+    let shuttingDown = false;
+    const markCancelledAndExit = (signal: NodeJS.Signals) => {
+      if (shuttingDown) return;
+      shuttingDown = true;
+      void (async () => {
+        if (currentRunId) {
+          try {
+            const updated = await sessionManager.updateStatus(currentRunId, "cancelled");
+            if (updated) {
+              console.error(`[run] Received ${signal}; marked run ${currentRunId} as cancelled.`);
+            } else {
+              console.error(`[run] Received ${signal}; run ${currentRunId} session was not available for cancellation.`);
+            }
+          } catch (error) {
+            console.error(
+              `[run] Received ${signal}; failed to mark run ${currentRunId} as cancelled: ${
+                error instanceof Error ? error.message : String(error)
+              }`
+            );
+          }
+        } else {
+          console.error(`[run] Received ${signal}; no run id was available to mark as cancelled.`);
+        }
+        process.exit(0);
+      })();
+    };
+
+    process.once("SIGINT", () => {
+      markCancelledAndExit("SIGINT");
+    });
+    process.once("SIGTERM", () => {
+      markCancelledAndExit("SIGTERM");
+    });
 
     console.log(`Starting SprintFoundry run...`);
     console.log(`  Source: ${source}`);
@@ -197,6 +236,7 @@ program
       const autoResumeAction = resolveAutoResumeAction(envRunId, session);
       if (autoResumeAction === "resume") {
         console.log(`Detected existing run state for ${envRunId}; attempting recovery/resume.`);
+        currentRunId = envRunId;
         run = await service.resumeTask(envRunId, {
           allowInProgressRecovery: true,
         });
@@ -209,12 +249,14 @@ program
           agent: directAgent,
           agentFile: opts.agentFile,
         });
+        currentRunId = run.run_id;
       } else {
         run = await service.handleTask(ticketId, source, opts.prompt, {
           dryRun: !!opts.dryRun,
           agent: directAgent,
           agentFile: opts.agentFile,
         });
+        currentRunId = run.run_id;
       }
     } else {
       run = await service.handleTask(ticketId, source, opts.prompt, {
@@ -222,6 +264,7 @@ program
         agent: directAgent,
         agentFile: opts.agentFile,
       });
+      currentRunId = run.run_id;
     }
 
     console.log("");
@@ -358,6 +401,95 @@ program
     if (run.error) {
       console.error(`  Error: ${run.error}`);
       process.exit(1);
+    }
+  });
+
+program
+  .command("snapshot-export <id>")
+  .description("Export a terminal run workspace snapshot to durable storage")
+  .action(async (id) => {
+    const service = new RunSnapshotExportService();
+    const result = await service.exportRun(String(id));
+    console.log(`Snapshot export complete.`);
+    console.log(`  Run: ${id}`);
+    console.log(`  Bucket: ${result.durableSnapshot.bucket}`);
+    console.log(`  Manifest: ${result.durableSnapshot.manifest_key}`);
+    console.log(`  Archive: ${result.durableSnapshot.archive_key}`);
+  });
+
+program
+  .command("restore <id>")
+  .description("Restore a previously exported run snapshot into the local runs root")
+  .option("--config <dir>", "Config directory", "config")
+  .option("--project <name>", "Project name (loads <name>.yaml or project-<name>.yaml)")
+  .option("--destination <path>", "Explicit destination path for the restored workspace")
+  .action(async (id, opts) => {
+    const { project } = await loadConfig(opts.config, opts.project);
+    const workspaceManager = new WorkspaceManager(project);
+    const destination = String(opts.destination ?? "").trim() || workspaceManager.getPath(String(id));
+    const store = new RunSnapshotStore();
+    const result = await store.restoreRunSnapshot(
+      {
+        run_id: String(id),
+        project_id: project.project_id,
+      },
+      destination
+    );
+
+    const sessionManager = new SessionManager();
+    const restoredAt = new Date().toISOString();
+    const restoredSession = {
+      ...result.session,
+      workspace_path: destination,
+      updated_at: restoredAt,
+    };
+    await sessionManager.upsertMetadata(restoredSession);
+
+    console.log(`Snapshot restore complete.`);
+    console.log(`  Run: ${id}`);
+    console.log(`  Workspace: ${destination}`);
+    console.log(`  Status: ${restoredSession.status}`);
+  });
+
+program
+  .command("snapshot-reconcile")
+  .description("Reconcile terminal whole-run Kubernetes jobs and launch snapshot exporters")
+  .option("--namespace <name>", "Kubernetes namespace to reconcile")
+  .option("--once", "Run a single reconcile loop and exit")
+  .option("--interval-ms <ms>", "Polling interval when running continuously", "5000")
+  .action(async (opts) => {
+    const controller = new K8sRunSnapshotController({
+      namespace: opts.namespace ? String(opts.namespace) : undefined,
+    });
+
+    const runOnce = async () => {
+      const summary = await controller.reconcileOnce();
+      console.log(
+        `[snapshot-reconcile] inspected=${summary.inspectedRuns} exporters_created=${summary.exportersCreated} pvc_cleanup_completed=${summary.pvcCleanupCompleted} failures=${summary.snapshotFailuresDetected}`
+      );
+    };
+
+    if (opts.once) {
+      await runOnce();
+      return;
+    }
+
+    const intervalMs = Number.parseInt(String(opts.intervalMs ?? "5000"), 10);
+    if (!Number.isInteger(intervalMs) || intervalMs <= 0) {
+      console.error("Error: --interval-ms must be a positive integer");
+      process.exit(1);
+    }
+
+    let stopping = false;
+    const shutdown = () => {
+      stopping = true;
+    };
+    process.once("SIGINT", shutdown);
+    process.once("SIGTERM", shutdown);
+
+    while (!stopping) {
+      await runOnce();
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
     }
   });
 
