@@ -173,7 +173,7 @@ program
     const executionBackendName = resolveExecutionBackendName(platform, project);
     const executionBackend = createExecutionBackend(platform, project);
     const service = new OrchestrationService(platform, project, registry, executionBackend);
-    const directAgent = opts.agent || (!opts.dryRun ? resolveDefaultDirectAgent(platform, project) : undefined);
+    const directAgent = opts.agent || resolveDefaultDirectAgent(platform, project);
     const directAgentWasDefaulted = !opts.agent && Boolean(directAgent);
 
     const ticketId = opts.ticket ?? `prompt-${Date.now()}`;
