@@ -183,6 +183,7 @@ program
     const markCancelledAndExit = (signal: NodeJS.Signals) => {
       if (shuttingDown) return;
       shuttingDown = true;
+      const exitCode = signal === "SIGINT" ? 130 : 143;
       void (async () => {
         if (currentRunId) {
           try {
@@ -202,7 +203,7 @@ program
         } else {
           console.error(`[run] Received ${signal}; no run id was available to mark as cancelled.`);
         }
-        process.exit(0);
+        process.exit(exitCode);
       })();
     };
 

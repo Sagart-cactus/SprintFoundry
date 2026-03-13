@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   K8sRunSnapshotController,
   buildSnapshotExporterJobManifest,
@@ -8,6 +8,10 @@ import {
 } from "../src/service/k8s-run-snapshot-controller.js";
 import { type RunSnapshotStore } from "../src/service/run-snapshot-store.js";
 import type { RunSessionMetadata } from "../src/shared/types.js";
+
+afterEach(() => {
+  delete process.env.SPRINTFOUNDRY_SNAPSHOT_BUCKET;
+});
 
 function makeJob(overrides: {
   name: string;
@@ -70,6 +74,7 @@ describe("K8sRunSnapshotController", () => {
   });
 
   it("creates an exporter job for a terminal runner job", async () => {
+    process.env.SPRINTFOUNDRY_SNAPSHOT_BUCKET = "snapshot-bucket";
     const client: K8sSnapshotClient = {
       listJobs: vi.fn(async () => [
         makeJob({
@@ -98,6 +103,37 @@ describe("K8sRunSnapshotController", () => {
     expect(summary.inspectedRuns).toBe(1);
     expect(summary.exportersCreated).toBe(1);
     expect(client.createJob).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not create exporter jobs when snapshot storage is unconfigured", async () => {
+    const client: K8sSnapshotClient = {
+      listJobs: vi.fn(async () => [
+        makeJob({
+          name: "sf-run-123",
+          appName: "sprintfoundry-runner",
+          runId: "run-123",
+          projectId: "project-a",
+          succeeded: 1,
+        }),
+      ]),
+      createJob: vi.fn(async () => undefined),
+      listPods: vi.fn(async () => []),
+      deletePod: vi.fn(async () => undefined),
+      pvcExists: vi.fn(async () => true),
+      deletePvc: vi.fn(async () => undefined),
+    };
+
+    const controller = new K8sRunSnapshotController({
+      namespace: "sf",
+      runnerImage: "sprintfoundry-runner:test",
+      k8sClient: client,
+    });
+
+    const summary = await controller.reconcileOnce();
+
+    expect(summary.inspectedRuns).toBe(1);
+    expect(summary.exportersCreated).toBe(0);
+    expect(client.createJob).not.toHaveBeenCalled();
   });
 
   it("deletes the PVC and marks cleanup complete after exporter success", async () => {

@@ -267,6 +267,12 @@ export class K8sRunSnapshotController {
       const exporterJobName = makeSnapshotExporterJobName(runId);
       const exporterJob = jobsByName.get(exporterJobName);
       if (!exporterJob) {
+        if (!this.snapshotStore.isEnabled()) {
+          this.logger.warn(
+            `[snapshot-controller] Snapshot storage is not configured; skipping exporter job for run ${runId}`
+          );
+          continue;
+        }
         await this.k8sClient.createJob(
           this.namespace,
           buildSnapshotExporterJobManifest({
