@@ -77,6 +77,7 @@ const state = {
 let resumePromptResolver = null;
 let liveEventSource = null;
 let liveRefreshTimer = null;
+let handoffCopyResetTimer = null;
 
 // ── Helpers (unchanged) ──
 
@@ -157,6 +158,70 @@ function parseAgentItems(raw) {
     if (parsed && typeof parsed === "object") items.push(parsed);
   }
   return items;
+}
+
+function getHandoffRunBtn() {
+  return document.getElementById("handoff-run-btn");
+}
+
+function getHandoffCommand(runData) {
+  const command = typeof runData?.handoff_command === "string" ? runData.handoff_command.trim() : "";
+  return command || null;
+}
+
+function isHandoffEligible(runData) {
+  return runData?.handoff_eligible === true && !!getHandoffCommand(runData);
+}
+
+async function copyTextToClipboard(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const input = document.createElement("textarea");
+  input.value = text;
+  input.setAttribute("readonly", "true");
+  input.style.position = "absolute";
+  input.style.left = "-9999px";
+  document.body.appendChild(input);
+  input.select();
+  const copied = document.execCommand("copy");
+  document.body.removeChild(input);
+  if (!copied) {
+    throw new Error("Clipboard access is unavailable");
+  }
+}
+
+function setHandoffButtonState(label) {
+  const handoffRunBtn = getHandoffRunBtn();
+  if (!handoffRunBtn) return;
+  handoffRunBtn.textContent = label;
+  window.clearTimeout(handoffCopyResetTimer);
+  if (label !== "Handoff") {
+    handoffCopyResetTimer = window.setTimeout(() => {
+      const button = getHandoffRunBtn();
+      if (button) button.textContent = "Handoff";
+    }, 1800);
+  }
+}
+
+async function handleHandoffCopy() {
+  const runData = state.runData;
+  const handoffRunBtn = getHandoffRunBtn();
+  const command = getHandoffCommand(runData);
+  if (!handoffRunBtn || !command || !runData?.run_id) return;
+  handoffRunBtn.disabled = true;
+  try {
+    await copyTextToClipboard(command);
+    setHandoffButtonState("Copied");
+    statusLine.textContent = `Copied handoff command for ${runData.run_id}`;
+  } catch (error) {
+    setHandoffButtonState("Copy failed");
+    statusLine.textContent = `Handoff copy failed: ${error instanceof Error ? error.message : String(error)}`;
+    alert(statusLine.textContent);
+  } finally {
+    handoffRunBtn.disabled = false;
+  }
 }
 
 function pickString(obj, keys) {
@@ -943,6 +1008,7 @@ function renderSidebarMeta(runData) {
     resumeRunBtn.disabled = false;
     resumeRunBtn.textContent = "Resume Run";
   }
+  const handoffEligible = isHandoffEligible(runData);
 
   sidebarMeta.innerHTML = `
     <div class="meta-list">
@@ -991,7 +1057,23 @@ function renderSidebarMeta(runData) {
         <span class="meta-value">${prLink}</span>
       </div>
     </div>
+    ${handoffEligible ? `
+      <div class="sidebar-meta-actions">
+        <button id="handoff-run-btn" class="handoff-run-btn sidebar-handoff-btn" type="button" title="Copy handoff command">Handoff</button>
+      </div>
+    ` : ""}
   `;
+
+  if (handoffEligible) {
+    const handoffRunBtn = getHandoffRunBtn();
+    if (handoffRunBtn) {
+      handoffRunBtn.disabled = false;
+      handoffRunBtn.textContent = "Handoff";
+      handoffRunBtn.addEventListener("click", () => {
+        void handleHandoffCopy();
+      });
+    }
+  }
 }
 
 function renderSidebarSteps(runData) {

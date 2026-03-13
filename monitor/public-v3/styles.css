@@ -90,6 +90,29 @@ body {
   flex-wrap: wrap;
 }
 
+.handoff-run-btn {
+  height: 32px;
+  padding: 0 10px;
+  font-size: 0.75rem;
+  color: var(--brand);
+  border-color: color-mix(in srgb, var(--brand), var(--line) 55%);
+  background: color-mix(in srgb, var(--surface), white 12%);
+}
+
+.handoff-run-btn:hover {
+  background: color-mix(in srgb, var(--surface), var(--brand-dim) 35%);
+}
+
+.sidebar-meta-actions {
+  margin-top: 12px;
+}
+
+.sidebar-handoff-btn {
+  width: 100%;
+  justify-content: center;
+  height: 34px;
+}
+
 .control {
   display: grid;
   gap: 4px;

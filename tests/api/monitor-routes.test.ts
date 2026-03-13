@@ -311,6 +311,22 @@ beforeAll(async () => {
     "utf-8"
   );
 
+  const pvcBackedRunDir = path.join(tmpRunsRoot, "sf-demo", "run-pvc-backed");
+  mkdirSync(pvcBackedRunDir, { recursive: true });
+  writeFileSync(
+    path.join(pvcBackedRunDir, ".events.jsonl"),
+    JSON.stringify({ event_type: "task.created", timestamp: "2026-03-01T00:00:00Z", data: {} }) + "\n",
+    "utf-8"
+  );
+
+  const noPvcRunDir = path.join(tmpRunsRoot, "sf-demo", "run-no-pvc");
+  mkdirSync(noPvcRunDir, { recursive: true });
+  writeFileSync(
+    path.join(noPvcRunDir, ".events.jsonl"),
+    JSON.stringify({ event_type: "task.created", timestamp: "2026-03-01T00:05:00Z", data: {} }) + "\n",
+    "utf-8"
+  );
+
   // Run with runtime skills metadata embedded in step events
   const skillsRunDir = path.join(tmpRunsRoot, "skills-project", "run-skills");
   mkdirSync(skillsRunDir, { recursive: true });
@@ -817,6 +833,99 @@ describe("GET /api/run", () => {
     expect(canonicalBody.run_id).toBe("run-alias-123");
     expect(legacyBody.run_id).toBe("run-alias-123");
     expect(canonicalBody.workspace_path).toBe(legacyBody.workspace_path);
+  });
+
+  it("includes handoff metadata only when the run workspace PVC exists", async () => {
+    const fakeK8sApi = http.createServer((req, res) => {
+      if (req.url === "/api/v1/namespaces/sf-demo/persistentvolumeclaims/sf-run-ws-run-pvc-backed") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ metadata: { name: "sf-run-ws-run-pvc-backed", namespace: "sf-demo" } }));
+        return;
+      }
+      if (req.url === "/api/v1/namespaces/sf-demo/persistentvolumeclaims/sf-run-ws-run-no-pvc") {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ message: "Not Found" }));
+        return;
+      }
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ message: "Not Found" }));
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      fakeK8sApi.once("error", reject);
+      fakeK8sApi.listen(0, "127.0.0.1", () => resolve());
+    });
+    const address = fakeK8sApi.address();
+    if (!address || typeof address === "string") {
+      fakeK8sApi.close();
+      throw new Error("Failed to start fake Kubernetes API");
+    }
+
+    const startEphemeral = () =>
+      new Promise<{ proc: ChildProcess; base: string }>((resolve, reject) => {
+        const proc = spawn("node", [serverMjs], {
+          env: {
+            ...process.env,
+            MONITOR_PORT: "0",
+            SPRINTFOUNDRY_RUNS_ROOT: tmpRunsRoot,
+            SPRINTFOUNDRY_SESSIONS_DIR: tmpSessionsRoot,
+            SPRINTFOUNDRY_CONFIG_DIR: tmpConfigRoot,
+            SPRINTFOUNDRY_AUTORUN_DRY_RUN: "1",
+            SPRINTFOUNDRY_MONITOR_API_TOKEN: MONITOR_API_TOKEN,
+            SPRINTFOUNDRY_MONITOR_WRITE_TOKEN: MONITOR_WRITE_TOKEN,
+            SPRINTFOUNDRY_MONITOR_HANDOFF_K8S_API_URL: `http://127.0.0.1:${address.port}`,
+            SPRINTFOUNDRY_MONITOR_HANDOFF_CACHE_MS: "1000",
+          },
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        const timeout = setTimeout(() => reject(new Error("Ephemeral server start timeout")), 5000);
+        let stderrOutput = "";
+        proc.stdout?.on("data", (data: Buffer) => {
+          const out = data.toString();
+          const match = out.match(/listening at http:\/\/([\d.]+):(\d+)/);
+          if (!match) return;
+          clearTimeout(timeout);
+          resolve({ proc, base: `http://${match[1]}:${match[2]}` });
+        });
+        proc.stderr?.on("data", (data: Buffer) => {
+          stderrOutput += data.toString();
+        });
+        proc.on("error", (err) => {
+          clearTimeout(timeout);
+          reject(err);
+        });
+        proc.on("exit", (code) => {
+          clearTimeout(timeout);
+          if (code !== null && code !== 0) {
+            reject(new Error(`Ephemeral server exited with code ${code}: ${stderrOutput}`));
+          }
+        });
+      });
+
+    const { proc, base } = await startEphemeral();
+    try {
+      const pvcBacked = await get(`${base}/api/run?project=sf-demo&run=run-pvc-backed`);
+      expect(pvcBacked.status).toBe(200);
+      expect(JSON.parse(pvcBacked.body)).toMatchObject({
+        run_id: "run-pvc-backed",
+        handoff_eligible: true,
+        handoff_namespace: "sf-demo",
+        handoff_command: "./scripts/handoff-kind-run-to-local.sh --namespace sf-demo --run-id run-pvc-backed",
+      });
+
+      const noPvc = await get(`${base}/api/run?project=sf-demo&run=run-no-pvc`);
+      expect(noPvc.status).toBe(200);
+      expect(JSON.parse(noPvc.body)).toMatchObject({
+        run_id: "run-no-pvc",
+        handoff_eligible: false,
+        handoff_namespace: null,
+        handoff_command: null,
+      });
+    } finally {
+      proc.kill("SIGTERM");
+      await new Promise((resolve) => proc.once("exit", resolve));
+      await new Promise<void>((resolve, reject) => fakeK8sApi.close((err) => (err ? reject(err) : resolve())));
+    }
   });
 });
 

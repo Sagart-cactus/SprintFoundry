@@ -1,4 +1,5 @@
 import http from "node:http";
+import https from "node:https";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -35,6 +36,14 @@ const webhookPort = webhookSplitEnabled ? webhookPortCandidate : port;
 const monitorApiMaxBodyBytes = toPositiveInt(process.env.SPRINTFOUNDRY_MONITOR_API_MAX_BODY_BYTES, 262_144);
 const monitorWebhookMaxBodyBytes = toPositiveInt(process.env.SPRINTFOUNDRY_MONITOR_WEBHOOK_MAX_BODY_BYTES, 1_048_576);
 const monitorBodyReadTimeoutMs = toPositiveInt(process.env.SPRINTFOUNDRY_MONITOR_BODY_TIMEOUT_MS, 10_000);
+const handoffK8sApiUrlOverride = String(process.env.SPRINTFOUNDRY_MONITOR_HANDOFF_K8S_API_URL ?? "").trim();
+const handoffK8sTokenFile = String(
+  process.env.SPRINTFOUNDRY_MONITOR_HANDOFF_K8S_TOKEN_FILE ?? "/var/run/secrets/kubernetes.io/serviceaccount/token"
+).trim();
+const handoffK8sCaFile = String(
+  process.env.SPRINTFOUNDRY_MONITOR_HANDOFF_K8S_CA_FILE ?? "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+).trim();
+const handoffPvcLookupCacheTtlMs = toPositiveInt(process.env.SPRINTFOUNDRY_MONITOR_HANDOFF_CACHE_MS, 30_000);
 const autoexecuteSeenStorePath = path.join(sessionsRoot, ".monitor-autoexecute-seen.json");
 
 let autoexecuteCache = { loadedAt: 0, projects: [] };
@@ -47,6 +56,8 @@ let autoexecuteRunning = false;
 const autoexecuteSeen = new Map();
 let autoexecuteSeenLoaded = false;
 let autoexecuteSeenWritePromise = Promise.resolve();
+const handoffPvcLookupCache = new Map();
+let handoffK8sAuthCache = { loadedAt: 0, token: "", ca: "" };
 
 function toPositiveInt(value, fallback) {
   const n = Number(value ?? "");
@@ -1065,6 +1076,138 @@ function resolveCanonicalRunId(runId, events = [], session = null) {
   );
 }
 
+function deriveWholeRunNamespace(projectId, runId) {
+  const normalizedProjectId = typeof projectId === "string" ? projectId.trim() : "";
+  const normalizedRunId = typeof runId === "string" ? runId.trim() : "";
+
+  if (normalizedRunId.startsWith("sf-whole-run-")) {
+    return "sf-whole-run-e2e";
+  }
+
+  if (normalizedProjectId.endsWith("-worktree")) {
+    return normalizedProjectId.slice(0, -"-worktree".length);
+  }
+
+  return normalizedProjectId || null;
+}
+
+function getHandoffK8sApiBaseUrl() {
+  if (handoffK8sApiUrlOverride) return handoffK8sApiUrlOverride;
+  const host = String(process.env.KUBERNETES_SERVICE_HOST ?? "").trim();
+  if (!host) return null;
+  const protocol = String(process.env.KUBERNETES_SERVICE_PROTOCOL ?? "https").trim() || "https";
+  const port = String(process.env.KUBERNETES_SERVICE_PORT ?? (protocol === "https" ? "443" : "80")).trim();
+  return `${protocol}://${host}:${port}`;
+}
+
+async function loadHandoffK8sAuth() {
+  const now = Date.now();
+  if (now - handoffK8sAuthCache.loadedAt < handoffPvcLookupCacheTtlMs) {
+    return handoffK8sAuthCache;
+  }
+
+  const [token, ca] = await Promise.all([
+    handoffK8sTokenFile ? fs.readFile(handoffK8sTokenFile, "utf-8").catch(() => "") : Promise.resolve(""),
+    handoffK8sCaFile ? fs.readFile(handoffK8sCaFile, "utf-8").catch(() => "") : Promise.resolve(""),
+  ]);
+  handoffK8sAuthCache = { loadedAt: now, token: token.trim(), ca };
+  return handoffK8sAuthCache;
+}
+
+async function requestHandoffK8sApi(requestPath) {
+  const baseUrl = getHandoffK8sApiBaseUrl();
+  if (!baseUrl) return { status: 0, body: "" };
+
+  const target = new URL(requestPath, `${baseUrl.replace(/\/$/, "")}/`);
+  const transport = target.protocol === "https:" ? https : http;
+  const auth = await loadHandoffK8sAuth();
+
+  return await new Promise((resolve, reject) => {
+    const req = transport.request(
+      target,
+      {
+        method: "GET",
+        headers: auth.token ? { authorization: `Bearer ${auth.token}` } : undefined,
+        ca: target.protocol === "https:" && auth.ca ? auth.ca : undefined,
+      },
+      (res) => {
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => {
+          body += chunk;
+        });
+        res.on("end", () => {
+          resolve({ status: res.statusCode ?? 0, body });
+        });
+      }
+    );
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+async function hasRunWorkspacePvc(namespace, runId) {
+  const normalizedNamespace = typeof namespace === "string" ? namespace.trim() : "";
+  const normalizedRunId = typeof runId === "string" ? runId.trim() : "";
+  if (!normalizedNamespace || !normalizedRunId) return false;
+
+  const cacheKey = `${normalizedNamespace}/${normalizedRunId}`;
+  const cached = handoffPvcLookupCache.get(cacheKey);
+  const now = Date.now();
+  if (cached && now - cached.checkedAt < handoffPvcLookupCacheTtlMs) {
+    return cached.exists;
+  }
+
+  const pvcName = `sf-run-ws-${normalizedRunId}`;
+  try {
+    const response = await requestHandoffK8sApi(
+      `/api/v1/namespaces/${encodeURIComponent(normalizedNamespace)}/persistentvolumeclaims/${encodeURIComponent(pvcName)}`
+    );
+    const exists = response.status === 200;
+    if (response.status !== 200 && response.status !== 404 && response.status !== 0) {
+      console.warn(
+        `[monitor] handoff PVC lookup failed for ${normalizedNamespace}/${pvcName}: HTTP ${response.status}`
+      );
+    }
+    handoffPvcLookupCache.set(cacheKey, { checkedAt: now, exists });
+    return exists;
+  } catch (error) {
+    console.warn(
+      `[monitor] handoff PVC lookup failed for ${normalizedNamespace}/${pvcName}: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+    handoffPvcLookupCache.set(cacheKey, { checkedAt: now, exists: false });
+    return false;
+  }
+}
+
+async function buildHandoffMetadata(projectId, runId) {
+  const namespace = deriveWholeRunNamespace(projectId, runId);
+  if (!namespace || typeof runId !== "string" || !runId.trim()) {
+    return {
+      handoff_eligible: false,
+      handoff_namespace: null,
+      handoff_command: null,
+    };
+  }
+
+  const pvcExists = await hasRunWorkspacePvc(namespace, runId.trim());
+  if (!pvcExists) {
+    return {
+      handoff_eligible: false,
+      handoff_namespace: null,
+      handoff_command: null,
+    };
+  }
+
+  return {
+    handoff_eligible: true,
+    handoff_namespace: namespace,
+    handoff_command: `./scripts/handoff-kind-run-to-local.sh --namespace ${namespace} --run-id ${runId.trim()}`,
+  };
+}
+
 let databasePoolPromise = null;
 let redisSubscriberFactoryPromise = null;
 
@@ -1307,6 +1450,7 @@ async function loadRunSummaryFromDbRecord(runRecord) {
   if (!fallbackRepoUrl && typeof runRecord.workspace_path === "string" && runRecord.workspace_path) {
     fallbackRepoUrl = await getWorkspaceRepoUrl(runRecord.workspace_path);
   }
+  const handoffMeta = await buildHandoffMetadata(runRecord.project_id, runRecord.run_id);
 
   return {
     project_id: runRecord.project_id,
@@ -1321,6 +1465,7 @@ async function loadRunSummaryFromDbRecord(runRecord) {
       ? Date.parse(last.timestamp)
       : (runRecord.updated_at ? Date.parse(String(runRecord.updated_at)) : null),
     workspace_path: runRecord.workspace_path ?? "",
+    ...handoffMeta,
     ...sourceMeta,
     ticket_repo_url: fallbackRepoUrl,
   };
@@ -1823,6 +1968,7 @@ async function loadRunSummary(projectId, runId, runPath, session = null) {
   const projectRepoUrl = await getProjectRepoUrl(projectId);
   const sourceMeta = extractRunSourceMetadata(events, session, projectRepoUrl);
   const fallbackRepoUrl = sourceMeta.ticket_repo_url ?? await getWorkspaceRepoUrl(runPath);
+  const handoffMeta = await buildHandoffMetadata(projectId, canonicalRunId);
   return {
     project_id: projectId,
     run_id: canonicalRunId,
@@ -1836,6 +1982,7 @@ async function loadRunSummary(projectId, runId, runPath, session = null) {
       ? Date.parse(last.timestamp)
       : (session?.updated_at ? Date.parse(session.updated_at) : null),
     workspace_path: runPath,
+    ...handoffMeta,
     ...resumeMeta,
     ...sourceMeta,
     ticket_repo_url: fallbackRepoUrl,
