@@ -17,6 +17,7 @@ export default function RunDetail({ projectId, runId }) {
   const [stepResult, setStepResult] = useState(null)
   const [stepLog, setStepLog] = useState('')
   const [logTab, setLogTab] = useState('result')
+  const [handoffState, setHandoffState] = useState('idle')
   const feedRef = useRef(null)
 
   const steps = run?.steps || []
@@ -62,6 +63,36 @@ export default function RunDetail({ projectId, runId }) {
     if (feedRef.current) feedRef.current.scrollTop = feedRef.current.scrollHeight
   }, [events])
 
+  useEffect(() => {
+    if (handoffState === 'idle') return
+    const timeoutId = window.setTimeout(() => setHandoffState('idle'), 1800)
+    return () => window.clearTimeout(timeoutId)
+  }, [handoffState])
+
+  async function handleCopyHandoff() {
+    const command = typeof run?.handoff_command === 'string' ? run.handoff_command.trim() : ''
+    if (!command || run?.handoff_eligible !== true) return
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(command)
+      } else {
+        const input = document.createElement('textarea')
+        input.value = command
+        input.setAttribute('readonly', 'true')
+        input.style.position = 'absolute'
+        input.style.left = '-9999px'
+        document.body.appendChild(input)
+        input.select()
+        const copied = document.execCommand('copy')
+        document.body.removeChild(input)
+        if (!copied) throw new Error('Clipboard access is unavailable')
+      }
+      setHandoffState('copied')
+    } catch {
+      setHandoffState('failed')
+    }
+  }
+
   if (loading || !run) {
     return (
       <div className="space-y-4 animate-pulse max-w-6xl">
@@ -79,6 +110,7 @@ export default function RunDetail({ projectId, runId }) {
   const duration = run.started_at && run.last_event_ts
     ? run.last_event_ts - new Date(run.started_at).getTime()
     : null
+  const handoffEligible = run.handoff_eligible === true && typeof run.handoff_command === 'string' && run.handoff_command.trim().length > 0
 
   return (
     <div className="max-w-6xl space-y-4 animate-fade-in">
@@ -92,6 +124,16 @@ export default function RunDetail({ projectId, runId }) {
               {run.ticket_title || run.run_id}
             </h2>
             <div className="flex items-center gap-2 flex-shrink-0">
+              {handoffEligible && (
+                <button
+                  type="button"
+                  onClick={handleCopyHandoff}
+                  className="inline-flex items-center gap-1 rounded border border-brand/20 bg-brand/5 px-2.5 py-1 text-2xs font-semibold text-brand transition-colors hover:bg-brand/10"
+                  title={`Copy handoff command for ${run.handoff_namespace || 'the run namespace'}`}
+                >
+                  {handoffState === 'copied' ? 'Copied' : handoffState === 'failed' ? 'Copy failed' : 'Handoff'}
+                </button>
+              )}
               {run.pr_url && (
                 <a href={run.pr_url} target="_blank" rel="noreferrer"
                   onClick={e => e.stopPropagation()}

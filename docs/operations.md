@@ -61,6 +61,45 @@ Resume from a specific failed step with additional operator guidance:
 pnpm dev -- resume <run-id> --step 2 --prompt "Focus on flaky tests and stabilize snapshots."
 ```
 
+## Hand-Off A Completed Kind Run To Local
+
+Completed runs are not resumed with `sprintfoundry resume`. Instead, hand off
+the workspace to a local directory and continue with the runtime session id.
+
+Helper script for the validated kind PVC flow:
+
+```bash
+./scripts/handoff-kind-run-to-local.sh --run-id sf-whole-run-codex-e2e-234956
+```
+
+By default, this mirrors the pod layout under the hand-off destination
+(`.../workspace/...` and `.../workspace/home/.codex`), rewrites the imported
+Codex store to that local mirrored path, and launches
+`codex resume <session_id>` against that imported store.
+
+Restore and immediately execute a local Codex continuation:
+
+```bash
+./scripts/handoff-kind-run-to-local.sh \
+  --run-id sf-whole-run-codex-e2e-234956 \
+  --prompt "Read README.md for context, then create validation/local-check.txt containing exactly: resumed locally."
+```
+
+The script:
+
+- mounts PVC `sf-run-ws-<run-id>` in a temporary inspector pod
+- copies the run workspace to a local mirrored path under the destination
+- copies the pod's Codex store from `/workspace/home/.codex`
+- rewrites imported Codex cwd/session paths to the local mirrored destination
+- reads `.sprintfoundry/sessions.json` to find the saved `session_id`
+- launches `codex resume <session_id>` against the imported `CODEX_HOME` by default
+- or runs `codex exec resume <session_id> <prompt>` against the imported `CODEX_HOME` when `--prompt` is provided
+- falls back to a fresh local interactive `codex` session only if the pod-local Codex store is unavailable
+
+If you only want the workspace copy and the printed command, add `--print-only`.
+
+For failed/cancelled runs, keep using `pnpm dev -- resume <run-id>`.
+
 ## Monitor
 
 Start monitor server:

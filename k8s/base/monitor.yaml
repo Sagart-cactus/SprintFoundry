@@ -1,3 +1,9 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: monitor
+  namespace: sprintfoundry-system
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -12,9 +18,11 @@ spec:
       labels:
         app.kubernetes.io/name: monitor
     spec:
+      serviceAccountName: monitor
       containers:
         - name: monitor
           image: sprintfoundry-runner:latest
+          imagePullPolicy: Never
           args:
             - monitor
             - --port
