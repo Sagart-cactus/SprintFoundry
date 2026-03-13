@@ -25,6 +25,8 @@ const RUNS_ROOT_ENV = "SPRINTFOUNDRY_RUNS_ROOT";
 const SESSIONS_DIR_ENV = "SPRINTFOUNDRY_SESSIONS_DIR";
 const AUTO_RESUME_ENV = "SPRINTFOUNDRY_AUTO_RESUME_EXISTING_RUN";
 const SKIP_PR_FINALIZATION_ENV = "SPRINTFOUNDRY_SKIP_PR_FINALIZATION";
+const EVENT_SINK_URL_ENV = "SPRINTFOUNDRY_EVENT_SINK_URL";
+const INTERNAL_API_TOKEN_ENV = "SPRINTFOUNDRY_INTERNAL_API_TOKEN";
 
 export interface DispatchControllerStartOptions {
   host?: string;
@@ -179,6 +181,7 @@ interface DispatchProjectConfig {
   projectArg: string | null;
   maxConcurrentRuns: number;
   validConfig: boolean;
+  eventSinkUrl?: string;
   github?: {
     owner: string;
     repo: string;
@@ -441,12 +444,16 @@ export function buildK8sJobManifest(task: DispatchQueueItem, options?: {
   memoryLimit?: string;
   workspaceSizeLimit?: string;
   workspaceStorageClassName?: string;
+  eventSinkUrl?: string;
+  internalApiToken?: string;
 }): K8sJobManifest {
   const namespace = asString(options?.namespace) || "default";
   const image = asString(options?.image) || "sprintfoundry-runner:latest";
   const projectSecretName = asString(options?.projectSecretName) || `sprintfoundry-project-${task.project_id}-secrets`;
   const projectConfigMapName = asString(options?.projectConfigMapName) || `sprintfoundry-project-${task.project_id}-config`;
   const workspacePvcName = makeRunWorkspacePvcName(task.run_id);
+  const eventSinkUrl = asString(options?.eventSinkUrl) || asString(process.env[EVENT_SINK_URL_ENV]);
+  const internalApiToken = asString(options?.internalApiToken) || asString(process.env[INTERNAL_API_TOKEN_ENV]);
 
   const args = ["run", "--source", task.source, "--config", "/config"];
 
@@ -510,6 +517,10 @@ export function buildK8sJobManifest(task: DispatchQueueItem, options?: {
                 { name: AUTO_RESUME_ENV, value: "1" },
                 { name: "HOME", value: "/workspace/home" },
                 { name: "CODEX_HOME", value: "/workspace/home/.codex" },
+                ...(eventSinkUrl ? [{ name: EVENT_SINK_URL_ENV, value: eventSinkUrl }] : []),
+                ...(eventSinkUrl && internalApiToken
+                  ? [{ name: INTERNAL_API_TOKEN_ENV, value: internalApiToken }]
+                  : []),
                 ...(asString(process.env[SKIP_PR_FINALIZATION_ENV])
                   ? [{ name: SKIP_PR_FINALIZATION_ENV, value: asString(process.env[SKIP_PR_FINALIZATION_ENV]) }]
                   : []),
@@ -630,34 +641,49 @@ function withOwnerReference<T extends { metadata?: Record<string, unknown> }>(
   };
 }
 
-async function attachWorkspacePvcToJob(
-  coreApi: any,
-  namespace: string,
-  pvcManifest: K8sPersistentVolumeClaimManifest,
+function hasOwnerReference(
+  resource: { metadata?: Record<string, unknown> },
   ownerReference: ReturnType<typeof buildJobOwnerReference>
-): Promise<void> {
-  const pvcName = pvcManifest.metadata.name;
+): boolean {
+  const metadata = (resource.metadata ?? {}) as Record<string, unknown>;
+  const existingOwnerReferences = Array.isArray(metadata.ownerReferences)
+    ? (metadata.ownerReferences as Array<Record<string, unknown>>)
+    : [];
+  return existingOwnerReferences.some(
+    (ref) => ref.uid === ownerReference.uid && ref.name === ownerReference.name
+  );
+}
 
-  let currentPvc: any;
+function isK8sConflictError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  const bodyCode = Number((error as { body?: { code?: unknown } } | undefined)?.body?.code);
+  return bodyCode === 409 || /Conflict|409|object has been modified|Operation cannot be fulfilled/i.test(message);
+}
+
+async function readNamespacedPersistentVolumeClaimCompat(coreApi: any, pvcName: string, namespace: string): Promise<any> {
   try {
-    currentPvc = await coreApi.readNamespacedPersistentVolumeClaim({ name: pvcName, namespace });
+    return await coreApi.readNamespacedPersistentVolumeClaim({ name: pvcName, namespace });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const expectsLegacyArgs = /name was null or undefined|namespace was null or undefined/i.test(message);
     if (!expectsLegacyArgs) {
       throw error;
     }
-    currentPvc = await coreApi.readNamespacedPersistentVolumeClaim(pvcName, namespace);
+    return coreApi.readNamespacedPersistentVolumeClaim(pvcName, namespace);
   }
+}
 
-  const currentBody = currentPvc?.body ?? currentPvc;
-  const updatedBody = withOwnerReference(currentBody, ownerReference);
-
+async function replaceNamespacedPersistentVolumeClaimCompat(
+  coreApi: any,
+  pvcName: string,
+  namespace: string,
+  body: unknown
+): Promise<void> {
   try {
     await coreApi.replaceNamespacedPersistentVolumeClaim({
       name: pvcName,
       namespace,
-      body: updatedBody,
+      body,
     });
     return;
   } catch (error) {
@@ -668,7 +694,35 @@ async function attachWorkspacePvcToJob(
     }
   }
 
-  await coreApi.replaceNamespacedPersistentVolumeClaim(pvcName, namespace, updatedBody);
+  await coreApi.replaceNamespacedPersistentVolumeClaim(pvcName, namespace, body);
+}
+
+export async function attachWorkspacePvcToJob(
+  coreApi: any,
+  namespace: string,
+  pvcManifest: K8sPersistentVolumeClaimManifest,
+  ownerReference: ReturnType<typeof buildJobOwnerReference>
+): Promise<void> {
+  const pvcName = pvcManifest.metadata.name;
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const currentPvc = await readNamespacedPersistentVolumeClaimCompat(coreApi, pvcName, namespace);
+    const currentBody = currentPvc?.body ?? currentPvc;
+    if (hasOwnerReference(currentBody, ownerReference)) {
+      return;
+    }
+
+    const updatedBody = withOwnerReference(currentBody, ownerReference);
+    try {
+      await replaceNamespacedPersistentVolumeClaimCompat(coreApi, pvcName, namespace, updatedBody);
+      return;
+    } catch (error) {
+      if (isK8sConflictError(error) && attempt < 3) {
+        continue;
+      }
+      throw error;
+    }
+  }
 }
 
 async function readJobUid(batchApi: any, namespace: string, jobName: string): Promise<string> {
@@ -918,6 +972,7 @@ class DispatchController implements DispatchControllerRuntime {
         projectArg: projectArgFromFileName(fileName),
         maxConcurrentRuns: resolveProjectConcurrentLimit(rawProject, this.defaultMaxConcurrentRuns),
         validConfig: isValidProjectConfig(rawProject),
+        eventSinkUrl: asString((isRecord(integrations.event_sink) ? integrations.event_sink.url : undefined) ?? ""),
       };
 
       if (sourceType === "github") {
@@ -1029,15 +1084,20 @@ class DispatchController implements DispatchControllerRuntime {
 
   private async dispatchTask(task: DispatchQueueItem): Promise<void> {
     if (this.k8sMode) {
+      const project = await this.findProjectById(task.project_id);
       const namespace = asString(process.env.SPRINTFOUNDRY_K8S_NAMESPACE) || task.project_id;
       const secretName = asString(process.env.SPRINTFOUNDRY_K8S_PROJECT_SECRET_NAME) || `sprintfoundry-project-${task.project_id}-secrets`;
       const configMapName = asString(process.env.SPRINTFOUNDRY_K8S_PROJECT_CONFIGMAP_NAME) || `sprintfoundry-project-${task.project_id}-config`;
+      const eventSinkUrl = asString(process.env[EVENT_SINK_URL_ENV]) || asString(project?.eventSinkUrl);
+      const internalApiToken = asString(process.env[INTERNAL_API_TOKEN_ENV]);
       const manifest = buildK8sJobManifest(task, {
         namespace,
         image: this.runnerImage,
         projectSecretName: secretName,
         projectConfigMapName: configMapName,
         serviceAccountName: asString(process.env.SPRINTFOUNDRY_K8S_SERVICE_ACCOUNT) || undefined,
+        eventSinkUrl: eventSinkUrl || undefined,
+        internalApiToken: internalApiToken || undefined,
       });
       await this.createK8sJob(manifest, task, namespace);
       return;

@@ -65,6 +65,7 @@ import type {
 const RUN_STATE_DIR = ".sprintfoundry";
 const RUN_STATE_FILE = "run-state.json";
 const SKIP_PR_FINALIZATION_ENV = "SPRINTFOUNDRY_SKIP_PR_FINALIZATION";
+const EVENT_SINK_URL_ENV = "SPRINTFOUNDRY_EVENT_SINK_URL";
 
 function isTruthy(value: string | undefined): boolean {
   const normalized = String(value ?? "").trim().toLowerCase();
@@ -118,7 +119,10 @@ export class OrchestrationService {
     this.validator = new PlanValidator(platformConfig, projectConfig);
     this.agentRunner = new AgentRunner(platformConfig, projectConfig, executionBackend);
     this.plannerRuntime = new PlannerFactory().create(platformConfig, projectConfig);
-    const eventSinkUrl = process.env.SPRINTFOUNDRY_EVENT_SINK_URL?.trim();
+    const eventSinkUrl =
+      process.env[EVENT_SINK_URL_ENV]?.trim() ||
+      projectConfig.integrations.event_sink?.url?.trim() ||
+      "";
     const internalApiToken = process.env.SPRINTFOUNDRY_INTERNAL_API_TOKEN?.trim();
     const eventSinkClient = eventSinkUrl ? new EventSinkClient(eventSinkUrl, globalThis.fetch, internalApiToken) : undefined;
     this.eventSinkClient = eventSinkClient;

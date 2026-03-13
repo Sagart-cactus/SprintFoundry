@@ -145,6 +145,7 @@ describe("OrchestrationService", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     delete process.env.SPRINTFOUNDRY_EVENT_SINK_URL;
+    delete process.env.SPRINTFOUNDRY_INTERNAL_API_TOKEN;
 
     service = new OrchestrationService(
       makePlatformConfig(),
@@ -216,6 +217,44 @@ describe("OrchestrationService", () => {
 
     await vi.waitFor(
       () => {
+        expect(eventSinkUpsertRun).toHaveBeenCalled();
+      },
+      { timeout: 5000 }
+    );
+  });
+
+  it("wires sink client into SessionManager persistence when sink URL comes from project config", async () => {
+    const baseProject = makeProjectConfig();
+    const sinkEnabledService = new OrchestrationService(
+      makePlatformConfig(),
+      makeProjectConfig({
+        integrations: {
+          ...baseProject.integrations,
+          event_sink: {
+            url: "https://sink.example/from-config",
+          },
+        },
+      }),
+    );
+
+    const mockPlanner = (sinkEnabledService as any).plannerRuntime;
+    const mockRunner = (sinkEnabledService as any).agentRunner;
+
+    const plan = makeDevQaPlan();
+    mockPlanner.generatePlan.mockResolvedValue(plan);
+    mockRunner.run.mockResolvedValue({
+      agentResult: makeResult(),
+      tokens_used: 100,
+      cost_usd: 0.01,
+      duration_seconds: 5,
+      container_id: "local-1",
+    });
+
+    await sinkEnabledService.handleTask("p1", "prompt", "Build a thing");
+
+    await vi.waitFor(
+      () => {
+        expect(eventSinkCtor).toHaveBeenCalledWith("https://sink.example/from-config");
         expect(eventSinkUpsertRun).toHaveBeenCalled();
       },
       { timeout: 5000 }

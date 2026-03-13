@@ -4,11 +4,13 @@ import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
 import {
+  attachWorkspacePvcToJob,
   buildJobOwnerReference,
   buildK8sJobManifest,
   buildK8sWorkspacePvcManifest,
   registerDispatchRoutes,
   type DispatchRedisClient,
+  type K8sJobManifest,
 } from "../src/service/dispatch-controller.js";
 
 type Handler = (
@@ -276,6 +278,9 @@ afterEach(() => {
   for (const dir of tempDirs.splice(0, tempDirs.length)) {
     rmSync(dir, { recursive: true, force: true });
   }
+  delete process.env.SPRINTFOUNDRY_EVENT_SINK_URL;
+  delete process.env.SPRINTFOUNDRY_INTERNAL_API_TOKEN;
+  delete process.env.SPRINTFOUNDRY_SKIP_PR_FINALIZATION;
 });
 
 describe("dispatch-controller", () => {
@@ -623,6 +628,106 @@ describe("dispatch-controller", () => {
     expect(manifest.spec.backoffLimit).toBe(1);
   });
 
+  it("builds a k8s job manifest with event sink env when provided", () => {
+    const manifest = buildK8sJobManifest(
+      {
+        run_id: "run-xyz",
+        project_id: "proj-1",
+        project_arg: "proj",
+        source: "prompt",
+        ticket_id: "prompt",
+        prompt: "do the thing",
+        created_at: "2026-03-04T00:00:00.000Z",
+      },
+      {
+        namespace: "proj-ns",
+        image: "ghcr.io/acme/sprintfoundry:latest",
+        projectSecretName: "proj-secret",
+        projectConfigMapName: "proj-config",
+        eventSinkUrl: "https://sink.example/events",
+        internalApiToken: "internal-token",
+      },
+    );
+
+    expect(manifest.spec.template.spec.containers[0]?.env).toEqual(
+      expect.arrayContaining([
+        { name: "SPRINTFOUNDRY_EVENT_SINK_URL", value: "https://sink.example/events" },
+        { name: "SPRINTFOUNDRY_INTERNAL_API_TOKEN", value: "internal-token" },
+      ]),
+    );
+  });
+
+  it("passes project-config event sink settings into dispatched k8s jobs", async () => {
+    const configDir = mkdtempSync(path.join(os.tmpdir(), "sf-dispatch-config-k8s-"));
+    tempDirs.push(configDir);
+
+    makeProjectConfig(
+      configDir,
+      "project-live-gaps-worktree.yaml",
+      [
+        "project_id: live-gaps-worktree",
+        "name: Live Gaps Worktree",
+        "repo:",
+        "  url: https://github.com/Sagart-cactus/sprintfoundry-dryrun.git",
+        "  default_branch: main",
+        "integrations:",
+        "  ticket_source:",
+        "    type: prompt",
+        "    config: {}",
+        "  event_sink:",
+        "    url: https://sink.example/from-config",
+        "rules: []",
+        "",
+      ].join("\n"),
+    );
+
+    process.env.SPRINTFOUNDRY_INTERNAL_API_TOKEN = "internal-token";
+
+    const redis = new FakeRedisClient();
+    const app = new FakeExpressApp();
+    const createdJobs: K8sJobManifest[] = [];
+    const createdNamespaces: string[] = [];
+
+    const runtime = await registerDispatchRoutes(app, {
+      configDir,
+      redisClient: redis,
+      autoStartConsumer: false,
+      k8sMode: true,
+      createK8sJob: async (manifest, _task, namespace) => {
+        createdJobs.push(manifest);
+        createdNamespaces.push(namespace);
+      },
+      idGenerator: () => "k8sjob01",
+      now: () => 1_750_000_000_000,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      path: "/api/dispatch/run",
+      body: {
+        project_id: "live-gaps-worktree",
+        source: "prompt",
+        prompt: "smoke",
+      },
+    });
+
+    expect(response.status).toBe(202);
+
+    const processed = await runtime.processQueueOnce();
+
+    expect(processed).toBe(true);
+    expect(createdNamespaces).toEqual(["live-gaps-worktree"]);
+    expect(createdJobs).toHaveLength(1);
+    expect(createdJobs[0]?.spec.template.spec.containers[0]?.env).toEqual(
+      expect.arrayContaining([
+        { name: "SPRINTFOUNDRY_EVENT_SINK_URL", value: "https://sink.example/from-config" },
+        { name: "SPRINTFOUNDRY_INTERNAL_API_TOKEN", value: "internal-token" },
+      ]),
+    );
+
+    await runtime.close();
+  });
+
   it("builds a per-run PVC manifest for the runner workspace", () => {
     const manifest = buildK8sWorkspacePvcManifest(
       {
@@ -681,5 +786,75 @@ describe("dispatch-controller", () => {
       controller: false,
       blockOwnerDeletion: false,
     });
+  });
+
+  it("retries PVC owner-reference attachment when the PVC changes underneath the first replace", async () => {
+    const pvcManifest = buildK8sWorkspacePvcManifest(
+      {
+        run_id: "run-xyz",
+        project_id: "proj-1",
+        project_arg: "proj",
+        source: "prompt",
+        ticket_id: "prompt",
+        prompt: "do the thing",
+        created_at: "2026-03-04T00:00:00.000Z",
+      },
+      {
+        namespace: "proj-ns",
+      },
+    );
+    const ownerReference = buildJobOwnerReference({
+      apiVersion: "batch/v1",
+      kind: "Job",
+      metadata: {
+        name: "sf-run-xyz",
+        uid: "job-uid-123",
+      },
+    });
+
+    const reads = [
+      {
+        body: {
+          metadata: {
+            name: pvcManifest.metadata.name,
+            resourceVersion: "1",
+          },
+        },
+      },
+      {
+        body: {
+          metadata: {
+            name: pvcManifest.metadata.name,
+            resourceVersion: "2",
+          },
+        },
+      },
+    ];
+    const replacedBodies: Array<Record<string, unknown>> = [];
+
+    const coreApi = {
+      async readNamespacedPersistentVolumeClaim(_args: { name: string; namespace: string }) {
+        return reads.shift();
+      },
+      async replaceNamespacedPersistentVolumeClaim(args: {
+        name: string;
+        namespace: string;
+        body: Record<string, unknown>;
+      }) {
+        replacedBodies.push(args.body);
+        if (replacedBodies.length === 1) {
+          throw new Error(
+            "HTTP-Code: 409\nMessage: Operation cannot be fulfilled on persistentvolumeclaims \"sf-run-ws-run-xyz\": the object has been modified; please apply your changes to the latest version and try again",
+          );
+        }
+      },
+    };
+
+    await attachWorkspacePvcToJob(coreApi, "proj-ns", pvcManifest, ownerReference);
+
+    expect(replacedBodies).toHaveLength(2);
+    expect((replacedBodies[1]?.metadata as { ownerReferences?: unknown[] } | undefined)?.ownerReferences).toEqual([
+      ownerReference,
+    ]);
   });
 });
