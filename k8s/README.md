@@ -47,6 +47,8 @@ kubectl -n sprintfoundry-system create secret generic sprintfoundry-system-secre
 ## Notes
 
 - Base manifests use `sprintfoundry-runner:latest`.
+- `dispatch-controller` also sets `SPRINTFOUNDRY_RUNNER_IMAGE=sprintfoundry-runner:latest` so spawned whole-run Jobs default to the same image.
+- Distributed event sink URLs should target the events endpoint, for example `http://event-api.sprintfoundry-system.svc.cluster.local:3001/events`.
 - The run pod template in `base/job-template.yaml` shows EmptyDir, Secret env mount, ConfigMap mount, resources, and Karpenter toleration.
 
 ## Provisioning Metrics

@@ -35,7 +35,7 @@ spec:
             - project-example
           env:
             - name: SPRINTFOUNDRY_EVENT_SINK_URL
-              value: http://event-api.sprintfoundry-system.svc.cluster.local:3001
+              value: http://event-api.sprintfoundry-system.svc.cluster.local:3001/events
             - name: SPRINTFOUNDRY_INTERNAL_API_TOKEN
               valueFrom:
                 secretKeyRef:

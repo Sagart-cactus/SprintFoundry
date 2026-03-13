@@ -35,6 +35,10 @@ spec:
           env:
             - name: SPRINTFOUNDRY_K8S_MODE
               value: "true"
+            - name: SPRINTFOUNDRY_RUNNER_IMAGE
+              value: sprintfoundry-runner:latest
+            - name: SPRINTFOUNDRY_EVENT_SINK_URL
+              value: http://event-api.sprintfoundry-system.svc.cluster.local:3001/events
             - name: SPRINTFOUNDRY_DATABASE_URL
               value: postgres://sf:sf@postgres:5432/sprintfoundry
             - name: SPRINTFOUNDRY_REDIS_URL
