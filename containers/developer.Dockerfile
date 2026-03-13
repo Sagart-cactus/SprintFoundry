@@ -1,7 +1,8 @@
 # SprintFoundry — Developer Agent
 # Full-stack development environment with Node.js, TypeScript, and common tools.
 
-FROM sprintfoundry/agent-base:latest
+ARG BASE_IMAGE=sprintfoundry/agent-base:latest
+FROM ${BASE_IMAGE}
 
 USER root
 

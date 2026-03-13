@@ -1,7 +1,8 @@
 # SprintFoundry — DevOps Agent
 # CI/CD and infrastructure tooling.
 
-FROM sprintfoundry/agent-base:latest
+ARG BASE_IMAGE=sprintfoundry/agent-base:latest
+FROM ${BASE_IMAGE}
 
 USER root
 
