@@ -2045,6 +2045,9 @@ export class OrchestrationService {
     extra?: Record<string, unknown>
   ): Record<string, unknown> {
     const handle = this.getRunEnvironment(run);
+    const metadata = handle?.metadata && typeof handle.metadata === "object"
+      ? handle.metadata as Record<string, unknown>
+      : {};
     return {
       sandbox_id: handle?.sandbox_id ?? run.sandbox_id,
       execution_backend: handle?.execution_backend ?? run.execution_backend,
@@ -2053,6 +2056,10 @@ export class OrchestrationService {
       workspace_volume_ref: handle?.workspace_volume_ref ?? run.workspace_volume_ref,
       network_profile: handle?.network_profile ?? run.network_profile,
       isolation_level: handle?.isolation_level ?? run.isolation_level,
+      claim_name: typeof metadata.claim_name === "string" ? metadata.claim_name : undefined,
+      template_name: typeof metadata.template_name === "string" ? metadata.template_name : undefined,
+      bound_sandbox_name: typeof metadata.bound_sandbox_name === "string" ? metadata.bound_sandbox_name : undefined,
+      sandbox_namespace: typeof metadata.namespace === "string" ? metadata.namespace : undefined,
       ...(extra ?? {}),
     };
   }

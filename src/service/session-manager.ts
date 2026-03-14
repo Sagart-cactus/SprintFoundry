@@ -62,8 +62,8 @@ export class SessionManager {
       current_step: currentStep,
       total_steps: totalSteps,
       plan_classification: run.plan?.classification ?? null,
-      workspace_path: extra?.workspace_path ?? null,
-      branch: extra?.branch ?? null,
+      workspace_path: extra?.workspace_path ?? existing?.workspace_path ?? null,
+      branch: extra?.branch ?? existing?.branch ?? null,
       pr_url: run.pr_url,
       total_tokens: run.total_tokens_used,
       total_cost_usd: run.total_cost_usd,
@@ -171,6 +171,12 @@ export class SessionManager {
     if (!session) return false;
     session.status = status;
     session.updated_at = new Date().toISOString();
+    if (status === "completed" || status === "failed" || status === "cancelled") {
+      session.completed_at = session.completed_at ?? session.updated_at;
+      if (!session.terminal_workflow_state || session.terminal_workflow_state === "running") {
+        session.terminal_workflow_state = "terminal_pending_snapshot";
+      }
+    }
     await this.update(session);
     return true;
   }
@@ -241,7 +247,10 @@ export class SessionManager {
     existing: RunSessionMetadata | null
   ): TerminalWorkflowState {
     if (status === "completed" || status === "failed" || status === "cancelled") {
-      return existing?.terminal_workflow_state ?? "terminal_pending_snapshot";
+      if (!existing?.terminal_workflow_state || existing.terminal_workflow_state === "running") {
+        return "terminal_pending_snapshot";
+      }
+      return existing.terminal_workflow_state;
     }
     return "running";
   }
@@ -303,6 +312,9 @@ export class SessionManager {
       if (type === "task.completed") {
         derived = "completed";
         hasTerminalTaskEvent = true;
+      } else if (type === "task.cancelled") {
+        derived = "cancelled";
+        hasTerminalTaskEvent = true;
       } else if (type === "task.failed") {
         derived = "failed";
         hasTerminalTaskEvent = true;
@@ -339,7 +351,7 @@ export class SessionManager {
       hosting_mode: hostingMode ?? session.hosting_mode,
       updated_at: lastTimestamp ?? session.updated_at,
       completed_at:
-        (derived === "completed" || derived === "failed")
+        (derived === "completed" || derived === "failed" || derived === "cancelled")
           ? (session.completed_at ?? lastTimestamp ?? null)
           : session.completed_at,
     };

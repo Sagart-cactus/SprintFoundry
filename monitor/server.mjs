@@ -57,6 +57,7 @@ const autoexecuteSeen = new Map();
 let autoexecuteSeenLoaded = false;
 let autoexecuteSeenWritePromise = Promise.resolve();
 const handoffPvcLookupCache = new Map();
+const sandboxHostLookupCache = new Map();
 let handoffK8sAuthCache = { loadedAt: 0, token: "", ca: "" };
 
 function toPositiveInt(value, fallback) {
@@ -1150,6 +1151,22 @@ async function requestHandoffK8sApi(requestPath) {
   });
 }
 
+async function requestHandoffK8sJson(requestPath) {
+  const response = await requestHandoffK8sApi(requestPath);
+  let json = null;
+  if (response.body) {
+    try {
+      json = JSON.parse(response.body);
+    } catch {
+      json = null;
+    }
+  }
+  return {
+    status: response.status,
+    json,
+  };
+}
+
 async function hasRunWorkspacePvc(namespace, runId) {
   const normalizedNamespace = typeof namespace === "string" ? namespace.trim() : "";
   const normalizedRunId = typeof runId === "string" ? runId.trim() : "";
@@ -1212,6 +1229,98 @@ async function buildHandoffMetadata(projectId, runId) {
     handoff_namespace: null,
     handoff_command: null,
   };
+}
+
+function sandboxNameFromClaim(claim) {
+  const sandbox = claim?.status?.sandbox;
+  if (sandbox && typeof sandbox === "object") {
+    return String(sandbox.Name ?? sandbox.name ?? "").trim() || null;
+  }
+  return null;
+}
+
+function sandboxTemplateNameFromClaim(claim) {
+  const templateName = claim?.spec?.sandboxTemplateRef?.name;
+  return typeof templateName === "string" && templateName.trim() ? templateName.trim() : null;
+}
+
+function sandboxLifecycleStateFromResources(claim, sandbox, pods) {
+  const podList = Array.isArray(pods) ? pods : [];
+  if (podList.some((pod) => pod?.metadata?.deletionTimestamp)) return "terminating";
+  if (podList.some((pod) => String(pod?.status?.phase ?? "") === "Running")) return "running";
+  if (podList.some((pod) => String(pod?.status?.phase ?? "") === "Pending")) return "pending";
+  if (podList.some((pod) => String(pod?.status?.phase ?? "") === "Succeeded")) return "succeeded";
+  if (podList.some((pod) => String(pod?.status?.phase ?? "") === "Failed")) return "failed";
+
+  const readyCondition = Array.isArray(claim?.status?.conditions)
+    ? claim.status.conditions.find((condition) => condition?.type === "Ready")
+    : null;
+  if (String(readyCondition?.status ?? "") === "True") return "ready";
+  if (String(readyCondition?.status ?? "") === "False") return "not_ready";
+  if (claim || sandbox) return "provisioning";
+  return "not_found";
+}
+
+async function lookupSandboxHost(projectId, runId) {
+  if (!getHandoffK8sApiBaseUrl()) return null;
+  const namespaces = deriveWholeRunNamespaces(projectId, runId);
+  if (namespaces.length === 0) return null;
+
+  for (const namespace of namespaces) {
+    const cacheKey = `${namespace}/${runId}`;
+    const now = Date.now();
+    const cached = sandboxHostLookupCache.get(cacheKey);
+    if (cached && now - cached.checkedAt < handoffPvcLookupCacheTtlMs) {
+      return cached.value;
+    }
+
+    const claimName = `sf-${String(runId ?? "").trim().toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "run"}`;
+    try {
+      const [claimResponse, podsResponse] = await Promise.all([
+        requestHandoffK8sJson(
+          `/apis/extensions.agents.x-k8s.io/v1alpha1/namespaces/${encodeURIComponent(namespace)}/sandboxclaims/${encodeURIComponent(claimName)}`
+        ),
+        requestHandoffK8sJson(
+          `/api/v1/namespaces/${encodeURIComponent(namespace)}/pods?labelSelector=${encodeURIComponent(`sprintfoundry.io/run-id=${runId}`)}`
+        ),
+      ]);
+
+      if (claimResponse.status === 404 && (podsResponse.status === 404 || !Array.isArray(podsResponse.json?.items))) {
+        sandboxHostLookupCache.set(cacheKey, { checkedAt: now, value: null });
+        continue;
+      }
+
+      const claim = claimResponse.status === 200 ? claimResponse.json : null;
+      const sandboxName = sandboxNameFromClaim(claim);
+      const sandboxResponse = sandboxName
+        ? await requestHandoffK8sJson(
+          `/apis/agents.x-k8s.io/v1alpha1/namespaces/${encodeURIComponent(namespace)}/sandboxes/${encodeURIComponent(sandboxName)}`
+        )
+        : { status: 0, json: null };
+      const pods = Array.isArray(podsResponse.json?.items) ? podsResponse.json.items : [];
+      const value = {
+        namespace,
+        claim_name: claim?.metadata?.name ?? claimName,
+        template_name: sandboxTemplateNameFromClaim(claim),
+        sandbox_name: sandboxName ?? sandboxResponse.json?.metadata?.name ?? null,
+        lifecycle_state: sandboxLifecycleStateFromResources(claim, sandboxResponse.json, pods),
+        pod_names: pods.map((pod) => String(pod?.metadata?.name ?? "")).filter(Boolean),
+        pod_phases: pods.map((pod) => String(pod?.status?.phase ?? "")).filter(Boolean),
+      };
+      sandboxHostLookupCache.set(cacheKey, { checkedAt: now, value });
+      return value;
+    } catch (error) {
+      console.warn(
+        `[monitor] sandbox host lookup failed for ${namespace}/${runId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      sandboxHostLookupCache.set(cacheKey, { checkedAt: now, value: null });
+      return null;
+    }
+  }
+
+  return null;
 }
 
 let databasePoolPromise = null;
@@ -1458,15 +1567,20 @@ async function loadRunSummaryFromDbRecord(runRecord, options = {}) {
   if (!fallbackRepoUrl && typeof runRecord.workspace_path === "string" && runRecord.workspace_path) {
     fallbackRepoUrl = await getWorkspaceRepoUrl(runRecord.workspace_path);
   }
+  const hostingMode = extractHostingMode(events, sessionFallback, runRecord);
+  const snapshotState = extractSnapshotState(events, sessionFallback);
   const handoffMeta = options.includeHandoff
     ? await buildHandoffMetadata(runRecord.project_id, runRecord.run_id)
+    : null;
+  const sandboxHost = options.includeSandboxHost && hostingMode === "k8s-agent-sandbox"
+    ? await lookupSandboxHost(runRecord.project_id, runRecord.run_id)
     : null;
 
   return {
     project_id: runRecord.project_id,
     run_id: runRecord.run_id,
     status: hasEvents ? inferStatus(events) : (runRecord.status ?? "unknown"),
-    hosting_mode: extractHostingMode(events, sessionFallback, runRecord),
+    hosting_mode: hostingMode,
     classification: plan?.classification ?? runRecord.plan_classification ?? null,
     step_count: hasEvents ? (plan?.steps?.length ?? 0) : (runRecord.total_steps ?? 0),
     steps,
@@ -1476,6 +1590,9 @@ async function loadRunSummaryFromDbRecord(runRecord, options = {}) {
       ? Date.parse(last.timestamp)
       : (runRecord.updated_at ? Date.parse(String(runRecord.updated_at)) : null),
     workspace_path: runRecord.workspace_path ?? "",
+    terminal_workflow_state: snapshotState.terminal_workflow_state,
+    durable_snapshot: snapshotState.durable_snapshot,
+    sandbox_host: sandboxHost,
     ...(handoffMeta ?? {}),
     ...sourceMeta,
     ticket_repo_url: fallbackRepoUrl,
@@ -1520,7 +1637,7 @@ async function loadRunFromDb(projectId, runId) {
   if (!runRecord) {
     throw new Error(`Run not found: ${projectId}/${runId}`);
   }
-  const summary = await loadRunSummaryFromDbRecord(runRecord, { includeHandoff: true });
+  const summary = await loadRunSummaryFromDbRecord(runRecord, { includeHandoff: true, includeSandboxHost: true });
   const events = await readEventsFromDb(runRecord.run_id);
   const planEvent = events.find((e) => e.event_type === "task.plan_generated");
   const db = await getDatabasePool();
@@ -1764,6 +1881,7 @@ function inferStatus(events) {
   for (let i = events.length - 1; i >= 0; i--) {
     const t = events[i]?.event_type;
     if (t === "task.completed") return "completed";
+    if (t === "task.cancelled") return "cancelled";
     if (t === "task.failed") return "failed";
     if (t === "step.failed") return "failed";
     if (t === "human_gate.requested") return "waiting_human_review";
@@ -1786,6 +1904,21 @@ function normalizeHostingMode(value) {
     return normalized;
   }
   return null;
+}
+
+async function findSessionMetadata(projectId, runId, workspacePath = null) {
+  const sessions = await listSessionMetadata();
+  const runIdCandidates = buildRunIdCandidates(runId);
+  const canonicalRunId = canonicalizeRunId(runId);
+  return sessions.find(
+    (session) =>
+      session?.project_id === projectId &&
+      (
+        runIdCandidates.includes(String(session?.run_id ?? "")) ||
+        canonicalizeRunId(session?.run_id) === canonicalRunId
+      ) &&
+      (!workspacePath || session?.workspace_path === workspacePath)
+  ) ?? null;
 }
 
 function inferHostingModeFromExecutionBackend(executionBackend, session = null) {
@@ -1818,6 +1951,92 @@ function extractHostingMode(events, session = null, runRecord = null) {
   }
 
   return inferHostingModeFromExecutionBackend(runRecord?.execution_backend, session);
+}
+
+function extractSnapshotState(events, session = null) {
+  const terminalWorkflowState = typeof session?.terminal_workflow_state === "string"
+    ? session.terminal_workflow_state
+    : null;
+  const durableSnapshot = session?.durable_snapshot && typeof session.durable_snapshot === "object"
+    ? session.durable_snapshot
+    : null;
+
+  if (terminalWorkflowState === "cleanup_completed") {
+    return {
+      terminal_workflow_state: "cleanup_completed",
+      durable_snapshot: durableSnapshot,
+    };
+  }
+
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i];
+    const data = event?.data && typeof event.data === "object" ? event.data : {};
+    if (event?.event_type === "workspace.cleanup.completed") {
+      return {
+        terminal_workflow_state: "cleanup_completed",
+        durable_snapshot: durableSnapshot,
+      };
+    }
+    if (event?.event_type === "workspace.cleanup.failed") {
+      return {
+        terminal_workflow_state: "snapshot_failed",
+        durable_snapshot: durableSnapshot ?? {
+          status: "failed",
+          backend: "s3",
+          bucket: "",
+          terminal_status: null,
+          exported_at: null,
+          error: typeof data.error === "string" ? data.error : null,
+        },
+      };
+    }
+    if (event?.event_type === "workspace.snapshot.completed") {
+      return {
+        terminal_workflow_state: "snapshot_completed",
+        durable_snapshot: durableSnapshot ?? {
+          status: "completed",
+          backend: "s3",
+          bucket: typeof data.bucket === "string" ? data.bucket : "",
+          manifest_key: typeof data.manifest_key === "string" ? data.manifest_key : null,
+          archive_key: typeof data.archive_key === "string" ? data.archive_key : null,
+          terminal_status: typeof data.terminal_status === "string" ? data.terminal_status : null,
+          exported_at: typeof event.timestamp === "string" ? event.timestamp : null,
+          error: null,
+        },
+      };
+    }
+    if (event?.event_type === "workspace.snapshot.failed") {
+      return {
+        terminal_workflow_state: "snapshot_failed",
+        durable_snapshot: durableSnapshot ?? {
+          status: "failed",
+          backend: "s3",
+          bucket: "",
+          terminal_status: typeof data.terminal_status === "string" ? data.terminal_status : null,
+          exported_at: null,
+          error: typeof data.error === "string" ? data.error : null,
+        },
+      };
+    }
+    if (event?.event_type === "workspace.snapshot.started") {
+      return {
+        terminal_workflow_state: "snapshot_uploading",
+        durable_snapshot: durableSnapshot ?? {
+          status: "uploading",
+          backend: "s3",
+          bucket: "",
+          terminal_status: typeof data.terminal_status === "string" ? data.terminal_status : null,
+          exported_at: null,
+          error: null,
+        },
+      };
+    }
+  }
+
+  return {
+    terminal_workflow_state: terminalWorkflowState,
+    durable_snapshot: durableSnapshot,
+  };
 }
 
 function extractRuntimeSkills(runtimeMetadata) {
@@ -2025,12 +2244,17 @@ async function loadRunSummary(projectId, runId, runPath, session = null, options
   const projectRepoUrl = await getProjectRepoUrl(projectId);
   const sourceMeta = extractRunSourceMetadata(events, session, projectRepoUrl);
   const fallbackRepoUrl = sourceMeta.ticket_repo_url ?? await getWorkspaceRepoUrl(runPath);
+  const hostingMode = extractHostingMode(events, session);
+  const snapshotState = extractSnapshotState(events, session);
   const handoffMeta = options.includeHandoff ? await buildHandoffMetadata(projectId, canonicalRunId) : null;
+  const sandboxHost = options.includeSandboxHost && hostingMode === "k8s-agent-sandbox"
+    ? await lookupSandboxHost(projectId, canonicalRunId)
+    : null;
   return {
     project_id: projectId,
     run_id: canonicalRunId,
     status: hasEvents ? inferStatus(events) : (session?.status ?? "unknown"),
-    hosting_mode: extractHostingMode(events, session),
+    hosting_mode: hostingMode,
     classification: plan?.classification ?? session?.plan_classification ?? null,
     step_count: hasEvents ? (plan?.steps?.length ?? 0) : (session?.total_steps ?? 0),
     steps,
@@ -2040,6 +2264,9 @@ async function loadRunSummary(projectId, runId, runPath, session = null, options
       ? Date.parse(last.timestamp)
       : (session?.updated_at ? Date.parse(session.updated_at) : null),
     workspace_path: runPath,
+    terminal_workflow_state: snapshotState.terminal_workflow_state,
+    durable_snapshot: snapshotState.durable_snapshot,
+    sandbox_host: sandboxHost,
     ...(handoffMeta ?? {}),
     ...resumeMeta,
     ...sourceMeta,
@@ -2049,7 +2276,11 @@ async function loadRunSummary(projectId, runId, runPath, session = null, options
 
 async function loadRun(projectId, runId) {
   const runPath = await resolveRunPath(projectId, runId);
-  const summary = await loadRunSummary(projectId, runId, runPath, null, { includeHandoff: true });
+  const session = await findSessionMetadata(projectId, runId, runPath);
+  const summary = await loadRunSummary(projectId, runId, runPath, session, {
+    includeHandoff: true,
+    includeSandboxHost: true,
+  });
   const events = await readEvents(runPath);
   const planEvent = events.find((e) => e.event_type === "task.plan_generated");
   const step_models = await loadStepModels(runPath);

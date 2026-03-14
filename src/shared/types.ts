@@ -178,7 +178,7 @@ export interface SkillDefinition {
 }
 
 export type CodexSkillDefinition = SkillDefinition;
-export type ExecutionBackendName = "local" | "docker" | "k8s-pod" | "agent-sandbox";
+export type ExecutionBackendName = "local" | "docker" | "agent-sandbox";
 export type HostingMode = "local" | "docker" | "k8s-job-whole-run" | "k8s-agent-sandbox";
 
 export type SkillSource =
@@ -552,6 +552,7 @@ export type EventType =
   | "task.stack_detected"
   | "task.started"
   | "task.completed"
+  | "task.cancelled"
   | "task.failed"
   | "step.started"
   | "step.completed"
