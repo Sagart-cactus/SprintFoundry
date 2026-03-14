@@ -1,4 +1,5 @@
 import { createRequire } from "module";
+import path from "path";
 import type { ExecutionPlan, PlanStep, PlatformConfig, ProjectConfig, TaskRun } from "../../shared/types.js";
 import type { AgentRunConfig, AgentRunResult } from "../agent-runner.js";
 import type { ExecutionBackend, RunEnvironmentHandle, SandboxTeardownReason } from "./backend.js";
@@ -8,6 +9,7 @@ import {
   DEFAULT_AGENT_SANDBOX_CLAIM_PLURAL,
 } from "../agent-sandbox-platform.js";
 import { resolveHostingMode } from "../hosting-mode.js";
+import { LocalExecutionBackend } from "./local-backend.js";
 
 const require = createRequire(import.meta.url);
 
@@ -17,17 +19,22 @@ interface AgentSandboxClient {
   deleteSandboxClaim(namespace: string, claimName: string): Promise<void>;
 }
 
+type LocalExecutionDelegate = Pick<ExecutionBackend, "executeStep">;
+
 export class AgentSandboxExecutionBackend implements ExecutionBackend {
   private readonly namespace: string;
   private client: AgentSandboxClient | null;
+  private readonly localBackend: LocalExecutionDelegate;
 
   constructor(
     private readonly platformConfig: PlatformConfig,
     private readonly projectConfig: ProjectConfig,
-    client?: AgentSandboxClient
+    client?: AgentSandboxClient,
+    localBackend: LocalExecutionDelegate = new LocalExecutionBackend()
   ) {
     this.namespace = this.platformConfig.k8s?.namespace?.trim() || "default";
     this.client = client ?? null;
+    this.localBackend = localBackend;
   }
 
   async prepareRunEnvironment(
@@ -41,6 +48,7 @@ export class AgentSandboxExecutionBackend implements ExecutionBackend {
     const claimName = this.buildClaimName(run.run_id);
     const templateName = this.platformConfig.k8s?.agent_sandbox?.template_name?.trim() || "default";
     const manifest = this.buildSandboxClaimManifest(run, claimName, templateName);
+    const hostEnv = this.buildWholeRunHostEnv();
     const claimCreateStartedAt = Date.now();
     await client.createSandboxClaim(this.namespace, manifest);
     provisioningTimingMs.claim_create = Date.now() - claimCreateStartedAt;
@@ -64,19 +72,30 @@ export class AgentSandboxExecutionBackend implements ExecutionBackend {
         template_name: templateName,
         bound_sandbox_name: binding.sandboxName,
         warm_pool_name: this.platformConfig.k8s?.agent_sandbox?.warm_pool_name,
+        host_env: hostEnv,
+        host_paths: {
+          runs_root: hostEnv.SPRINTFOUNDRY_RUNS_ROOT,
+          sessions_dir: hostEnv.SPRINTFOUNDRY_SESSIONS_DIR,
+          home: hostEnv.HOME,
+          codex_home: hostEnv.CODEX_HOME,
+        },
         provisioning_timing_ms: provisioningTimingMs,
       },
     };
   }
 
   async executeStep(
-    _handle: RunEnvironmentHandle,
-    _step: PlanStep,
-    _config: AgentRunConfig
+    handle: RunEnvironmentHandle,
+    step: PlanStep,
+    config: AgentRunConfig
   ): Promise<AgentRunResult> {
-    throw new Error(
-      "AgentSandboxExecutionBackend is scaffolded only. Step execution is not implemented yet."
-    );
+    return this.withWholeRunHostEnv(handle, async () => {
+      const localHandle: RunEnvironmentHandle = {
+        ...handle,
+        execution_backend: "local",
+      };
+      return this.localBackend.executeStep(localHandle, step, config);
+    });
   }
 
   async pauseRun(handle: RunEnvironmentHandle): Promise<void> {
@@ -86,9 +105,24 @@ export class AgentSandboxExecutionBackend implements ExecutionBackend {
   }
 
   async resumeRun(handle: RunEnvironmentHandle): Promise<RunEnvironmentHandle> {
+    const claimName = String(handle.metadata["claim_name"] ?? "").trim();
+    if (!claimName) {
+      return {
+        ...handle,
+        checkpoint_generation: handle.checkpoint_generation + 1,
+      };
+    }
+
+    const binding = await this.getClient().waitForSandboxBinding(this.namespace, claimName);
     return {
       ...handle,
+      sandbox_id: binding.sandboxName || handle.sandbox_id,
       checkpoint_generation: handle.checkpoint_generation + 1,
+      metadata: {
+        ...handle.metadata,
+        bound_sandbox_name: binding.sandboxName || handle.metadata["bound_sandbox_name"],
+        recovery_action: binding.sandboxName ? "rebound" : "reattached",
+      },
     };
   }
 
@@ -204,6 +238,54 @@ export class AgentSandboxExecutionBackend implements ExecutionBackend {
       this.client = this.createClient();
     }
     return this.client;
+  }
+
+  private buildWholeRunHostEnv(): Record<string, string> {
+    const runsRoot = String(process.env.SPRINTFOUNDRY_RUNS_ROOT ?? "/workspace").trim() || "/workspace";
+    const sessionsDir = String(
+      process.env.SPRINTFOUNDRY_SESSIONS_DIR ?? path.join(runsRoot, ".sprintfoundry", "sessions")
+    ).trim() || path.join(runsRoot, ".sprintfoundry", "sessions");
+    const homeDir = String(process.env.HOME ?? "/workspace/home").trim() || "/workspace/home";
+    const codexHome = String(process.env.CODEX_HOME ?? path.join(homeDir, ".codex")).trim() || path.join(homeDir, ".codex");
+
+    return {
+      SPRINTFOUNDRY_EXECUTION_BACKEND: "local",
+      SPRINTFOUNDRY_RUN_SANDBOX_MODE: "k8s-whole-run",
+      SPRINTFOUNDRY_RUNS_ROOT: runsRoot,
+      SPRINTFOUNDRY_SESSIONS_DIR: sessionsDir,
+      HOME: homeDir,
+      CODEX_HOME: codexHome,
+    };
+  }
+
+  private async withWholeRunHostEnv<T>(
+    handle: RunEnvironmentHandle,
+    action: () => Promise<T>
+  ): Promise<T> {
+    const hostEnv = (
+      handle.metadata["host_env"] && typeof handle.metadata["host_env"] === "object"
+        ? handle.metadata["host_env"]
+        : this.buildWholeRunHostEnv()
+    ) as Record<string, unknown>;
+    const previous = new Map<string, string | undefined>();
+
+    for (const [key, value] of Object.entries(hostEnv)) {
+      if (typeof value !== "string" || value.length === 0) continue;
+      previous.set(key, process.env[key]);
+      process.env[key] = value;
+    }
+
+    try {
+      return await action();
+    } finally {
+      for (const [key, value] of previous.entries()) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    }
   }
 
   private buildClaimName(runId: string): string {
