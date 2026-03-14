@@ -1,4 +1,5 @@
 import { EventStore } from "./event-store.js";
+import { EventSinkClient } from "./event-sink-client.js";
 import { RunSnapshotStore, type RunSnapshotUploadResult } from "./run-snapshot-store.js";
 import { SessionManager } from "./session-manager.js";
 import type {
@@ -25,6 +26,9 @@ export interface RunSnapshotExportServiceOptions {
   eventStoreFactory?: (workspacePath: string) => EventStore;
 }
 
+const EVENT_SINK_URL_ENV = "SPRINTFOUNDRY_EVENT_SINK_URL";
+const INTERNAL_API_TOKEN_ENV = "SPRINTFOUNDRY_INTERNAL_API_TOKEN";
+
 export class RunSnapshotExportService {
   private readonly sessionManager: SessionManager;
   private readonly snapshotStore: RunSnapshotStore;
@@ -36,7 +40,10 @@ export class RunSnapshotExportService {
     this.eventStoreFactory =
       options.eventStoreFactory ??
       ((workspacePath) => {
-        const store = new EventStore();
+        const sinkUrl = asString(process.env[EVENT_SINK_URL_ENV]);
+        const internalApiToken = asString(process.env[INTERNAL_API_TOKEN_ENV]) || undefined;
+        const sinkClient = sinkUrl ? new EventSinkClient(sinkUrl, globalThis.fetch, internalApiToken) : undefined;
+        const store = new EventStore(undefined, sinkClient);
         void store.initialize(workspacePath);
         return store;
       });
