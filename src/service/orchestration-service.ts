@@ -1811,8 +1811,10 @@ export class OrchestrationService {
     switch (stack) {
       case "node": {
         const c = pm ?? "npm";
+        const installCmd =
+          c === "npm" ? "npm ci" : `${c} install --frozen-lockfile`;
         return {
-          install_cmd: `${c} install --frozen-lockfile`,
+          install_cmd: installCmd,
           build_cmd: `${c} run build`,
           test_cmd: `${c} test`,
           lint_cmd: `${c} run lint`,
