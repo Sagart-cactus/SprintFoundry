@@ -1009,6 +1009,12 @@ function renderSidebarMeta(runData) {
     resumeRunBtn.textContent = "Resume Run";
   }
   const handoffEligible = isHandoffEligible(runData);
+  const sandboxLifecycle = typeof runData?.sandbox_host?.lifecycle_state === "string"
+    ? runData.sandbox_host.lifecycle_state
+    : "";
+  const snapshotLifecycle = typeof runData?.terminal_workflow_state === "string"
+    ? runData.terminal_workflow_state
+    : "";
 
   sidebarMeta.innerHTML = `
     <div class="meta-list">
@@ -1036,6 +1042,18 @@ function renderSidebarMeta(runData) {
         <span class="meta-label">Hosting</span>
         <span class="meta-value">${escapeHtml(runData.hosting_mode || "local")}</span>
       </div>
+      ${sandboxLifecycle ? `
+      <div class="meta-item">
+        <span class="meta-label">Sandbox</span>
+        <span class="meta-value">${escapeHtml(sandboxLifecycle.replace(/_/g, " "))}</span>
+      </div>
+      ` : ""}
+      ${snapshotLifecycle ? `
+      <div class="meta-item">
+        <span class="meta-label">Workspace</span>
+        <span class="meta-value">${escapeHtml(snapshotLifecycle.replace(/_/g, " "))}</span>
+      </div>
+      ` : ""}
       <div class="meta-item">
         <span class="meta-label">Project</span>
         <span class="meta-value">${escapeHtml(runData.project_id)}</span>

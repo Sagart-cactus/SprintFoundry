@@ -177,6 +177,22 @@ export default function RunDetail({ projectId, runId }) {
             <span>{run.project_id}</span>
             <span className="text-ink-300">&middot;</span>
             <span className="font-mono text-ink-300">{run.hosting_mode || 'local'}</span>
+            {run.sandbox_host?.lifecycle_state && (
+              <>
+                <span className="text-ink-300">&middot;</span>
+                <span className="font-mono text-ink-300">
+                  {String(run.sandbox_host.lifecycle_state).replace(/_/g, ' ')}
+                </span>
+              </>
+            )}
+            {run.terminal_workflow_state && (
+              <>
+                <span className="text-ink-300">&middot;</span>
+                <span className="font-mono text-ink-300">
+                  {String(run.terminal_workflow_state).replace(/_/g, ' ')}
+                </span>
+              </>
+            )}
             {plan?.classification && (
               <>
                 <span className="text-ink-300">&middot;</span>

@@ -176,6 +176,22 @@ describe("SessionManager", () => {
     expect(session!.workspace_path).toBe("/tmp/ws2");
   });
 
+  it("preserves workspace_path and branch when a later persist omits them", async () => {
+    const mgr = new SessionManager(testDir);
+    const run = makeRun({ run_id: "run-preserve-workspace", status: "executing" });
+
+    await mgr.persist(run, { workspace_path: "/tmp/ws-preserved", branch: "feat/preserved" });
+
+    run.status = "completed";
+    run.completed_at = new Date("2026-02-27T10:05:00Z");
+    await mgr.persist(run);
+
+    const session = await mgr.get("run-preserve-workspace");
+    expect(session?.workspace_path).toBe("/tmp/ws-preserved");
+    expect(session?.branch).toBe("feat/preserved");
+    expect(session?.terminal_workflow_state).toBe("terminal_pending_snapshot");
+  });
+
   it("marks terminal runs as pending snapshot by default", async () => {
     const mgr = new SessionManager(testDir);
     const run = makeRun({
@@ -312,7 +328,7 @@ describe("SessionManager", () => {
     expect(result).toBe(false);
   });
 
-  it("updateStatus changes only the status field", async () => {
+  it("updateStatus records terminal metadata for cancelled runs", async () => {
     const mgr = new SessionManager(testDir);
     const run = makeRun({ run_id: "run-cancel", status: "executing" });
 
@@ -323,6 +339,8 @@ describe("SessionManager", () => {
     const session = await mgr.get("run-cancel");
     expect(session!.status).toBe("cancelled");
     expect(session!.ticket_id).toBe("TEST-1"); // unchanged
+    expect(session!.completed_at).toMatch(/^20/);
+    expect(session!.terminal_workflow_state).toBe("terminal_pending_snapshot");
   });
 
   it("updateStatus succeeds even when sink upsert fails", async () => {
