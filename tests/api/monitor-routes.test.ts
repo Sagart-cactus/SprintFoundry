@@ -327,6 +327,14 @@ beforeAll(async () => {
     "utf-8"
   );
 
+  const worktreePvcRunDir = path.join(tmpRunsRoot, "live-gaps-worktree", "run-worktree-pvc");
+  mkdirSync(worktreePvcRunDir, { recursive: true });
+  writeFileSync(
+    path.join(worktreePvcRunDir, ".events.jsonl"),
+    JSON.stringify({ event_type: "task.created", timestamp: "2026-03-01T00:10:00Z", data: {} }) + "\n",
+    "utf-8"
+  );
+
   // Run with runtime skills metadata embedded in step events
   const skillsRunDir = path.join(tmpRunsRoot, "skills-project", "run-skills");
   mkdirSync(skillsRunDir, { recursive: true });
@@ -836,10 +844,17 @@ describe("GET /api/run", () => {
   });
 
   it("includes handoff metadata only when the run workspace PVC exists", async () => {
+    const requestedPaths: string[] = [];
     const fakeK8sApi = http.createServer((req, res) => {
+      requestedPaths.push(req.url ?? "");
       if (req.url === "/api/v1/namespaces/sf-demo/persistentvolumeclaims/sf-run-ws-run-pvc-backed") {
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ metadata: { name: "sf-run-ws-run-pvc-backed", namespace: "sf-demo" } }));
+        return;
+      }
+      if (req.url === "/api/v1/namespaces/live-gaps-worktree/persistentvolumeclaims/sf-run-ws-run-worktree-pvc") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ metadata: { name: "sf-run-ws-run-worktree-pvc", namespace: "live-gaps-worktree" } }));
         return;
       }
       if (req.url === "/api/v1/namespaces/sf-demo/persistentvolumeclaims/sf-run-ws-run-no-pvc") {
@@ -921,6 +936,31 @@ describe("GET /api/run", () => {
         handoff_namespace: null,
         handoff_command: null,
       });
+
+      const worktree = await get(`${base}/api/run?project=live-gaps-worktree&run=run-worktree-pvc`);
+      expect(worktree.status).toBe(200);
+      expect(JSON.parse(worktree.body)).toMatchObject({
+        run_id: "run-worktree-pvc",
+        handoff_eligible: true,
+        handoff_namespace: "live-gaps-worktree",
+        handoff_command:
+          "./scripts/handoff-kind-run-to-local.sh --namespace live-gaps-worktree --run-id run-worktree-pvc",
+      });
+      expect(requestedPaths).toContain(
+        "/api/v1/namespaces/live-gaps-worktree/persistentvolumeclaims/sf-run-ws-run-worktree-pvc"
+      );
+      expect(requestedPaths).not.toContain(
+        "/api/v1/namespaces/live-gaps/persistentvolumeclaims/sf-run-ws-run-worktree-pvc"
+      );
+
+      const runs = await get(`${base}/api/runs`);
+      expect(runs.status).toBe(200);
+      const runsBody = JSON.parse(runs.body);
+      const listedPvcRun = runsBody.runs.find((run: any) => run.run_id === "run-pvc-backed");
+      expect(listedPvcRun).toBeDefined();
+      expect(listedPvcRun).not.toHaveProperty("handoff_eligible");
+      expect(listedPvcRun).not.toHaveProperty("handoff_namespace");
+      expect(listedPvcRun).not.toHaveProperty("handoff_command");
     } finally {
       proc.kill("SIGTERM");
       await new Promise((resolve) => proc.once("exit", resolve));

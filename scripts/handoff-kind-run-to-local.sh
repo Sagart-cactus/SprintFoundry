@@ -112,13 +112,13 @@ if ! command -v kubectl >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! command -v codex >/dev/null 2>&1; then
-  echo "codex is required." >&2
+if ! command -v node >/dev/null 2>&1; then
+  echo "node is required." >&2
   exit 1
 fi
 
-if ! command -v node >/dev/null 2>&1; then
-  echo "node is required." >&2
+if [[ "$PRINT_ONLY" -eq 0 ]] && ! command -v codex >/dev/null 2>&1; then
+  echo "codex is required unless --print-only is used." >&2
   exit 1
 fi
 
