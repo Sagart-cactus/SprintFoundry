@@ -690,7 +690,7 @@ describe("dispatch-controller", () => {
     );
 
     expect(manifest).toMatchObject({
-      apiVersion: "agents.x-k8s.io/v1alpha1",
+      apiVersion: "extensions.agents.x-k8s.io/v1alpha1",
       kind: "SandboxClaim",
       metadata: {
         name: "sf-run-xyz",

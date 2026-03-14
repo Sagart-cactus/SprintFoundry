@@ -4,11 +4,11 @@ import type { PlatformConfig } from "../shared/types.js";
 const require = createRequire(import.meta.url);
 
 export const AGENT_SANDBOX_WHOLE_RUN_HOSTING_ENV = "SPRINTFOUNDRY_AGENT_SANDBOX_WHOLE_RUN_HOSTING";
-export const DEFAULT_AGENT_SANDBOX_API_GROUP = "agents.x-k8s.io";
+export const DEFAULT_AGENT_SANDBOX_API_GROUP = "extensions.agents.x-k8s.io";
+export const DEFAULT_AGENT_SANDBOX_CORE_API_GROUP = "agents.x-k8s.io";
 export const DEFAULT_AGENT_SANDBOX_API_VERSION = "v1alpha1";
 export const DEFAULT_AGENT_SANDBOX_CLAIM_PLURAL = "sandboxclaims";
 export const DEFAULT_AGENT_SANDBOX_TEMPLATE_NAME = "default";
-const REQUIRED_CRD_PREFIXES = ["sandboxclaims", "sandboxtemplates", "sandboxes"] as const;
 
 interface AgentSandboxCrdValidator {
   readCustomResourceDefinition(name: string): Promise<unknown>;
@@ -63,10 +63,14 @@ export async function validateAgentSandboxWholeRunHosting(
 
   const apiGroup = agentSandbox.api_group ?? DEFAULT_AGENT_SANDBOX_API_GROUP;
   const validator = client ?? createAgentSandboxCrdValidator();
+  const requiredCrds = [
+    `sandboxclaims.${apiGroup}`,
+    `sandboxtemplates.${apiGroup}`,
+    `sandboxes.${DEFAULT_AGENT_SANDBOX_CORE_API_GROUP}`,
+  ];
   const missingCrds: string[] = [];
 
-  for (const prefix of REQUIRED_CRD_PREFIXES) {
-    const crdName = `${prefix}.${apiGroup}`;
+  for (const crdName of requiredCrds) {
     try {
       await validator.readCustomResourceDefinition(crdName);
     } catch {

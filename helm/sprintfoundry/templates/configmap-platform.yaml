@@ -134,7 +134,7 @@ data:
         whole_run_hosting_enabled: false
         template_name: default
         warm_pool_name: ""
-        api_group: agents.x-k8s.io
+        api_group: extensions.agents.x-k8s.io
         api_version: v1alpha1
         claim_plural: sandboxclaims
 
