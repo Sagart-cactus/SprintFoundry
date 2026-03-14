@@ -79,7 +79,7 @@ describe("agent-sandbox platform helpers", () => {
           throw new Error("NotFound");
         },
       })
-    ).rejects.toThrow(/sandboxtemplates\.agents\.x-k8s\.io/);
+    ).rejects.toThrow(/sandboxtemplates\.extensions\.agents\.x-k8s\.io/);
   });
 
   it("passes when required CRDs are present", async () => {
