@@ -23,6 +23,7 @@ import { RuntimeFactory } from "./runtime/runtime-factory.js";
 import { CodexSkillManager } from "./runtime/codex-skill-manager.js";
 import type { RuntimeActivityEvent } from "./runtime/types.js";
 import type { EventSinkClient } from "./event-sink-client.js";
+import { resolveHostingMode } from "./hosting-mode.js";
 import {
   LocalExecutionBackend,
   type ExecutionBackend,
@@ -192,6 +193,7 @@ export class AgentRunner {
       project_id: this.projectConfig.project_id,
       sandbox_id: `local-${config.runId || config.stepNumber}`,
       execution_backend: "local",
+      hosting_mode: resolveHostingMode({ executionBackend: "local" }),
       workspace_path: config.workspacePath,
       checkpoint_generation: 0,
       metadata: {},

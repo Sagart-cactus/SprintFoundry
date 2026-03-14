@@ -890,6 +890,9 @@ program
     console.log(`\n  Session: ${session.run_id}`);
     console.log(`  ${"─".repeat(50)}`);
     console.log(`  Status:         ${session.status}`);
+    if (session.hosting_mode) {
+      console.log(`  Hosting:        ${session.hosting_mode}`);
+    }
     console.log(`  Project:        ${session.project_id}`);
     console.log(`  Ticket:         ${session.ticket_id} (${session.ticket_source})`);
     console.log(`  Title:          ${session.ticket_title}`);

@@ -17,6 +17,7 @@ export interface RunEnvironmentHandle {
   tenant_id?: string;
   sandbox_id: string;
   execution_backend: string;
+  hosting_mode: string;
   workspace_path: string;
   workspace_volume_ref?: string;
   network_profile?: string;

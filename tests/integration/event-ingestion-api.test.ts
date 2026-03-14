@@ -84,6 +84,7 @@ class FakeExpressApp {
 interface RunRow {
   run_id: string;
   status: string;
+  hosting_mode: string | null;
   current_step: number;
   plan_classification: string | null;
   workspace_path: string | null;
@@ -141,14 +142,16 @@ class InMemoryDatabase {
     if (sql.includes("INSERT INTO runs")) {
       const runId = String(params[0]);
       const status = String(params[5]);
-      const currentStep = Number(params[6]);
-      const planClassification = params[8] === null || params[8] === undefined ? null : String(params[8]);
-      const workspacePath = params[9] === null || params[9] === undefined ? null : String(params[9]);
-      const branch = params[10] === null || params[10] === undefined ? null : String(params[10]);
+      const hostingMode = params[6] === null || params[6] === undefined ? null : String(params[6]);
+      const currentStep = Number(params[7]);
+      const planClassification = params[9] === null || params[9] === undefined ? null : String(params[9]);
+      const workspacePath = params[10] === null || params[10] === undefined ? null : String(params[10]);
+      const branch = params[11] === null || params[11] === undefined ? null : String(params[11]);
       const existed = this.runs.has(runId);
       this.runs.set(runId, {
         run_id: runId,
         status,
+        hosting_mode: hostingMode,
         current_step: currentStep,
         plan_classification: planClassification,
         workspace_path: workspacePath,
@@ -242,6 +245,7 @@ function runPayload(overrides: Record<string, unknown> = {}): Record<string, unk
     ticket_source: "github",
     ticket_title: "Example",
     status: "executing",
+    hosting_mode: "local",
     current_step: 1,
     total_steps: 3,
     plan_classification: "new_feature",
@@ -401,6 +405,7 @@ describe("event-ingestion-api integration", () => {
 
     expect(response.status).toBe(200);
     expect(db.runs.get("run-1")?.plan_classification).toBe("unknown");
+    expect(db.runs.get("run-1")?.hosting_mode).toBe("local");
     expect(db.runs.get("run-1")?.workspace_path).toBeNull();
     expect(db.runs.get("run-1")?.branch).toBeNull();
   });

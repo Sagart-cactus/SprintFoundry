@@ -1,0 +1,2 @@
+ALTER TABLE runs
+ADD COLUMN IF NOT EXISTS hosting_mode TEXT;

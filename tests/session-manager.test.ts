@@ -42,6 +42,7 @@ function makeRun(overrides?: Partial<TaskRun>): TaskRun {
     plan: null,
     validated_plan: null,
     status: overrides?.status ?? "pending",
+    hosting_mode: overrides?.hosting_mode,
     steps: overrides?.steps ?? [],
     total_tokens_used: overrides?.total_tokens_used ?? 0,
     total_cost_usd: overrides?.total_cost_usd ?? 0,
@@ -68,7 +69,7 @@ describe("SessionManager", () => {
 
   it("persists and retrieves a session", async () => {
     const mgr = new SessionManager(testDir);
-    const run = makeRun({ run_id: "run-abc" });
+    const run = makeRun({ run_id: "run-abc", hosting_mode: "k8s-job-whole-run" });
 
     await mgr.persist(run, { workspace_path: "/tmp/ws", branch: "feat/test" });
 
@@ -80,6 +81,7 @@ describe("SessionManager", () => {
     expect(session!.ticket_source).toBe("github");
     expect(session!.ticket_title).toBe("Test ticket");
     expect(session!.status).toBe("pending");
+    expect(session!.hosting_mode).toBe("k8s-job-whole-run");
     expect(session!.workspace_path).toBe("/tmp/ws");
     expect(session!.branch).toBe("feat/test");
     expect(session!.total_tokens).toBe(0);

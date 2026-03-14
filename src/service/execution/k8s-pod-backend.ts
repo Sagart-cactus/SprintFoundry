@@ -14,6 +14,7 @@ import type {
 import type { AgentRunConfig, AgentRunResult } from "../agent-runner.js";
 import { parseTokenUsage } from "../runtime/process-utils.js";
 import type { ExecutionBackend, RunEnvironmentHandle, SandboxTeardownReason } from "./backend.js";
+import { resolveHostingMode } from "../hosting-mode.js";
 
 const require = createRequire(import.meta.url);
 
@@ -116,6 +117,7 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
       tenant_id: run.tenant_id,
       sandbox_id: sandboxId,
       execution_backend: "k8s-pod",
+      hosting_mode: resolveHostingMode({ explicitHostingMode: run.hosting_mode, executionBackend: "k8s-pod" }),
       workspace_path: workspacePath,
       workspace_volume_ref: pvcName,
       network_profile: networkProfile,

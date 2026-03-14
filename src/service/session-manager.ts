@@ -15,6 +15,7 @@ import type {
   TerminalWorkflowState,
 } from "../shared/types.js";
 import type { EventSinkClient } from "./event-sink-client.js";
+import { normalizeHostingMode, resolveHostingMode } from "./hosting-mode.js";
 
 const SESSIONS_DIR = path.join(os.homedir(), ".sprintfoundry", "sessions");
 const ARCHIVE_DIR = path.join(SESSIONS_DIR, "archive");
@@ -54,6 +55,10 @@ export class SessionManager {
       ticket_source: run.ticket?.source ?? "prompt",
       ticket_title: run.ticket?.title ?? "Unknown",
       status: run.status,
+      hosting_mode: resolveHostingMode({
+        explicitHostingMode: run.hosting_mode,
+        executionBackend: run.execution_backend,
+      }),
       current_step: currentStep,
       total_steps: totalSteps,
       plan_classification: run.plan?.classification ?? null,
@@ -276,9 +281,25 @@ export class SessionManager {
     let derived: RunStatus | null = null;
     let sawStepFailure = false;
     let hasTerminalTaskEvent = false;
+    let hostingMode = normalizeHostingMode(session.hosting_mode);
 
     for (const event of events) {
       const type = event.event_type;
+      if (typeof event === "object" && event && "data" in event) {
+        const data = (event as { data?: Record<string, unknown> }).data ?? {};
+        const explicitHostingMode = normalizeHostingMode(data.hosting_mode);
+        if (explicitHostingMode) {
+          hostingMode = explicitHostingMode;
+        } else if ((type === "sandbox.created" || type === "sandbox.resumed") && !hostingMode) {
+          const looksLikeWholeRunWorkspace =
+            typeof session.workspace_path === "string" &&
+            session.workspace_path.includes("/workspace/sprintfoundry/");
+          hostingMode = looksLikeWholeRunWorkspace
+            ? "k8s-job-whole-run"
+            : resolveHostingMode({ executionBackend: String(data.execution_backend ?? "local") });
+        }
+      }
+
       if (type === "task.completed") {
         derived = "completed";
         hasTerminalTaskEvent = true;
@@ -309,12 +330,13 @@ export class SessionManager {
       derived = "failed";
     }
 
-    if (!derived || derived === session.status) return session;
+    if ((!derived || derived === session.status) && hostingMode === session.hosting_mode) return session;
 
     const lastTimestamp = events.at(-1)?.timestamp;
     return {
       ...session,
-      status: derived,
+      status: derived ?? session.status,
+      hosting_mode: hostingMode ?? session.hosting_mode,
       updated_at: lastTimestamp ?? session.updated_at,
       completed_at:
         (derived === "completed" || derived === "failed")
