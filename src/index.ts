@@ -32,6 +32,7 @@ import { RunSnapshotExportService } from "./service/run-snapshot-export-service.
 import { RunSnapshotStore } from "./service/run-snapshot-store.js";
 import { WorkspaceManager } from "./service/workspace-manager.js";
 import { K8sRunSnapshotController } from "./service/k8s-run-snapshot-controller.js";
+import { validateAgentSandboxWholeRunHosting } from "./service/agent-sandbox-platform.js";
 
 const RUN_SANDBOX_MODE_ENV = "SPRINTFOUNDRY_RUN_SANDBOX_MODE";
 const WHOLE_RUN_SANDBOX_MODE = "k8s-whole-run";
@@ -169,6 +170,7 @@ program
     }
 
     const { platform, project } = await loadConfig(opts.config, opts.project);
+    await validateAgentSandboxWholeRunHosting(platform);
     const registry = buildPluginRegistry(platform, project);
     const executionBackendName = resolveExecutionBackendName(platform, project);
     const executionBackend = createExecutionBackend(platform, project);
@@ -304,6 +306,7 @@ program
   .action(async (opts) => {
     try {
       const { platform, project } = await loadConfig(opts.config, opts.project);
+      await validateAgentSandboxWholeRunHosting(platform);
       const executionBackendName = resolveExecutionBackendName(platform, project);
       console.log("Configuration valid.");
       console.log(`  Project: ${project.name} (${project.project_id})`);
@@ -373,6 +376,7 @@ program
     }
 
     const { platform, project } = await loadConfig(opts.config, opts.project);
+    await validateAgentSandboxWholeRunHosting(platform);
     const registry = buildPluginRegistry(platform, project);
     const executionBackend = createExecutionBackend(platform, project);
     const service = new OrchestrationService(platform, project, registry, executionBackend);

@@ -123,6 +123,8 @@ execution_backend_override: local
     expect(project.project_id).toBe("test-project");
     expect(project.name).toBe("Test Project");
     expect(project.execution_backend_override).toBe("local");
+    expect(platform.k8s?.agent_sandbox?.api_group).toBe("agents.x-k8s.io");
+    expect(platform.k8s?.agent_sandbox?.whole_run_hosting_enabled).toBe(false);
   });
 
   it("loadConfig with --project tries name.yaml then project-name.yaml", async () => {

@@ -40,7 +40,7 @@ interface K8sPodClient {
 
 export class KubernetesPodExecutionBackend implements ExecutionBackend {
   private projectRoot: string;
-  private client: K8sPodClient;
+  private client: K8sPodClient | null;
   private readonly namespace: string;
 
   constructor(
@@ -52,7 +52,7 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
     const __dirname = path.dirname(__filename);
     this.projectRoot = path.resolve(__dirname, "../../..");
     this.namespace = this.platformConfig.k8s?.namespace?.trim() || "default";
-    this.client = client ?? this.createClient();
+    this.client = client ?? null;
   }
 
   async prepareRunEnvironment(
@@ -60,6 +60,7 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
     plan: ExecutionPlan,
     workspacePath: string
   ): Promise<RunEnvironmentHandle> {
+    const client = this.getClient();
     const provisioningTimingMs: Record<string, number> = {};
     const provisionStartedAt = Date.now();
     const sandboxId = this.buildSandboxId(run.run_id);
@@ -85,23 +86,23 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
     );
 
     const serviceAccountStartedAt = Date.now();
-    await this.client.createServiceAccount(this.namespace, serviceAccountManifest);
+    await client.createServiceAccount(this.namespace, serviceAccountManifest);
     provisioningTimingMs.service_account_create = Date.now() - serviceAccountStartedAt;
 
     const pvcStartedAt = Date.now();
-    await this.client.createPvc(this.namespace, pvcManifest);
+    await client.createPvc(this.namespace, pvcManifest);
     provisioningTimingMs.workspace_volume_create = Date.now() - pvcStartedAt;
     try {
       if (egressPolicy) {
         const egressPolicyStartedAt = Date.now();
-        await this.client.createEgressPolicy(this.namespace, egressPolicy);
+        await client.createEgressPolicy(this.namespace, egressPolicy);
         provisioningTimingMs.egress_policy_create = Date.now() - egressPolicyStartedAt;
       }
       const podCreateStartedAt = Date.now();
-      await this.client.createPod(this.namespace, manifest);
+      await client.createPod(this.namespace, manifest);
       provisioningTimingMs.pod_create = Date.now() - podCreateStartedAt;
       const podReadyStartedAt = Date.now();
-      await this.client.waitForPodReady(this.namespace, sandboxId);
+      await client.waitForPodReady(this.namespace, sandboxId);
       provisioningTimingMs.pod_ready_wait = Date.now() - podReadyStartedAt;
     } catch (error) {
       await this.safeDeleteEgressPolicy(this.buildEgressPolicyName(sandboxId));
@@ -143,6 +144,7 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
     _step: PlanStep,
     config: AgentRunConfig
   ): Promise<AgentRunResult> {
+    const client = this.getClient();
     if (!config.runtime) {
       throw new Error("KubernetesPodExecutionBackend requires config.runtime");
     }
@@ -153,7 +155,7 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
     }
 
     const command = this.buildExecCommand(config);
-    const result = await this.client.exec(this.namespace, handle.sandbox_id, "sandbox", command);
+    const result = await client.exec(this.namespace, handle.sandbox_id, "sandbox", command);
     if (result.code !== 0) {
       throw new Error(
         `Sandbox pod ${handle.sandbox_id} step execution failed with code ${result.code}. ${result.stderr.trim()}`
@@ -182,7 +184,8 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
   }
 
   async resumeRun(handle: RunEnvironmentHandle): Promise<RunEnvironmentHandle> {
-    const pod = await this.client.getPod(this.namespace, handle.sandbox_id);
+    const client = this.getClient();
+    const pod = await client.getPod(this.namespace, handle.sandbox_id);
     if (pod) {
       const phase = this.readPodPhase(pod);
       if (phase === "Running" && this.isPodReady(pod)) {
@@ -206,7 +209,7 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
       );
     }
 
-    const pvc = await this.client.getPvc(this.namespace, handle.workspace_volume_ref);
+    const pvc = await client.getPvc(this.namespace, handle.workspace_volume_ref);
     if (!pvc) {
       throw new Error(
         `Sandbox pod ${handle.sandbox_id} is missing and PVC ${handle.workspace_volume_ref} was not found`
@@ -247,10 +250,10 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
       handle.network_profile ?? this.platformConfig.k8s?.default_network_profile ?? "full-internet"
     );
     if (egressPolicy) {
-      await this.client.createEgressPolicy(this.namespace, egressPolicy);
+      await client.createEgressPolicy(this.namespace, egressPolicy);
     }
-    await this.client.createPod(this.namespace, manifest);
-    await this.client.waitForPodReady(this.namespace, handle.sandbox_id);
+    await client.createPod(this.namespace, manifest);
+    await client.waitForPodReady(this.namespace, handle.sandbox_id);
     return {
       ...handle,
       checkpoint_generation: handle.checkpoint_generation + 1,
@@ -265,7 +268,8 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
     handle: RunEnvironmentHandle,
     reason: SandboxTeardownReason
   ): Promise<void> {
-    await this.client.deletePod(this.namespace, handle.sandbox_id);
+    const client = this.getClient();
+    await client.deletePod(this.namespace, handle.sandbox_id);
     // Preserve the workspace PVC for failed/cancelled runs so resume can recreate the pod.
     if (reason === "completed" && handle.workspace_volume_ref) {
       await this.safeDeletePvc(handle.workspace_volume_ref);
@@ -426,6 +430,13 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
         }
       },
     };
+  }
+
+  private getClient(): K8sPodClient {
+    if (!this.client) {
+      this.client = this.createClient();
+    }
+    return this.client;
   }
 
   private buildWorkspacePvcManifest(run: TaskRun, pvcName: string): Record<string, unknown> {
@@ -674,7 +685,7 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
 
   private async safeDeletePvc(pvcName: string): Promise<void> {
     try {
-      await this.client.deletePvc(this.namespace, pvcName);
+      await this.getClient().deletePvc(this.namespace, pvcName);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(`[execution-backend] Failed to delete PVC ${pvcName}: ${message}`);
@@ -683,7 +694,7 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
 
   private async safeDeleteServiceAccount(serviceAccountName: string): Promise<void> {
     try {
-      await this.client.deleteServiceAccount(this.namespace, serviceAccountName);
+      await this.getClient().deleteServiceAccount(this.namespace, serviceAccountName);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(
@@ -694,7 +705,7 @@ export class KubernetesPodExecutionBackend implements ExecutionBackend {
 
   private async safeDeleteEgressPolicy(policyName: string): Promise<void> {
     try {
-      await this.client.deleteEgressPolicy(this.namespace, policyName);
+      await this.getClient().deleteEgressPolicy(this.namespace, policyName);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(`[execution-backend] Failed to delete egress policy ${policyName}: ${message}`);

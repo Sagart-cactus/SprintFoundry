@@ -45,6 +45,7 @@ describe("AgentSandboxExecutionBackend", () => {
     expect(client.createSandboxClaim).toHaveBeenCalledTimes(1);
     const manifest = client.createSandboxClaim.mock.calls[0][1];
     expect(manifest).toMatchObject({
+      apiVersion: "agents.x-k8s.io/v1alpha1",
       kind: "SandboxClaim",
       metadata: {
         name: "sf-claim-run-1",

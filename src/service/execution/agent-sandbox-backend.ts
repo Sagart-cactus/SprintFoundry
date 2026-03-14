@@ -2,6 +2,11 @@ import { createRequire } from "module";
 import type { ExecutionPlan, PlanStep, PlatformConfig, ProjectConfig, TaskRun } from "../../shared/types.js";
 import type { AgentRunConfig, AgentRunResult } from "../agent-runner.js";
 import type { ExecutionBackend, RunEnvironmentHandle, SandboxTeardownReason } from "./backend.js";
+import {
+  DEFAULT_AGENT_SANDBOX_API_GROUP,
+  DEFAULT_AGENT_SANDBOX_API_VERSION,
+  DEFAULT_AGENT_SANDBOX_CLAIM_PLURAL,
+} from "../agent-sandbox-platform.js";
 import { resolveHostingMode } from "../hosting-mode.js";
 
 const require = createRequire(import.meta.url);
@@ -14,7 +19,7 @@ interface AgentSandboxClient {
 
 export class AgentSandboxExecutionBackend implements ExecutionBackend {
   private readonly namespace: string;
-  private readonly client: AgentSandboxClient;
+  private client: AgentSandboxClient | null;
 
   constructor(
     private readonly platformConfig: PlatformConfig,
@@ -22,7 +27,7 @@ export class AgentSandboxExecutionBackend implements ExecutionBackend {
     client?: AgentSandboxClient
   ) {
     this.namespace = this.platformConfig.k8s?.namespace?.trim() || "default";
-    this.client = client ?? this.createClient();
+    this.client = client ?? null;
   }
 
   async prepareRunEnvironment(
@@ -30,16 +35,17 @@ export class AgentSandboxExecutionBackend implements ExecutionBackend {
     _plan: ExecutionPlan,
     workspacePath: string
   ): Promise<RunEnvironmentHandle> {
+    const client = this.getClient();
     const provisioningTimingMs: Record<string, number> = {};
     const provisionStartedAt = Date.now();
     const claimName = this.buildClaimName(run.run_id);
     const templateName = this.platformConfig.k8s?.agent_sandbox?.template_name?.trim() || "default";
     const manifest = this.buildSandboxClaimManifest(run, claimName, templateName);
     const claimCreateStartedAt = Date.now();
-    await this.client.createSandboxClaim(this.namespace, manifest);
+    await client.createSandboxClaim(this.namespace, manifest);
     provisioningTimingMs.claim_create = Date.now() - claimCreateStartedAt;
     const bindWaitStartedAt = Date.now();
-    const binding = await this.client.waitForSandboxBinding(this.namespace, claimName);
+    const binding = await client.waitForSandboxBinding(this.namespace, claimName);
     provisioningTimingMs.claim_bind_wait = Date.now() - bindWaitStartedAt;
     provisioningTimingMs.total = Date.now() - provisionStartedAt;
 
@@ -92,7 +98,7 @@ export class AgentSandboxExecutionBackend implements ExecutionBackend {
   ): Promise<void> {
     const claimName = String(handle.metadata["claim_name"] ?? "");
     if (!claimName) return;
-    await this.client.deleteSandboxClaim(this.namespace, claimName);
+    await this.getClient().deleteSandboxClaim(this.namespace, claimName);
   }
 
   private buildSandboxClaimManifest(
@@ -100,8 +106,8 @@ export class AgentSandboxExecutionBackend implements ExecutionBackend {
     claimName: string,
     templateName: string
   ): Record<string, unknown> {
-    const apiGroup = this.platformConfig.k8s?.agent_sandbox?.api_group?.trim() || "agent-sandbox.dev";
-    const apiVersion = this.platformConfig.k8s?.agent_sandbox?.api_version?.trim() || "v1alpha1";
+    const apiGroup = this.platformConfig.k8s?.agent_sandbox?.api_group?.trim() || DEFAULT_AGENT_SANDBOX_API_GROUP;
+    const apiVersion = this.platformConfig.k8s?.agent_sandbox?.api_version?.trim() || DEFAULT_AGENT_SANDBOX_API_VERSION;
     return {
       apiVersion: `${apiGroup}/${apiVersion}`,
       kind: "SandboxClaim",
@@ -136,9 +142,9 @@ export class AgentSandboxExecutionBackend implements ExecutionBackend {
     const kc = new k8sModule.KubeConfig();
     kc.loadFromDefault();
     const customObjectsApi = kc.makeApiClient(k8sModule.CustomObjectsApi);
-    const apiGroup = this.platformConfig.k8s?.agent_sandbox?.api_group?.trim() || "agent-sandbox.dev";
-    const apiVersion = this.platformConfig.k8s?.agent_sandbox?.api_version?.trim() || "v1alpha1";
-    const claimPlural = this.platformConfig.k8s?.agent_sandbox?.claim_plural?.trim() || "sandboxclaims";
+    const apiGroup = this.platformConfig.k8s?.agent_sandbox?.api_group?.trim() || DEFAULT_AGENT_SANDBOX_API_GROUP;
+    const apiVersion = this.platformConfig.k8s?.agent_sandbox?.api_version?.trim() || DEFAULT_AGENT_SANDBOX_API_VERSION;
+    const claimPlural = this.platformConfig.k8s?.agent_sandbox?.claim_plural?.trim() || DEFAULT_AGENT_SANDBOX_CLAIM_PLURAL;
 
     return {
       createSandboxClaim: async (namespace, manifest) => {
@@ -191,6 +197,13 @@ export class AgentSandboxExecutionBackend implements ExecutionBackend {
         }
       },
     };
+  }
+
+  private getClient(): AgentSandboxClient {
+    if (!this.client) {
+      this.client = this.createClient();
+    }
+    return this.client;
   }
 
   private buildClaimName(runId: string): string {
