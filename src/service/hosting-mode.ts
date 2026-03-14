@@ -1,6 +1,7 @@
 import type { ExecutionBackendName, HostingMode } from "../shared/types.js";
 
 export const RUN_SANDBOX_MODE_ENV = "SPRINTFOUNDRY_RUN_SANDBOX_MODE";
+export const HOSTING_MODE_ENV = "SPRINTFOUNDRY_HOSTING_MODE";
 export const WHOLE_RUN_SANDBOX_MODE = "k8s-whole-run";
 
 export function normalizeHostingMode(value: unknown): HostingMode | null {
@@ -25,6 +26,8 @@ export function resolveHostingMode(options: {
   if (explicit) return explicit;
 
   const env = options.env ?? process.env;
+  const envHostingMode = normalizeHostingMode(env[HOSTING_MODE_ENV]);
+  if (envHostingMode) return envHostingMode;
   if (String(env[RUN_SANDBOX_MODE_ENV] ?? "").trim() === WHOLE_RUN_SANDBOX_MODE) {
     return "k8s-job-whole-run";
   }

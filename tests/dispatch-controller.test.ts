@@ -5,12 +5,14 @@ import os from "node:os";
 import crypto from "node:crypto";
 import {
   attachWorkspacePvcToJob,
+  buildSandboxClaimManifest,
   buildJobOwnerReference,
   buildK8sJobManifest,
   buildK8sWorkspacePvcManifest,
   registerDispatchRoutes,
   type DispatchRedisClient,
   type K8sJobManifest,
+  type SandboxClaimManifest,
 } from "../src/service/dispatch-controller.js";
 
 type Handler = (
@@ -281,6 +283,7 @@ afterEach(() => {
   delete process.env.SPRINTFOUNDRY_EVENT_SINK_URL;
   delete process.env.SPRINTFOUNDRY_INTERNAL_API_TOKEN;
   delete process.env.SPRINTFOUNDRY_SKIP_PR_FINALIZATION;
+  delete process.env.SPRINTFOUNDRY_AGENT_SANDBOX_WHOLE_RUN_HOSTING;
 });
 
 describe("dispatch-controller", () => {
@@ -608,6 +611,7 @@ describe("dispatch-controller", () => {
     expect(container.env).toEqual(
       expect.arrayContaining([
         { name: "SPRINTFOUNDRY_RUN_ID", value: "run-xyz" },
+        { name: "SPRINTFOUNDRY_HOSTING_MODE", value: "k8s-job-whole-run" },
         { name: "SPRINTFOUNDRY_RUN_SANDBOX_MODE", value: "k8s-whole-run" },
         { name: "SPRINTFOUNDRY_RUNS_ROOT", value: "/workspace" },
         { name: "SPRINTFOUNDRY_SESSIONS_DIR", value: "/workspace/.sprintfoundry/sessions" },
@@ -663,6 +667,48 @@ describe("dispatch-controller", () => {
         },
       ]),
     );
+  });
+
+  it("builds a sandbox claim manifest with runner annotations and host env", () => {
+    const manifest = buildSandboxClaimManifest(
+      {
+        run_id: "run-xyz",
+        project_id: "proj-1",
+        project_arg: "proj",
+        source: "prompt",
+        ticket_id: "prompt",
+        prompt: "do the thing",
+        created_at: "2026-03-04T00:00:00.000Z",
+      },
+      {
+        namespace: "proj-ns",
+        image: "ghcr.io/acme/sprintfoundry:latest",
+        templateName: "sf-runner-template",
+        projectSecretName: "proj-secret",
+        projectConfigMapName: "proj-config",
+      },
+    );
+
+    expect(manifest).toMatchObject({
+      apiVersion: "agents.x-k8s.io/v1alpha1",
+      kind: "SandboxClaim",
+      metadata: {
+        name: "sf-run-xyz",
+        namespace: "proj-ns",
+        annotations: expect.objectContaining({
+          "sprintfoundry.io/hosting-mode": "k8s-agent-sandbox",
+          "sprintfoundry.io/workspace-pvc": "sf-run-ws-run-xyz",
+          "sprintfoundry.io/project-configmap": "proj-config",
+          "sprintfoundry.io/project-secret": "proj-secret",
+        }),
+      },
+      spec: {
+        sandboxTemplateRef: {
+          name: "sf-runner-template",
+        },
+      },
+    });
+    expect(manifest.metadata.annotations?.["sprintfoundry.io/runner-env"]).toContain("SPRINTFOUNDRY_HOSTING_MODE");
   });
 
   it("passes project-config event sink settings into dispatched k8s jobs", async () => {
@@ -742,6 +788,99 @@ describe("dispatch-controller", () => {
       ]),
     );
 
+    await runtime.close();
+  });
+
+  it("dispatches sandbox claims instead of jobs when whole-run hosting is enabled", async () => {
+    const configDir = mkdtempSync(path.join(os.tmpdir(), "sf-dispatch-config-sandbox-"));
+    tempDirs.push(configDir);
+
+    writeFileSync(
+      path.join(configDir, "platform.yaml"),
+      [
+        "defaults:",
+        "  model_per_agent: {}",
+        "  budgets:",
+        "    per_agent_tokens: 100",
+        "    per_task_total_tokens: 100",
+        "    per_task_max_cost_usd: 1",
+        "  timeouts:",
+        "    agent_timeout_minutes: 1",
+        "    task_timeout_minutes: 1",
+        "    human_gate_timeout_hours: 1",
+        "  max_rework_cycles: 1",
+        "rules: []",
+        "agent_definitions: []",
+        "k8s:",
+        "  agent_sandbox:",
+        "    enabled: true",
+        "    whole_run_hosting_enabled: true",
+        "    template_name: sf-runner-template",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    makeProjectConfig(
+      configDir,
+      "project.yaml",
+      [
+        "project_id: sandbox-project",
+        "name: Sandbox Project",
+        "repo:",
+        "  url: https://github.com/acme/sandbox-project.git",
+        "  default_branch: main",
+        "integrations:",
+        "  ticket_source:",
+        "    type: prompt",
+        "    config: {}",
+        "rules: []",
+        "",
+      ].join("\n"),
+    );
+
+    const redis = new FakeRedisClient();
+    const app = new FakeExpressApp();
+    const createdJobs: K8sJobManifest[] = [];
+    const createdClaims: SandboxClaimManifest[] = [];
+
+    process.env.SPRINTFOUNDRY_AGENT_SANDBOX_WHOLE_RUN_HOSTING = "true";
+    const runtime = await registerDispatchRoutes(app, {
+      configDir,
+      redisClient: redis,
+      autoStartConsumer: false,
+      k8sMode: true,
+      validatePlatformConfig: async () => {},
+      createK8sJob: async (manifest) => {
+        createdJobs.push(manifest);
+      },
+      createSandboxClaim: async (manifest) => {
+        createdClaims.push(manifest);
+      },
+      idGenerator: () => "sandbox01",
+      now: () => 1_750_000_000_000,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      path: "/api/dispatch/run",
+      body: {
+        project_id: "sandbox-project",
+        source: "prompt",
+        prompt: "smoke",
+      },
+    });
+
+    expect(response.status).toBe(202);
+
+    const processed = await runtime.processQueueOnce();
+
+    expect(processed).toBe(true);
+    expect(createdJobs).toHaveLength(0);
+    expect(createdClaims).toHaveLength(1);
+    expect(createdClaims[0]?.metadata.annotations?.["sprintfoundry.io/hosting-mode"]).toBe("k8s-agent-sandbox");
+
+    delete process.env.SPRINTFOUNDRY_AGENT_SANDBOX_WHOLE_RUN_HOSTING;
     await runtime.close();
   });
 
