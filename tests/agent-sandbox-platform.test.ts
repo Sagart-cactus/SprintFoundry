@@ -82,6 +82,28 @@ describe("agent-sandbox platform helpers", () => {
     ).rejects.toThrow(/sandboxtemplates\.extensions\.agents\.x-k8s\.io/);
   });
 
+  it("skips CRD validation inside an already-hosted sandbox whole-run", async () => {
+    const platform = makePlatformConfig({
+      k8s: {
+        agent_sandbox: {
+          enabled: false,
+          whole_run_hosting_enabled: true,
+        },
+      },
+    });
+
+    await expect(
+      validateAgentSandboxWholeRunHosting(platform, {
+        SPRINTFOUNDRY_HOSTING_MODE: "k8s-agent-sandbox",
+        SPRINTFOUNDRY_RUN_SANDBOX_MODE: "k8s-whole-run",
+      } as NodeJS.ProcessEnv, {
+        readCustomResourceDefinition: async () => {
+          throw new Error("should not be called");
+        },
+      })
+    ).resolves.toBeUndefined();
+  });
+
   it("passes when required CRDs are present", async () => {
     const platform = makePlatformConfig({
       k8s: {

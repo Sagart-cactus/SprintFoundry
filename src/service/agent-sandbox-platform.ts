@@ -8,6 +8,7 @@ export const DEFAULT_AGENT_SANDBOX_API_GROUP = "extensions.agents.x-k8s.io";
 export const DEFAULT_AGENT_SANDBOX_CORE_API_GROUP = "agents.x-k8s.io";
 export const DEFAULT_AGENT_SANDBOX_API_VERSION = "v1alpha1";
 export const DEFAULT_AGENT_SANDBOX_CLAIM_PLURAL = "sandboxclaims";
+export const DEFAULT_AGENT_SANDBOX_TEMPLATE_PLURAL = "sandboxtemplates";
 export const DEFAULT_AGENT_SANDBOX_TEMPLATE_NAME = "default";
 
 interface AgentSandboxCrdValidator {
@@ -17,6 +18,13 @@ interface AgentSandboxCrdValidator {
 function isTruthy(value: string | undefined): boolean {
   const normalized = String(value ?? "").trim().toLowerCase();
   return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+function isHostedInsideAgentSandboxWholeRun(env: NodeJS.ProcessEnv): boolean {
+  return (
+    String(env.SPRINTFOUNDRY_HOSTING_MODE ?? "").trim() === "k8s-agent-sandbox" &&
+    String(env.SPRINTFOUNDRY_RUN_SANDBOX_MODE ?? "").trim() === "k8s-whole-run"
+  );
 }
 
 export function isAgentSandboxWholeRunHostingEnabled(
@@ -50,6 +58,9 @@ export async function validateAgentSandboxWholeRunHosting(
 ): Promise<void> {
   normalizeAgentSandboxPlatformConfig(platformConfig);
   if (!isAgentSandboxWholeRunHostingEnabled(platformConfig, env)) {
+    return;
+  }
+  if (isHostedInsideAgentSandboxWholeRun(env)) {
     return;
   }
 
