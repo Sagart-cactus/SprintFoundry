@@ -175,8 +175,8 @@ k8s:
       memory: 4Gi
   quota_scope: shared-namespace-admin-managed
   agent_sandbox:
-    enabled: false
-    whole_run_hosting_enabled: false
+    enabled: true
+    whole_run_hosting_enabled: true
     template_name: default
     warm_pool_name: ""
     api_group: extensions.agents.x-k8s.io

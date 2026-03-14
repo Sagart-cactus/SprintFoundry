@@ -274,6 +274,41 @@ describe("GitManager", () => {
     expect(ghIdx).toBeGreaterThan(pushIdx);
   });
 
+  it("createPullRequest returns an existing PR URL when gh pr create races with an already-open branch PR", async () => {
+    (mockSpawnSync as any).mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "git" && args[0] === "rev-parse") {
+        return { status: 0, stdout: "feat/21-resume-fix\n", stderr: "" };
+      }
+      if (cmd === "gh" && args[0] === "pr" && args[1] === "create") {
+        return { status: 1, stdout: "", stderr: "a pull request for branch already exists" };
+      }
+      if (cmd === "gh" && args[0] === "pr" && args[1] === "list") {
+        return { status: 0, stdout: '[{"url":"https://github.com/test/repo/pull/77"}]\n', stderr: "" };
+      }
+      if (args[0] === "diff" && args[1] === "--staged" && args[2] === "--quiet") {
+        return { status: 0, stdout: "", stderr: "" };
+      }
+      if (args[0] === "diff" && args[1] === "--staged" && args[2] === "--name-only") {
+        return { status: 0, stdout: "", stderr: "" };
+      }
+      return { status: 0, stdout: "", stderr: "" };
+    });
+
+    const git = new GitManager(makeRepoConfig(), makeBranchStrategy());
+
+    const run = {
+      run_id: "run-3",
+      ticket: makeTicket(),
+      steps: [],
+      total_tokens_used: 0,
+      total_cost_usd: 0,
+    } as unknown as TaskRun;
+
+    const result = await git.createPullRequest("/workspace", run);
+
+    expect(result).toBe("https://github.com/test/repo/pull/77");
+  });
+
   it("buildPRBody includes ticket details, agent results, and stats", () => {
     const git = new GitManager(makeRepoConfig(), makeBranchStrategy());
 
