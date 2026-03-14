@@ -3,7 +3,6 @@ import {
   AgentSandboxExecutionBackend,
   createExecutionBackend,
   DockerExecutionBackend,
-  KubernetesPodExecutionBackend,
   LocalExecutionBackend,
   resolveExecutionBackendName,
 } from "../src/service/execution/index.js";
@@ -26,12 +25,12 @@ describe("execution backend factory", () => {
     expect(resolveExecutionBackendName(platform, project, env)).toBe("docker");
   });
 
-  it("prefers environment override over platform config", () => {
+  it("fails fast when environment override still requests k8s-pod", () => {
     const platform = makePlatformConfig({ execution_backend: "local" });
     const project = makeProjectConfig();
     const env = { SPRINTFOUNDRY_EXECUTION_BACKEND: "k8s-pod" } as NodeJS.ProcessEnv;
 
-    expect(resolveExecutionBackendName(platform, project, env)).toBe("k8s-pod");
+    expect(() => resolveExecutionBackendName(platform, project, env)).toThrow(/deprecated execution backend 'k8s-pod'/);
   });
 
   it("does not couple dispatch k8s mode to execution backend selection", () => {
@@ -60,12 +59,12 @@ describe("execution backend factory", () => {
     );
   });
 
-  it("constructs the k8s pod backend when configured", () => {
+  it("fails fast when a project override still requests k8s-pod", () => {
     const platform = makePlatformConfig();
     const project = makeProjectConfig({ execution_backend_override: "k8s-pod" });
 
-    expect(createExecutionBackend(platform, project, {} as NodeJS.ProcessEnv)).toBeInstanceOf(
-      KubernetesPodExecutionBackend
+    expect(() => createExecutionBackend(platform, project, {} as NodeJS.ProcessEnv)).toThrow(
+      /deprecated execution backend 'k8s-pod'/
     );
   });
 
