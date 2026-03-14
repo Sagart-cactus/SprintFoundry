@@ -5,6 +5,7 @@ import type { PlatformConfig, ProjectConfig, RuntimeMetadataEnvelope } from "../
 import type { AgentRunConfig, AgentRunResult } from "../agent-runner.js";
 import { runProcess, parseTokenUsage } from "../runtime/process-utils.js";
 import type { ExecutionBackend, RunEnvironmentHandle, SandboxTeardownReason } from "./backend.js";
+import { resolveHostingMode } from "../hosting-mode.js";
 
 export class DockerExecutionBackend implements ExecutionBackend {
   private projectRoot: string;
@@ -34,6 +35,7 @@ export class DockerExecutionBackend implements ExecutionBackend {
       tenant_id: run.tenant_id,
       sandbox_id: sandboxId,
       execution_backend: "docker",
+      hosting_mode: resolveHostingMode({ explicitHostingMode: run.hosting_mode, executionBackend: "docker" }),
       workspace_path: workspacePath,
       checkpoint_generation: 0,
       metadata: {

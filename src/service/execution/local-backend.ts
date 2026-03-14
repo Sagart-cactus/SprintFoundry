@@ -2,6 +2,7 @@ import type { AgentRunConfig, AgentRunResult } from "../agent-runner.js";
 import type { ExecutionPlan, PlanStep, TaskRun } from "../../shared/types.js";
 import { RuntimeFactory } from "../runtime/runtime-factory.js";
 import type { ExecutionBackend, RunEnvironmentHandle, SandboxTeardownReason } from "./backend.js";
+import { resolveHostingMode } from "../hosting-mode.js";
 
 export class LocalExecutionBackend implements ExecutionBackend {
   constructor(private runtimeFactory: RuntimeFactory = new RuntimeFactory()) {}
@@ -16,6 +17,7 @@ export class LocalExecutionBackend implements ExecutionBackend {
       project_id: run.project_id,
       sandbox_id: `local-${run.run_id}`,
       execution_backend: "local",
+      hosting_mode: resolveHostingMode({ explicitHostingMode: run.hosting_mode, executionBackend: "local" }),
       workspace_path: workspacePath,
       checkpoint_generation: 0,
       metadata: {},

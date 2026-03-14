@@ -175,6 +175,8 @@ export default function RunDetail({ projectId, runId }) {
             )}
             <span className="text-ink-300">&middot;</span>
             <span>{run.project_id}</span>
+            <span className="text-ink-300">&middot;</span>
+            <span className="font-mono text-ink-300">{run.hosting_mode || 'local'}</span>
             {plan?.classification && (
               <>
                 <span className="text-ink-300">&middot;</span>

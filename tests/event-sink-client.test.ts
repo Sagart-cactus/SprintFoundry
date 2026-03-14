@@ -22,6 +22,7 @@ const baseRun: RunSessionMetadata = {
   ticket_source: "github",
   ticket_title: "Test run",
   status: "executing",
+  hosting_mode: "local",
   current_step: 1,
   total_steps: 3,
   plan_classification: "new_feature",

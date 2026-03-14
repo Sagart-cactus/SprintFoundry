@@ -1033,6 +1033,10 @@ function renderSidebarMeta(runData) {
         <span class="meta-value">${escapeHtml(runData.classification || "unclassified")}</span>
       </div>
       <div class="meta-item">
+        <span class="meta-label">Hosting</span>
+        <span class="meta-value">${escapeHtml(runData.hosting_mode || "local")}</span>
+      </div>
+      <div class="meta-item">
         <span class="meta-label">Project</span>
         <span class="meta-value">${escapeHtml(runData.project_id)}</span>
       </div>

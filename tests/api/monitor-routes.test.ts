@@ -552,6 +552,7 @@ beforeAll(async () => {
         ticket_source: "prompt",
         ticket_title: "Session-backed run",
         status: "executing",
+        hosting_mode: "local",
         current_step: 1,
         total_steps: 3,
         plan_classification: "new_feature",
@@ -604,6 +605,7 @@ beforeAll(async () => {
         ticket_source: "prompt",
         ticket_title: "Aliased run",
         status: "planning",
+        hosting_mode: "local",
         current_step: 0,
         total_steps: 0,
         plan_classification: "bug_fix",
@@ -742,6 +744,7 @@ describe("GET /api/runs", () => {
     const run = data.runs.find((r: any) => r.run_id === "run-session-only");
     expect(run).toBeDefined();
     expect(run.project_id).toBe("session-only-project");
+    expect(run.hosting_mode).toBe("local");
   });
 
   it("includes resume metadata in run summaries", async () => {
@@ -777,6 +780,7 @@ describe("GET /api/run", () => {
     const data = JSON.parse(body);
     expect(data.run_id).toBe("run-session-only");
     expect(data.project_id).toBe("session-only-project");
+    expect(data.hosting_mode).toBe("local");
   });
 
   it("includes runtime skill summary on step objects when runtime metadata is present", async () => {

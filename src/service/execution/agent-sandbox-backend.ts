@@ -2,6 +2,7 @@ import { createRequire } from "module";
 import type { ExecutionPlan, PlanStep, PlatformConfig, ProjectConfig, TaskRun } from "../../shared/types.js";
 import type { AgentRunConfig, AgentRunResult } from "../agent-runner.js";
 import type { ExecutionBackend, RunEnvironmentHandle, SandboxTeardownReason } from "./backend.js";
+import { resolveHostingMode } from "../hosting-mode.js";
 
 const require = createRequire(import.meta.url);
 
@@ -48,6 +49,7 @@ export class AgentSandboxExecutionBackend implements ExecutionBackend {
       tenant_id: run.tenant_id,
       sandbox_id: binding.sandboxName || claimName,
       execution_backend: "agent-sandbox",
+      hosting_mode: resolveHostingMode({ explicitHostingMode: run.hosting_mode, executionBackend: "agent-sandbox" }),
       workspace_path: workspacePath,
       checkpoint_generation: 0,
       metadata: {

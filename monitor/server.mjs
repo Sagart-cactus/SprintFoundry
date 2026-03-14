@@ -1295,6 +1295,7 @@ async function getDbRunRecord(projectId, runId) {
         ticket_source,
         ticket_title,
         status,
+        hosting_mode,
         current_step,
         total_steps,
         plan_classification,
@@ -1354,6 +1355,7 @@ async function readEventsFromDb(runId, limit = null) {
 function buildDbSessionFallback(runRecord) {
   return {
     status: typeof runRecord.status === "string" ? runRecord.status : "unknown",
+    hosting_mode: normalizeHostingMode(runRecord.hosting_mode) ?? null,
     plan_classification: runRecord.plan_classification ?? null,
     total_steps: Number.isFinite(runRecord.total_steps) ? runRecord.total_steps : 0,
     created_at: toIsoTimestamp(runRecord.created_at),
@@ -1464,6 +1466,7 @@ async function loadRunSummaryFromDbRecord(runRecord, options = {}) {
     project_id: runRecord.project_id,
     run_id: runRecord.run_id,
     status: hasEvents ? inferStatus(events) : (runRecord.status ?? "unknown"),
+    hosting_mode: extractHostingMode(events, sessionFallback, runRecord),
     classification: plan?.classification ?? runRecord.plan_classification ?? null,
     step_count: hasEvents ? (plan?.steps?.length ?? 0) : (runRecord.total_steps ?? 0),
     steps,
@@ -1491,6 +1494,7 @@ async function listRunsFromDb() {
         ticket_source,
         ticket_title,
         status,
+        hosting_mode,
         current_step,
         total_steps,
         plan_classification,
@@ -1771,6 +1775,51 @@ function inferStatus(events) {
   return "unknown";
 }
 
+function normalizeHostingMode(value) {
+  const normalized = String(value ?? "").trim();
+  if (
+    normalized === "local" ||
+    normalized === "docker" ||
+    normalized === "k8s-job-whole-run" ||
+    normalized === "k8s-agent-sandbox"
+  ) {
+    return normalized;
+  }
+  return null;
+}
+
+function inferHostingModeFromExecutionBackend(executionBackend, session = null) {
+  const backend = String(executionBackend ?? "").trim();
+  if (backend === "agent-sandbox") return "k8s-agent-sandbox";
+  if (backend === "docker") return "docker";
+  if (
+    typeof session?.workspace_path === "string" &&
+    session.workspace_path.includes("/workspace/sprintfoundry/")
+  ) {
+    return "k8s-job-whole-run";
+  }
+  return "local";
+}
+
+function extractHostingMode(events, session = null, runRecord = null) {
+  const sessionMode = normalizeHostingMode(session?.hosting_mode);
+  if (sessionMode) return sessionMode;
+
+  const recordMode = normalizeHostingMode(runRecord?.hosting_mode);
+  if (recordMode) return recordMode;
+
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i];
+    const explicit = normalizeHostingMode(event?.data?.hosting_mode);
+    if (explicit) return explicit;
+    if (event?.event_type === "sandbox.created" || event?.event_type === "sandbox.resumed") {
+      return inferHostingModeFromExecutionBackend(event?.data?.execution_backend, session);
+    }
+  }
+
+  return inferHostingModeFromExecutionBackend(runRecord?.execution_backend, session);
+}
+
 function extractRuntimeSkills(runtimeMetadata) {
   if (!runtimeMetadata || typeof runtimeMetadata !== "object") return null;
   const providerMeta = runtimeMetadata.provider_metadata;
@@ -1981,6 +2030,7 @@ async function loadRunSummary(projectId, runId, runPath, session = null, options
     project_id: projectId,
     run_id: canonicalRunId,
     status: hasEvents ? inferStatus(events) : (session?.status ?? "unknown"),
+    hosting_mode: extractHostingMode(events, session),
     classification: plan?.classification ?? session?.plan_classification ?? null,
     step_count: hasEvents ? (plan?.steps?.length ?? 0) : (session?.total_steps ?? 0),
     steps,
