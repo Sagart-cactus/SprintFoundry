@@ -44,6 +44,7 @@ COPY --from=builder /build/dist ./dist
 
 COPY plugins ./plugins
 COPY config/platform.yaml ./config/platform.yaml
+COPY migrations ./migrations
 COPY monitor ./monitor
 COPY scripts/entrypoint.sh ./entrypoint.sh
 

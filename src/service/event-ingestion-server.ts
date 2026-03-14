@@ -1,6 +1,12 @@
 import http from "node:http";
 import { URL } from "node:url";
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 import { registerEventIngestionRoutes } from "./event-ingestion-api.js";
+
+const require = createRequire(import.meta.url);
 
 type RequestHeaders = Record<string, string | string[] | undefined>;
 type NextFunction = (error?: unknown) => void;
@@ -59,6 +65,13 @@ async function readJsonBody(req: http.IncomingMessage): Promise<unknown> {
 }
 
 async function main(): Promise<void> {
+  if (process.argv.includes("--migrate-only")) {
+    await applySqlMigrations();
+    return;
+  }
+
+  await applySqlMigrations();
+
   const port = Number.parseInt(process.env.SPRINTFOUNDRY_EVENT_API_PORT ?? "3001", 10);
   const host = process.env.SPRINTFOUNDRY_EVENT_API_HOST ?? "0.0.0.0";
 
@@ -151,6 +164,43 @@ async function main(): Promise<void> {
   server.listen(port, host, () => {
     console.log(`[event-api] listening on http://${host}:${port}`);
   });
+}
+
+async function applySqlMigrations(): Promise<void> {
+  const databaseUrl = process.env.SPRINTFOUNDRY_DATABASE_URL?.trim();
+  if (!databaseUrl) {
+    throw new Error("SPRINTFOUNDRY_DATABASE_URL is required to apply event ingestion migrations");
+  }
+
+  const migrationsDir = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "..",
+    "migrations"
+  );
+  const entries = (await fs.readdir(migrationsDir, { withFileTypes: true }))
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".sql"))
+    .map((entry) => entry.name)
+    .sort();
+
+  const { Client } = require("pg") as {
+    Client: new (config: { connectionString: string }) => {
+      connect(): Promise<void>;
+      query(sql: string): Promise<void>;
+      end(): Promise<void>;
+    };
+  };
+  const client = new Client({ connectionString: databaseUrl });
+  await client.connect();
+  try {
+    for (const fileName of entries) {
+      const sql = await fs.readFile(path.join(migrationsDir, fileName), "utf-8");
+      if (!sql.trim()) continue;
+      await client.query(sql);
+    }
+  } finally {
+    await client.end();
+  }
 }
 
 main().catch((error) => {

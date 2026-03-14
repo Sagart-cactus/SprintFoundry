@@ -1,10 +1,13 @@
 import { createRequire } from "node:module";
 import { makeRunWorkspacePvcName } from "./dispatch-controller.js";
+import { EventSinkClient } from "./event-sink-client.js";
 import { RunSnapshotStore } from "./run-snapshot-store.js";
-import type { RunSessionMetadata } from "../shared/types.js";
+import type { RunSessionMetadata, TaskEvent } from "../shared/types.js";
 
 const require = createRequire(import.meta.url);
 const SESSIONS_DIR_ENV = "SPRINTFOUNDRY_SESSIONS_DIR";
+const EVENT_SINK_URL_ENV = "SPRINTFOUNDRY_EVENT_SINK_URL";
+const INTERNAL_API_TOKEN_ENV = "SPRINTFOUNDRY_INTERNAL_API_TOKEN";
 
 export interface SnapshotExporterJobManifest {
   apiVersion: "batch/v1";
@@ -40,9 +43,12 @@ export interface SnapshotExporterJobManifest {
 
 export interface K8sSnapshotClient {
   listJobs(namespace: string): Promise<Array<Record<string, unknown>>>;
+  listSandboxClaims(namespace: string): Promise<Array<Record<string, unknown>>>;
   createJob(namespace: string, manifest: SnapshotExporterJobManifest): Promise<void>;
   listPods(namespace: string, labelSelector: string): Promise<Array<Record<string, unknown>>>;
   deletePod(namespace: string, name: string): Promise<void>;
+  deleteSandboxClaim(namespace: string, name: string): Promise<void>;
+  deleteSandboxTemplate(namespace: string, name: string): Promise<void>;
   pvcExists(namespace: string, name: string): Promise<boolean>;
   deletePvc(namespace: string, name: string): Promise<void>;
 }
@@ -54,6 +60,7 @@ export interface K8sRunSnapshotControllerOptions {
   logger?: Pick<Console, "log" | "warn" | "error">;
   snapshotStore?: RunSnapshotStore;
   k8sClient?: K8sSnapshotClient;
+  eventSinkClient?: Pick<EventSinkClient, "postEvent">;
 }
 
 export interface K8sRunSnapshotReconcileSummary {
@@ -150,6 +157,37 @@ function isRunnerJob(job: Record<string, unknown>): boolean {
   return labelsOf(job)["app.kubernetes.io/name"] === "sprintfoundry-runner";
 }
 
+function isSnapshotExporterJob(job: Record<string, unknown>): boolean {
+  return labelsOf(job)["app.kubernetes.io/name"] === "sprintfoundry-snapshot-exporter";
+}
+
+function isTerminalPod(resource: Record<string, unknown>): boolean {
+  const phase = phaseOf(resource);
+  return phase === "Succeeded" || phase === "Failed";
+}
+
+function annotationOf(resource: Record<string, unknown>, key: string): string {
+  const metadata = resource.metadata;
+  if (metadata && typeof metadata === "object") {
+    const annotations = (metadata as Record<string, unknown>).annotations;
+    if (annotations && typeof annotations === "object") {
+      return asString((annotations as Record<string, unknown>)[key]);
+    }
+  }
+  return "";
+}
+
+function sandboxTemplateNameOf(claim: Record<string, unknown>): string {
+  const spec = claim.spec;
+  if (spec && typeof spec === "object") {
+    const sandboxTemplateRef = (spec as Record<string, unknown>).sandboxTemplateRef;
+    if (sandboxTemplateRef && typeof sandboxTemplateRef === "object") {
+      return asString((sandboxTemplateRef as Record<string, unknown>).name);
+    }
+  }
+  return annotationOf(claim, "sprintfoundry.io/template-name");
+}
+
 export function buildSnapshotExporterJobManifest(options: {
   namespace: string;
   runId: string;
@@ -159,6 +197,8 @@ export function buildSnapshotExporterJobManifest(options: {
 }): SnapshotExporterJobManifest {
   const env = [
     { name: SESSIONS_DIR_ENV, value: "/workspace/.sprintfoundry/sessions" },
+    { name: EVENT_SINK_URL_ENV, value: asString(process.env[EVENT_SINK_URL_ENV]) },
+    { name: INTERNAL_API_TOKEN_ENV, value: asString(process.env[INTERNAL_API_TOKEN_ENV]) },
     { name: "SPRINTFOUNDRY_SNAPSHOT_BUCKET", value: asString(process.env.SPRINTFOUNDRY_SNAPSHOT_BUCKET) },
     {
       name: "SPRINTFOUNDRY_SNAPSHOT_S3_ENDPOINT",
@@ -230,6 +270,7 @@ export class K8sRunSnapshotController {
   private readonly logger: Pick<Console, "log" | "warn" | "error">;
   private readonly snapshotStore: RunSnapshotStore;
   private readonly k8sClient: K8sSnapshotClient;
+  private readonly eventSinkClient?: Pick<EventSinkClient, "postEvent">;
 
   constructor(options: K8sRunSnapshotControllerOptions = {}) {
     this.namespace = asString(options.namespace ?? process.env.SPRINTFOUNDRY_K8S_NAMESPACE) || "default";
@@ -238,12 +279,35 @@ export class K8sRunSnapshotController {
     this.logger = options.logger ?? console;
     this.snapshotStore = options.snapshotStore ?? new RunSnapshotStore();
     this.k8sClient = options.k8sClient ?? this.createDefaultK8sClient();
+    this.eventSinkClient =
+      options.eventSinkClient ??
+      (() => {
+        const sinkUrl = asString(process.env.SPRINTFOUNDRY_EVENT_SINK_URL);
+        const internalApiToken = asString(process.env.SPRINTFOUNDRY_INTERNAL_API_TOKEN) || undefined;
+        return sinkUrl ? new EventSinkClient(sinkUrl, globalThis.fetch, internalApiToken) : undefined;
+      })();
   }
 
   async reconcileOnce(): Promise<K8sRunSnapshotReconcileSummary> {
     const jobs = await this.k8sClient.listJobs(this.namespace);
+    const sandboxClaims = await this.k8sClient.listSandboxClaims(this.namespace);
     const runnerJobs = jobs.filter(isRunnerJob);
     const jobsByName = new Map(jobs.map((job) => [nameOf(job), job]));
+    const sandboxClaimsByRunId = new Map<string, { claimName: string; templateName: string; projectId: string }>();
+    for (const claim of sandboxClaims) {
+      const labels = labelsOf(claim);
+      const runId = labels["sprintfoundry.io/run-id"];
+      const projectId = labels["sprintfoundry.io/project-id"];
+      const claimName = nameOf(claim);
+      if (!runId || !projectId || !claimName) {
+        continue;
+      }
+      sandboxClaimsByRunId.set(runId, {
+        claimName,
+        templateName: sandboxTemplateNameOf(claim),
+        projectId,
+      });
+    }
     const summary: K8sRunSnapshotReconcileSummary = {
       inspectedRuns: 0,
       exportersCreated: 0,
@@ -251,22 +315,59 @@ export class K8sRunSnapshotController {
       snapshotFailuresDetected: 0,
     };
 
+    const candidateRuns = new Map<string, { projectId: string; source: "job" | "sandbox" | "exporter"; claimName?: string; templateName?: string }>();
     for (const runnerJob of runnerJobs) {
       if (!isJobSucceeded(runnerJob) && !isJobFailed(runnerJob)) {
         continue;
       }
-
-      summary.inspectedRuns += 1;
       const labels = labelsOf(runnerJob);
       const runId = labels["sprintfoundry.io/run-id"];
       const projectId = labels["sprintfoundry.io/project-id"];
-      if (!runId || !projectId) {
+      if (!runId || !projectId) continue;
+      candidateRuns.set(runId, { projectId, source: "job" });
+    }
+    for (const [runId, claim] of sandboxClaimsByRunId.entries()) {
+      const existing = candidateRuns.get(runId);
+      if (existing?.source === "job") continue;
+      candidateRuns.set(runId, {
+        projectId: claim.projectId,
+        source: "sandbox",
+        claimName: claim.claimName,
+        templateName: claim.templateName,
+      });
+    }
+    for (const exporterJob of jobs.filter(isSnapshotExporterJob)) {
+      const labels = labelsOf(exporterJob);
+      const runId = labels["sprintfoundry.io/run-id"];
+      const projectId = labels["sprintfoundry.io/project-id"];
+      if (!runId || !projectId || candidateRuns.has(runId)) {
         continue;
       }
+      candidateRuns.set(runId, {
+        projectId,
+        source: "exporter",
+      });
+    }
+
+    for (const [runId, candidate] of candidateRuns.entries()) {
+      summary.inspectedRuns += 1;
+      const projectId = candidate.projectId;
 
       const exporterJobName = makeSnapshotExporterJobName(runId);
       const exporterJob = jobsByName.get(exporterJobName);
+      const runPods = await this.k8sClient.listPods(this.namespace, `sprintfoundry.io/run-id=${runId}`);
+      const remainingPods = runPods
+        .filter((pod) => {
+          const phase = phaseOf(pod);
+          return phase && phase !== "Succeeded" && phase !== "Failed";
+        })
+        .map(nameOf)
+        .filter(Boolean);
+
       if (!exporterJob) {
+        if (remainingPods.length > 0) {
+          continue;
+        }
         if (!this.snapshotStore.isEnabled()) {
           this.logger.warn(
             `[snapshot-controller] Snapshot storage is not configured; skipping exporter job for run ${runId}`
@@ -296,14 +397,6 @@ export class K8sRunSnapshotController {
         continue;
       }
 
-      const runPods = await this.k8sClient.listPods(this.namespace, `sprintfoundry.io/run-id=${runId}`);
-      const remainingPods = runPods
-        .filter((pod) => {
-          const phase = phaseOf(pod);
-          return phase && phase !== "Succeeded" && phase !== "Failed";
-        })
-        .map(nameOf)
-        .filter(Boolean);
       if (remainingPods.length > 0) {
         this.logger.warn(
           `[snapshot-controller] Skipping PVC cleanup for ${runId}; non-terminal pods still exist: ${remainingPods.join(", ")}`
@@ -312,8 +405,22 @@ export class K8sRunSnapshotController {
       }
 
       const terminalPods = runPods
+        .filter(isTerminalPod)
         .map(nameOf)
         .filter(Boolean);
+      if (candidate.claimName) {
+        await this.k8sClient.deleteSandboxClaim(this.namespace, candidate.claimName);
+        if (candidate.templateName) {
+          await this.k8sClient.deleteSandboxTemplate(this.namespace, candidate.templateName);
+        }
+        if (terminalPods.length > 0) {
+          this.logger.log(
+            `[snapshot-controller] Released sandbox host for ${runId}; waiting for terminal pods to disappear: ${terminalPods.join(", ")}`
+          );
+          continue;
+        }
+      }
+
       if (terminalPods.length > 0) {
         for (const podName of terminalPods) {
           await this.k8sClient.deletePod(this.namespace, podName);
@@ -327,6 +434,9 @@ export class K8sRunSnapshotController {
       const pvcName = makeRunWorkspacePvcName(runId);
       const pvcExists = await this.k8sClient.pvcExists(this.namespace, pvcName);
       if (!pvcExists) {
+        if (await this.markCleanupCompletedIfNeeded(runId, projectId)) {
+          summary.pvcCleanupCompleted += 1;
+        }
         continue;
       }
 
@@ -347,9 +457,58 @@ export class K8sRunSnapshotController {
         terminal_workflow_state: "cleanup_completed",
       };
       await this.snapshotStore.writeSessionRecord({ run_id: runId, project_id: projectId }, updatedSession);
+      await this.emitLifecycleEvent(runId, "workspace.cleanup.completed", {
+        project_id: projectId,
+        terminal_workflow_state: "cleanup_completed",
+      });
     } catch (error) {
       this.logger.warn(
         `[snapshot-controller] Cleanup completed for ${runId}, but failed to update uploaded session metadata: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      await this.emitLifecycleEvent(runId, "workspace.cleanup.failed", {
+        project_id: projectId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async markCleanupCompletedIfNeeded(runId: string, projectId: string): Promise<boolean> {
+    try {
+      const session = await this.snapshotStore.readSessionRecord({ run_id: runId, project_id: projectId });
+      if (session.terminal_workflow_state === "cleanup_completed") {
+        return false;
+      }
+    } catch (error) {
+      this.logger.warn(
+        `[snapshot-controller] PVC already absent for ${runId}, but failed to inspect uploaded session metadata: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+
+    await this.markCleanupCompleted(runId, projectId);
+    return true;
+  }
+
+  private async emitLifecycleEvent(
+    runId: string,
+    eventType: TaskEvent["event_type"],
+    data: Record<string, unknown>
+  ): Promise<void> {
+    if (!this.eventSinkClient) return;
+    try {
+      await this.eventSinkClient.postEvent({
+        event_id: `${eventType.replace(/\./g, "-")}-${runId}-${Date.now()}`,
+        run_id: runId,
+        event_type: eventType,
+        timestamp: new Date(),
+        data,
+      });
+    } catch (error) {
+      this.logger.warn(
+        `[snapshot-controller] Failed to post ${eventType} for ${runId}: ${
           error instanceof Error ? error.message : String(error)
         }`
       );
@@ -361,12 +520,14 @@ export class K8sRunSnapshotController {
       KubeConfig: new () => { loadFromDefault(): void; makeApiClient<T>(client: new (...args: unknown[]) => T): T };
       BatchV1Api: new (...args: unknown[]) => unknown;
       CoreV1Api: new (...args: unknown[]) => unknown;
+      CustomObjectsApi: new (...args: unknown[]) => unknown;
     };
 
     const kc = new k8sModule.KubeConfig();
     kc.loadFromDefault();
     const batchApi = kc.makeApiClient(k8sModule.BatchV1Api) as Record<string, (...args: unknown[]) => Promise<unknown>>;
     const coreApi = kc.makeApiClient(k8sModule.CoreV1Api) as Record<string, (...args: unknown[]) => Promise<unknown>>;
+    const customObjectsApi = kc.makeApiClient(k8sModule.CustomObjectsApi) as Record<string, (...args: unknown[]) => Promise<unknown>>;
 
     return {
       listJobs: async (namespace) => {
@@ -381,6 +542,32 @@ export class K8sRunSnapshotController {
         }
         const legacy = await batchApi.listNamespacedJob(namespace);
         return extractK8sListItems(legacy);
+      },
+      listSandboxClaims: async (namespace) => {
+        try {
+          const result = await customObjectsApi.listNamespacedCustomObject({
+            group: "extensions.agents.x-k8s.io",
+            version: "v1alpha1",
+            namespace,
+            plural: "sandboxclaims",
+          });
+          return extractK8sListItems(result);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (/namespace was null or undefined/i.test(message)) {
+            const legacy = await customObjectsApi.listNamespacedCustomObject(
+              "extensions.agents.x-k8s.io",
+              "v1alpha1",
+              namespace,
+              "sandboxclaims"
+            );
+            return extractK8sListItems(legacy);
+          }
+          if (/NotFound|404/i.test(message)) {
+            return [];
+          }
+          throw error;
+        }
       },
       createJob: async (namespace, manifest) => {
         try {
@@ -419,6 +606,56 @@ export class K8sRunSnapshotController {
           }
         }
         await coreApi.deleteNamespacedPod(name, namespace);
+      },
+      deleteSandboxClaim: async (namespace, name) => {
+        try {
+          await customObjectsApi.deleteNamespacedCustomObject({
+            group: "extensions.agents.x-k8s.io",
+            version: "v1alpha1",
+            namespace,
+            plural: "sandboxclaims",
+            name,
+          });
+          return;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (/NotFound|404/i.test(message)) return;
+          if (!/name was null or undefined|namespace was null or undefined/i.test(message)) {
+            throw error;
+          }
+        }
+        await customObjectsApi.deleteNamespacedCustomObject(
+          "extensions.agents.x-k8s.io",
+          "v1alpha1",
+          namespace,
+          "sandboxclaims",
+          name
+        );
+      },
+      deleteSandboxTemplate: async (namespace, name) => {
+        try {
+          await customObjectsApi.deleteNamespacedCustomObject({
+            group: "extensions.agents.x-k8s.io",
+            version: "v1alpha1",
+            namespace,
+            plural: "sandboxtemplates",
+            name,
+          });
+          return;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (/NotFound|404/i.test(message)) return;
+          if (!/name was null or undefined|namespace was null or undefined/i.test(message)) {
+            throw error;
+          }
+        }
+        await customObjectsApi.deleteNamespacedCustomObject(
+          "extensions.agents.x-k8s.io",
+          "v1alpha1",
+          namespace,
+          "sandboxtemplates",
+          name
+        );
       },
       pvcExists: async (namespace, name) => {
         try {

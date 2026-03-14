@@ -51,6 +51,7 @@ export interface RunSnapshotManifest {
   compression: "tar.gz";
   source_backend: "k8s-whole-run";
   source_workspace_path: string;
+  source_runtime_home_path?: string | null;
   restorable_paths: string[];
   excluded_paths: string[];
   sanitization_applied: string[];
@@ -66,6 +67,8 @@ export interface RunSnapshotRestoreResult {
   manifest: RunSnapshotManifest;
   session: RunSessionMetadata;
   workspacePath: string;
+  runtimeHomePath: string | null;
+  compatibilityWarnings: string[];
 }
 
 export interface RunSnapshotStoreOptions {
@@ -87,6 +90,15 @@ interface ResolvedS3Factories {
 
 function asString(value: unknown): string {
   return String(value ?? "").trim();
+}
+
+function resolveSnapshotS3Endpoint(override?: string | null): string | undefined {
+  return (
+    asString(override) ||
+    asString(process.env.SPRINTFOUNDRY_SNAPSHOT_S3_ENDPOINT_IN_CLUSTER) ||
+    asString(process.env.SPRINTFOUNDRY_SNAPSHOT_S3_ENDPOINT) ||
+    undefined
+  );
 }
 
 function isTruthy(value: string | undefined): boolean {
@@ -128,7 +140,7 @@ function buildDefaultS3Factories(options: RunSnapshotStoreOptions): ResolvedS3Fa
     GetObjectCommand: new (input: S3GetCommandInput) => unknown;
   };
 
-  const endpoint = asString(options.endpoint ?? process.env.SPRINTFOUNDRY_SNAPSHOT_S3_ENDPOINT) || undefined;
+  const endpoint = resolveSnapshotS3Endpoint(options.endpoint);
   const region = asString(options.region ?? process.env.SPRINTFOUNDRY_SNAPSHOT_S3_REGION) || "us-east-1";
   const forcePathStyle =
     options.forcePathStyle ??
@@ -173,11 +185,16 @@ export class RunSnapshotStore {
       const stagingRoot = path.join(tempRoot, "staging");
       const stagedWorkspace = path.join(stagingRoot, "workspace");
       const stagedSessionDir = path.join(stagingRoot, "session");
+      const stagedRuntimeHome = path.join(stagingRoot, "runtime-home");
       const archivePath = path.join(tempRoot, "workspace.tar.gz");
 
       await fs.mkdir(stagingRoot, { recursive: true });
       await fs.mkdir(stagedSessionDir, { recursive: true });
       await fs.cp(workspacePath, stagedWorkspace, { recursive: true });
+      const runtimeHomePath = await this.detectRuntimeHomePath(workspacePath);
+      if (runtimeHomePath) {
+        await fs.cp(runtimeHomePath, stagedRuntimeHome, { recursive: true });
+      }
 
       await this.sanitizeWorkspace(stagedWorkspace);
 
@@ -210,8 +227,13 @@ export class RunSnapshotStore {
         compression: "tar.gz",
         source_backend: "k8s-whole-run",
         source_workspace_path: workspacePath,
-        restorable_paths: ["workspace/**", `session/${identity.run_id}.json`],
-        excluded_paths: ["/workspace/home/**", "projected-secrets/**"],
+        source_runtime_home_path: runtimeHomePath,
+        restorable_paths: [
+          "workspace/**",
+          `session/${identity.run_id}.json`,
+          ...(runtimeHomePath ? ["runtime-home/**"] : []),
+        ],
+        excluded_paths: ["projected-secrets/**"],
         sanitization_applied: [".git/config credentials scrubbed"],
       };
 
@@ -219,7 +241,7 @@ export class RunSnapshotStore {
         status: "completed",
         backend: "s3",
         bucket,
-        endpoint: asString(this.options.endpoint ?? process.env.SPRINTFOUNDRY_SNAPSHOT_S3_ENDPOINT) || null,
+        endpoint: resolveSnapshotS3Endpoint(this.options.endpoint) || null,
         region: asString(this.options.region ?? process.env.SPRINTFOUNDRY_SNAPSHOT_S3_REGION) || "us-east-1",
         manifest_key: manifestKey,
         archive_key: archiveKey,
@@ -337,11 +359,18 @@ export class RunSnapshotStore {
       await this.extractTarGz(archivePath, extractRoot);
 
       const stagedWorkspace = path.join(extractRoot, "workspace");
+      const stagedRuntimeHome = path.join(extractRoot, "runtime-home");
       const uploadedSessionPath = path.join(extractRoot, "session", `${identity.run_id}.json`);
 
       await fs.rm(destinationPath, { recursive: true, force: true }).catch(() => undefined);
       await fs.mkdir(path.dirname(destinationPath), { recursive: true });
       await fs.cp(stagedWorkspace, destinationPath, { recursive: true });
+      let runtimeHomePath: string | null = null;
+      if (await this.pathExists(stagedRuntimeHome)) {
+        runtimeHomePath = path.join(destinationPath, ".runtime-home");
+        await fs.rm(runtimeHomePath, { recursive: true, force: true }).catch(() => undefined);
+        await fs.cp(stagedRuntimeHome, runtimeHomePath, { recursive: true });
+      }
 
       let session: RunSessionMetadata;
       try {
@@ -361,6 +390,8 @@ export class RunSnapshotStore {
         manifest,
         session,
         workspacePath: destinationPath,
+        runtimeHomePath,
+        compatibilityWarnings: await this.buildCompatibilityWarnings(destinationPath, runtimeHomePath, manifest),
       };
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
@@ -415,5 +446,62 @@ export class RunSnapshotStore {
 
   private async extractTarGz(archivePath: string, destinationDir: string): Promise<void> {
     await execFile("tar", ["-xzf", archivePath, "-C", destinationDir]);
+  }
+
+  private async detectRuntimeHomePath(workspacePath: string): Promise<string | null> {
+    let current = path.resolve(workspacePath);
+    for (let depth = 0; depth < 8; depth += 1) {
+      const candidate = path.join(current, "home");
+      if (
+        await this.pathExists(path.join(candidate, ".codex")) ||
+        await this.pathExists(path.join(candidate, ".claude"))
+      ) {
+        return candidate;
+      }
+      const parent = path.dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+    return null;
+  }
+
+  private async buildCompatibilityWarnings(
+    workspacePath: string,
+    runtimeHomePath: string | null,
+    manifest: RunSnapshotManifest
+  ): Promise<string[]> {
+    const warnings: string[] = [];
+    if (!(await this.pathExists(path.join(workspacePath, ".sprintfoundry", "sessions.json")))) {
+      warnings.push("Restored workspace is missing .sprintfoundry/sessions.json; local hand-off metadata may be incomplete.");
+    }
+    if (!runtimeHomePath) {
+      warnings.push(
+        "No provider runtime home was restored. Provider-level continuation may be unavailable; use workspace inspection or SprintFoundry resume flows."
+      );
+      return warnings;
+    }
+
+    const hasCodexHome =
+      (await this.pathExists(path.join(runtimeHomePath, ".codex"))) ||
+      (await this.pathExists(path.join(runtimeHomePath, "state_5.sqlite")));
+    const hasClaudeHome = await this.pathExists(path.join(runtimeHomePath, ".claude"));
+    if (!hasCodexHome && !hasClaudeHome) {
+      warnings.push(
+        "Restored runtime home does not contain .codex or .claude state. Interactive provider continuation may require manual re-authentication."
+      );
+    }
+    if (manifest.source_runtime_home_path && !hasCodexHome && !hasClaudeHome) {
+      warnings.push(`Snapshot declared runtime home ${manifest.source_runtime_home_path}, but no provider state was restored from it.`);
+    }
+    return warnings;
+  }
+
+  private async pathExists(targetPath: string): Promise<boolean> {
+    try {
+      await fs.access(targetPath);
+      return true;
+    } catch {
+      return false;
+    }
   }
 }
