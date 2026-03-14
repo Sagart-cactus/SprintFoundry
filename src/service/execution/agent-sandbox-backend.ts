@@ -204,11 +204,20 @@ export class AgentSandboxExecutionBackend implements ExecutionBackend {
           const status = body["status"];
           if (status && typeof status === "object") {
             const sandboxRef = (status as Record<string, unknown>)["sandboxRef"];
-            if (sandboxRef && typeof sandboxRef === "object") {
-              const sandboxName = String((sandboxRef as Record<string, unknown>)["name"] ?? "").trim();
-              if (sandboxName) {
-                return { sandboxName };
-              }
+            const sandbox = (status as Record<string, unknown>)["sandbox"];
+            const sandboxName =
+              (sandboxRef && typeof sandboxRef === "object"
+                ? String((sandboxRef as Record<string, unknown>)["name"] ?? "").trim()
+                : "") ||
+              (sandbox && typeof sandbox === "object"
+                ? String(
+                    (sandbox as Record<string, unknown>)["name"] ??
+                    (sandbox as Record<string, unknown>)["Name"] ??
+                    ""
+                  ).trim()
+                : "");
+            if (sandboxName) {
+              return { sandboxName };
             }
           }
           await new Promise((resolve) => setTimeout(resolve, 1_000));

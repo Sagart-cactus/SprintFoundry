@@ -12,6 +12,7 @@ import {
   DEFAULT_AGENT_SANDBOX_API_VERSION,
   DEFAULT_AGENT_SANDBOX_CLAIM_PLURAL,
   DEFAULT_AGENT_SANDBOX_TEMPLATE_NAME,
+  DEFAULT_AGENT_SANDBOX_TEMPLATE_PLURAL,
   isAgentSandboxWholeRunHostingEnabled,
   normalizeAgentSandboxPlatformConfig,
   validateAgentSandboxWholeRunHosting,
@@ -54,7 +55,7 @@ export interface DispatchControllerStartOptions {
   logger?: Pick<Console, "log" | "warn" | "error">;
   executeLocalRun?: (task: DispatchQueueItem) => Promise<void>;
   createK8sJob?: (manifest: K8sJobManifest, task: DispatchQueueItem, namespace: string) => Promise<void>;
-  createSandboxClaim?: (manifest: SandboxClaimManifest, task: DispatchQueueItem, namespace: string) => Promise<void>;
+  createSandboxHost?: (resources: SandboxHostResources, task: DispatchQueueItem, namespace: string) => Promise<void>;
   validatePlatformConfig?: (configDir: string) => Promise<void>;
   autoStartConsumer?: boolean;
   now?: () => number;
@@ -188,6 +189,65 @@ export interface SandboxClaimManifest {
   };
 }
 
+export interface SandboxTemplateManifest {
+  apiVersion: string;
+  kind: "SandboxTemplate";
+  metadata: {
+    name: string;
+    namespace: string;
+    labels: Record<string, string>;
+    annotations?: Record<string, string>;
+  };
+  spec: {
+    podTemplate: {
+      metadata: {
+        labels: Record<string, string>;
+        annotations?: Record<string, string>;
+      };
+      spec: {
+        restartPolicy: "Never";
+        serviceAccountName?: string;
+        containers: Array<{
+          name: string;
+          image: string;
+          imagePullPolicy: string;
+          command: string[];
+          args: string[];
+          env: Array<
+            | { name: string; value: string }
+            | {
+                name: string;
+                valueFrom: {
+                  secretKeyRef: {
+                    name: string;
+                    key: string;
+                    optional?: boolean;
+                  };
+                };
+              }
+          >;
+          envFrom: Array<{ secretRef: { name: string } }>;
+          volumeMounts: Array<{ name: string; mountPath: string; readOnly?: boolean }>;
+          resources: {
+            requests: { cpu: string; memory: string };
+            limits: { cpu: string; memory: string };
+          };
+        }>;
+        volumes: Array<
+          | { name: string; configMap: { name: string } }
+          | { name: string; persistentVolumeClaim: { claimName: string } }
+        >;
+      };
+    };
+  };
+}
+
+export interface SandboxHostResources {
+  workspacePvc: K8sPersistentVolumeClaimManifest;
+  template: SandboxTemplateManifest;
+  claim: SandboxClaimManifest;
+}
+
 export interface K8sPersistentVolumeClaimManifest {
   apiVersion: "v1";
   kind: "PersistentVolumeClaim";
@@ -306,6 +366,12 @@ async function validateDispatchPlatformConfig(configDir: string): Promise<void> 
   const platform = rawPlatform as unknown as PlatformConfig;
   normalizeAgentSandboxPlatformConfig(platform);
   await validateAgentSandboxWholeRunHosting(platform);
+  if (process.env.SPRINTFOUNDRY_K8S_MODE === "true" && !isAgentSandboxWholeRunHostingEnabled(platform, process.env)) {
+    throw new Error(
+      "Kubernetes dispatch requires k8s.agent_sandbox.whole_run_hosting_enabled=true. " +
+      "Legacy whole-run Job hosting has been removed."
+    );
+  }
 }
 
 interface DispatchAgentSandboxWholeRunConfig {
@@ -314,6 +380,7 @@ interface DispatchAgentSandboxWholeRunConfig {
   apiGroup: string;
   apiVersion: string;
   claimPlural: string;
+  templatePlural: string;
 }
 
 async function loadDispatchAgentSandboxWholeRunConfig(configDir: string): Promise<DispatchAgentSandboxWholeRunConfig> {
@@ -328,6 +395,7 @@ async function loadDispatchAgentSandboxWholeRunConfig(configDir: string): Promis
     apiGroup: agentSandbox?.api_group ?? DEFAULT_AGENT_SANDBOX_API_GROUP,
     apiVersion: agentSandbox?.api_version ?? DEFAULT_AGENT_SANDBOX_API_VERSION,
     claimPlural: agentSandbox?.claim_plural ?? DEFAULT_AGENT_SANDBOX_CLAIM_PLURAL,
+    templatePlural: DEFAULT_AGENT_SANDBOX_TEMPLATE_PLURAL,
   };
 }
 
@@ -582,6 +650,68 @@ function buildWholeRunRunnerEnv(
   ];
 }
 
+function buildWholeRunRunnerPodSpec(
+  task: DispatchQueueItem,
+  options: {
+    image?: string;
+    projectSecretName?: string;
+    projectConfigMapName?: string;
+    serviceAccountName?: string;
+    cpuRequest?: string;
+    cpuLimit?: string;
+    memoryRequest?: string;
+    memoryLimit?: string;
+    eventSinkUrl?: string;
+    hostingMode: "k8s-job-whole-run" | "k8s-agent-sandbox";
+  }
+): K8sJobManifest["spec"]["template"]["spec"] {
+  const image = asString(options?.image) || "sprintfoundry-runner:latest";
+  const projectSecretName = asString(options?.projectSecretName) || `sprintfoundry-project-${task.project_id}-secrets`;
+  const projectConfigMapName = asString(options?.projectConfigMapName) || `sprintfoundry-project-${task.project_id}-config`;
+  const workspacePvcName = makeRunWorkspacePvcName(task.run_id);
+  const eventSinkUrl = asString(options?.eventSinkUrl) || asString(process.env[EVENT_SINK_URL_ENV]);
+  const args = buildWholeRunRunnerArgs(task);
+  const env = buildWholeRunRunnerEnv(task, {
+    projectSecretName,
+    eventSinkUrl: eventSinkUrl || undefined,
+    hostingMode: options.hostingMode,
+  });
+
+  return {
+    restartPolicy: "Never",
+    serviceAccountName: asString(options?.serviceAccountName) || undefined,
+    containers: [
+      {
+        name: "runner",
+        image,
+        imagePullPolicy: "IfNotPresent",
+        command: ["node", "dist/index.js"],
+        args,
+        env,
+        envFrom: [{ secretRef: { name: projectSecretName } }],
+        volumeMounts: [
+          { name: "project-config", mountPath: "/config", readOnly: true },
+          { name: "workspace", mountPath: "/workspace" },
+        ],
+        resources: {
+          requests: {
+            cpu: asString(options?.cpuRequest) || "500m",
+            memory: asString(options?.memoryRequest) || "1Gi",
+          },
+          limits: {
+            cpu: asString(options?.cpuLimit) || "2",
+            memory: asString(options?.memoryLimit) || "4Gi",
+          },
+        },
+      },
+    ],
+    volumes: [
+      { name: "project-config", configMap: { name: projectConfigMapName } },
+      { name: "workspace", persistentVolumeClaim: { claimName: workspacePvcName } },
+    ],
+  };
+}
+
 export function buildK8sJobManifest(task: DispatchQueueItem, options?: {
   namespace?: string;
   image?: string;
@@ -598,19 +728,6 @@ export function buildK8sJobManifest(task: DispatchQueueItem, options?: {
   eventSinkUrl?: string;
 }): K8sJobManifest {
   const namespace = asString(options?.namespace) || "default";
-  const image = asString(options?.image) || "sprintfoundry-runner:latest";
-  const projectSecretName = asString(options?.projectSecretName) || `sprintfoundry-project-${task.project_id}-secrets`;
-  const projectConfigMapName = asString(options?.projectConfigMapName) || `sprintfoundry-project-${task.project_id}-config`;
-  const workspacePvcName = makeRunWorkspacePvcName(task.run_id);
-  const eventSinkUrl = asString(options?.eventSinkUrl) || asString(process.env[EVENT_SINK_URL_ENV]);
-
-  const args = buildWholeRunRunnerArgs(task);
-  const env = buildWholeRunRunnerEnv(task, {
-    projectSecretName,
-    eventSinkUrl: eventSinkUrl || undefined,
-    hostingMode: "k8s-job-whole-run",
-  });
-
   return {
     apiVersion: "batch/v1",
     kind: "Job",
@@ -635,38 +752,97 @@ export function buildK8sJobManifest(task: DispatchQueueItem, options?: {
           },
         },
         spec: {
-          restartPolicy: "Never",
-          serviceAccountName: asString(options?.serviceAccountName) || undefined,
-          containers: [
-            {
-              name: "runner",
-              image,
-              imagePullPolicy: "IfNotPresent",
-              command: ["node", "dist/index.js"],
-              args,
-              env,
-              envFrom: [{ secretRef: { name: projectSecretName } }],
-              volumeMounts: [
-                { name: "project-config", mountPath: "/config", readOnly: true },
-                { name: "workspace", mountPath: "/workspace" },
-              ],
-              resources: {
-                requests: {
-                  cpu: asString(options?.cpuRequest) || "500m",
-                  memory: asString(options?.memoryRequest) || "1Gi",
-                },
-                limits: {
-                  cpu: asString(options?.cpuLimit) || "2",
-                  memory: asString(options?.memoryLimit) || "4Gi",
-                },
-              },
-            },
-          ],
-          volumes: [
-            { name: "project-config", configMap: { name: projectConfigMapName } },
-            { name: "workspace", persistentVolumeClaim: { claimName: workspacePvcName } },
-          ],
+          ...buildWholeRunRunnerPodSpec(task, {
+            image: options?.image,
+            projectSecretName: options?.projectSecretName,
+            projectConfigMapName: options?.projectConfigMapName,
+            serviceAccountName: options?.serviceAccountName,
+            cpuRequest: options?.cpuRequest,
+            cpuLimit: options?.cpuLimit,
+            memoryRequest: options?.memoryRequest,
+            memoryLimit: options?.memoryLimit,
+            eventSinkUrl: options?.eventSinkUrl,
+            hostingMode: "k8s-job-whole-run",
+          }),
         },
+      },
+    },
+  };
+}
+
+export function makeRunSandboxClaimName(runId: string): string {
+  return makeK8sJobName(runId);
+}
+
+export function makeRunSandboxTemplateName(runId: string, templatePrefix?: string): string {
+  const prefix = asString(templatePrefix);
+  const normalized = prefix && prefix !== DEFAULT_AGENT_SANDBOX_TEMPLATE_NAME
+    ? `${prefix}-${runId}`
+    : runId;
+  return normalizeK8sName(normalized, "sf-template");
+}
+
+export function buildSandboxTemplateManifest(task: DispatchQueueItem, options?: {
+  namespace?: string;
+  image?: string;
+  templateName?: string;
+  apiGroup?: string;
+  apiVersion?: string;
+  projectSecretName?: string;
+  projectConfigMapName?: string;
+  serviceAccountName?: string;
+  cpuRequest?: string;
+  cpuLimit?: string;
+  memoryRequest?: string;
+  memoryLimit?: string;
+  eventSinkUrl?: string;
+}): SandboxTemplateManifest {
+  const namespace = asString(options?.namespace) || "default";
+  const apiGroup = asString(options?.apiGroup) || DEFAULT_AGENT_SANDBOX_API_GROUP;
+  const apiVersion = asString(options?.apiVersion) || DEFAULT_AGENT_SANDBOX_API_VERSION;
+  const templateName = makeRunSandboxTemplateName(task.run_id, options?.templateName);
+
+  return {
+    apiVersion: `${apiGroup}/${apiVersion}`,
+    kind: "SandboxTemplate",
+    metadata: {
+      name: templateName,
+      namespace,
+      labels: {
+        "app.kubernetes.io/name": "sprintfoundry-runner",
+        "sprintfoundry.io/project-id": task.project_id,
+        "sprintfoundry.io/run-id": task.run_id,
+      },
+      annotations: {
+        "sprintfoundry.io/hosting-mode": "k8s-agent-sandbox",
+        "sprintfoundry.io/workspace-pvc": makeRunWorkspacePvcName(task.run_id),
+      },
+    },
+    spec: {
+      podTemplate: {
+        metadata: {
+          labels: {
+            "app.kubernetes.io/name": "sprintfoundry-runner",
+            "sprintfoundry.io/project-id": task.project_id,
+            "sprintfoundry.io/run-id": task.run_id,
+          },
+          annotations: {
+            "sprintfoundry.io/hosting-mode": "k8s-agent-sandbox",
+            "sprintfoundry.io/template-name": templateName,
+          },
+        },
+        spec: buildWholeRunRunnerPodSpec(task, {
+          image: options?.image,
+          projectSecretName: options?.projectSecretName,
+          projectConfigMapName: options?.projectConfigMapName,
+          serviceAccountName: options?.serviceAccountName,
+          cpuRequest: options?.cpuRequest,
+          cpuLimit: options?.cpuLimit,
+          memoryRequest: options?.memoryRequest,
+          memoryLimit: options?.memoryLimit,
+          eventSinkUrl: options?.eventSinkUrl,
+          hostingMode: "k8s-agent-sandbox",
+        }),
       },
     },
   };
@@ -674,36 +850,22 @@ export function buildK8sJobManifest(task: DispatchQueueItem, options?: {
 
 export function buildSandboxClaimManifest(task: DispatchQueueItem, options?: {
   namespace?: string;
-  image?: string;
   templateName?: string;
   apiGroup?: string;
   apiVersion?: string;
   claimPlural?: string;
-  projectSecretName?: string;
-  projectConfigMapName?: string;
-  eventSinkUrl?: string;
 }): SandboxClaimManifest {
   const namespace = asString(options?.namespace) || "default";
-  const image = asString(options?.image) || "sprintfoundry-runner:latest";
-  const templateName = asString(options?.templateName) || DEFAULT_AGENT_SANDBOX_TEMPLATE_NAME;
+  const templateName = makeRunSandboxTemplateName(task.run_id, options?.templateName);
   const apiGroup = asString(options?.apiGroup) || DEFAULT_AGENT_SANDBOX_API_GROUP;
   const apiVersion = asString(options?.apiVersion) || DEFAULT_AGENT_SANDBOX_API_VERSION;
   const claimPlural = asString(options?.claimPlural) || DEFAULT_AGENT_SANDBOX_CLAIM_PLURAL;
-  const projectSecretName = asString(options?.projectSecretName) || `sprintfoundry-project-${task.project_id}-secrets`;
-  const projectConfigMapName = asString(options?.projectConfigMapName) || `sprintfoundry-project-${task.project_id}-config`;
-  const eventSinkUrl = asString(options?.eventSinkUrl) || asString(process.env[EVENT_SINK_URL_ENV]);
-  const args = buildWholeRunRunnerArgs(task);
-  const env = buildWholeRunRunnerEnv(task, {
-    projectSecretName,
-    eventSinkUrl: eventSinkUrl || undefined,
-    hostingMode: "k8s-agent-sandbox",
-  });
 
   return {
     apiVersion: `${apiGroup}/${apiVersion}`,
     kind: "SandboxClaim",
     metadata: {
-      name: makeK8sJobName(task.run_id),
+      name: makeRunSandboxClaimName(task.run_id),
       namespace,
       labels: {
         "app.kubernetes.io/name": "sprintfoundry-runner",
@@ -714,12 +876,7 @@ export function buildSandboxClaimManifest(task: DispatchQueueItem, options?: {
         "sprintfoundry.io/hosting-mode": "k8s-agent-sandbox",
         "sprintfoundry.io/claim-plural": claimPlural,
         "sprintfoundry.io/workspace-pvc": makeRunWorkspacePvcName(task.run_id),
-        "sprintfoundry.io/project-configmap": projectConfigMapName,
-        "sprintfoundry.io/project-secret": projectSecretName,
-        "sprintfoundry.io/runner-image": image,
-        "sprintfoundry.io/runner-command": JSON.stringify(["node", "dist/index.js"]),
-        "sprintfoundry.io/runner-args": JSON.stringify(args),
-        "sprintfoundry.io/runner-env": JSON.stringify(env),
+        "sprintfoundry.io/template-name": templateName,
       },
     },
     spec: {
@@ -999,7 +1156,7 @@ async function defaultCreateK8sJob(manifest: K8sJobManifest, _task: DispatchQueu
   }
 }
 
-async function defaultCreateSandboxClaim(manifest: SandboxClaimManifest, task: DispatchQueueItem, namespace: string): Promise<void> {
+async function defaultCreateSandboxHost(resources: SandboxHostResources, _task: DispatchQueueItem, namespace: string): Promise<void> {
   let k8sModule: any;
   try {
     k8sModule = require("@kubernetes/client-node");
@@ -1013,11 +1170,7 @@ async function defaultCreateSandboxClaim(manifest: SandboxClaimManifest, task: D
   kc.loadFromDefault();
   const coreApi = kc.makeApiClient(k8sModule.CoreV1Api);
   const customObjectsApi = kc.makeApiClient(k8sModule.CustomObjectsApi);
-  const workspacePvc = buildK8sWorkspacePvcManifest(task, {
-    namespace,
-    workspaceSizeLimit: process.env.SPRINTFOUNDRY_K8S_WORKSPACE_SIZE,
-    workspaceStorageClassName: process.env.SPRINTFOUNDRY_K8S_WORKSPACE_STORAGE_CLASS,
-  });
+  const { workspacePvc, template, claim } = resources;
 
   try {
     await coreApi.createNamespacedPersistentVolumeClaim({ namespace, body: workspacePvc });
@@ -1039,16 +1192,32 @@ async function defaultCreateSandboxClaim(manifest: SandboxClaimManifest, task: D
     }
   }
 
-  const [group, version] = String(manifest.apiVersion).split("/", 2);
+  const [templateGroup, templateVersion] = String(template.apiVersion).split("/", 2);
+  try {
+    await customObjectsApi.createNamespacedCustomObject({
+      group: templateGroup,
+      version: templateVersion,
+      namespace,
+      plural: DEFAULT_AGENT_SANDBOX_TEMPLATE_PLURAL,
+      body: template,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/AlreadyExists|409/i.test(message)) {
+      throw error;
+    }
+  }
+
+  const [claimGroup, claimVersion] = String(claim.apiVersion).split("/", 2);
   const plural =
-    manifest.metadata.annotations?.["sprintfoundry.io/claim-plural"] ||
+    claim.metadata.annotations?.["sprintfoundry.io/claim-plural"] ||
     DEFAULT_AGENT_SANDBOX_CLAIM_PLURAL;
   await customObjectsApi.createNamespacedCustomObject({
-    group,
-    version,
+    group: claimGroup,
+    version: claimVersion,
     namespace,
     plural,
-    body: manifest,
+    body: claim,
   });
 }
 
@@ -1066,7 +1235,7 @@ class DispatchController implements DispatchControllerRuntime {
   private readonly idGenerator: () => string;
   private readonly executeLocalRun: (task: DispatchQueueItem) => Promise<void>;
   private readonly createK8sJob: (manifest: K8sJobManifest, task: DispatchQueueItem, namespace: string) => Promise<void>;
-  private readonly createSandboxClaim: (manifest: SandboxClaimManifest, task: DispatchQueueItem, namespace: string) => Promise<void>;
+  private readonly createSandboxHost: (resources: SandboxHostResources, task: DispatchQueueItem, namespace: string) => Promise<void>;
   private readonly validatePlatformConfig: (configDir: string) => Promise<void>;
   private readonly readToken: string;
   private readonly writeToken: string;
@@ -1077,6 +1246,7 @@ class DispatchController implements DispatchControllerRuntime {
     apiGroup: DEFAULT_AGENT_SANDBOX_API_GROUP,
     apiVersion: DEFAULT_AGENT_SANDBOX_API_VERSION,
     claimPlural: DEFAULT_AGENT_SANDBOX_CLAIM_PLURAL,
+    templatePlural: DEFAULT_AGENT_SANDBOX_TEMPLATE_PLURAL,
   };
 
   private projectCache: DispatchProjectCache = { loadedAt: 0, projects: [] };
@@ -1109,7 +1279,7 @@ class DispatchController implements DispatchControllerRuntime {
       ((task) => defaultLocalRunExecutor(task, this.configDir, this.logger));
 
     this.createK8sJob = options.createK8sJob ?? defaultCreateK8sJob;
-    this.createSandboxClaim = options.createSandboxClaim ?? defaultCreateSandboxClaim;
+    this.createSandboxHost = options.createSandboxHost ?? defaultCreateSandboxHost;
     this.validatePlatformConfig = options.validatePlatformConfig ?? validateDispatchPlatformConfig;
   }
 
@@ -1328,30 +1498,37 @@ class DispatchController implements DispatchControllerRuntime {
       const secretName = asString(process.env.SPRINTFOUNDRY_K8S_PROJECT_SECRET_NAME) || `sprintfoundry-project-${task.project_id}-secrets`;
       const configMapName = asString(process.env.SPRINTFOUNDRY_K8S_PROJECT_CONFIGMAP_NAME) || `sprintfoundry-project-${task.project_id}-config`;
       const eventSinkUrl = asString(process.env[EVENT_SINK_URL_ENV]) || asString(project?.eventSinkUrl);
-      if (this.agentSandboxWholeRunConfig.enabled) {
-        const manifest = buildSandboxClaimManifest(task, {
-          namespace,
-          image: this.runnerImage,
-          templateName: this.agentSandboxWholeRunConfig.templateName,
-          apiGroup: this.agentSandboxWholeRunConfig.apiGroup,
-          apiVersion: this.agentSandboxWholeRunConfig.apiVersion,
-          claimPlural: this.agentSandboxWholeRunConfig.claimPlural,
-          projectSecretName: secretName,
-          projectConfigMapName: configMapName,
-          eventSinkUrl: eventSinkUrl || undefined,
-        });
-        await this.createSandboxClaim(manifest, task, namespace);
-        return;
+      if (!this.agentSandboxWholeRunConfig.enabled) {
+        throw new Error(
+          "Kubernetes dispatch requires Agent Sandbox whole-run hosting. " +
+          "Enable k8s.agent_sandbox.whole_run_hosting_enabled; legacy Job hosting has been removed."
+        );
       }
-      const manifest = buildK8sJobManifest(task, {
+
+      const workspacePvc = buildK8sWorkspacePvcManifest(task, {
+        namespace,
+        workspaceSizeLimit: process.env.SPRINTFOUNDRY_K8S_WORKSPACE_SIZE,
+        workspaceStorageClassName: process.env.SPRINTFOUNDRY_K8S_WORKSPACE_STORAGE_CLASS,
+      });
+      const template = buildSandboxTemplateManifest(task, {
         namespace,
         image: this.runnerImage,
+        templateName: this.agentSandboxWholeRunConfig.templateName,
+        apiGroup: this.agentSandboxWholeRunConfig.apiGroup,
+        apiVersion: this.agentSandboxWholeRunConfig.apiVersion,
         projectSecretName: secretName,
         projectConfigMapName: configMapName,
         serviceAccountName: asString(process.env.SPRINTFOUNDRY_K8S_SERVICE_ACCOUNT) || undefined,
         eventSinkUrl: eventSinkUrl || undefined,
       });
-      await this.createK8sJob(manifest, task, namespace);
+      const claim = buildSandboxClaimManifest(task, {
+        namespace,
+        templateName: this.agentSandboxWholeRunConfig.templateName,
+        apiGroup: this.agentSandboxWholeRunConfig.apiGroup,
+        apiVersion: this.agentSandboxWholeRunConfig.apiVersion,
+        claimPlural: this.agentSandboxWholeRunConfig.claimPlural,
+      });
+      await this.createSandboxHost({ workspacePvc, template, claim }, task, namespace);
       return;
     }
 
