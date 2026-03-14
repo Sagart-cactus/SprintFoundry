@@ -1076,19 +1076,23 @@ function resolveCanonicalRunId(runId, events = [], session = null) {
   );
 }
 
-function deriveWholeRunNamespace(projectId, runId) {
+function deriveWholeRunNamespaces(projectId, runId) {
   const normalizedProjectId = typeof projectId === "string" ? projectId.trim() : "";
   const normalizedRunId = typeof runId === "string" ? runId.trim() : "";
 
   if (normalizedRunId.startsWith("sf-whole-run-")) {
-    return "sf-whole-run-e2e";
+    return ["sf-whole-run-e2e"];
   }
 
+  const candidates = [];
+  if (normalizedProjectId) {
+    candidates.push(normalizedProjectId);
+  }
   if (normalizedProjectId.endsWith("-worktree")) {
-    return normalizedProjectId.slice(0, -"-worktree".length);
+    candidates.push(normalizedProjectId.slice(0, -"-worktree".length));
   }
 
-  return normalizedProjectId || null;
+  return Array.from(new Set(candidates.filter(Boolean)));
 }
 
 function getHandoffK8sApiBaseUrl() {
@@ -1183,8 +1187,8 @@ async function hasRunWorkspacePvc(namespace, runId) {
 }
 
 async function buildHandoffMetadata(projectId, runId) {
-  const namespace = deriveWholeRunNamespace(projectId, runId);
-  if (!namespace || typeof runId !== "string" || !runId.trim()) {
+  const namespaces = deriveWholeRunNamespaces(projectId, runId);
+  if (namespaces.length === 0 || typeof runId !== "string" || !runId.trim()) {
     return {
       handoff_eligible: false,
       handoff_namespace: null,
@@ -1192,19 +1196,21 @@ async function buildHandoffMetadata(projectId, runId) {
     };
   }
 
-  const pvcExists = await hasRunWorkspacePvc(namespace, runId.trim());
-  if (!pvcExists) {
+  for (const namespace of namespaces) {
+    const pvcExists = await hasRunWorkspacePvc(namespace, runId.trim());
+    if (!pvcExists) continue;
+
     return {
-      handoff_eligible: false,
-      handoff_namespace: null,
-      handoff_command: null,
+      handoff_eligible: true,
+      handoff_namespace: namespace,
+      handoff_command: `./scripts/handoff-kind-run-to-local.sh --namespace ${namespace} --run-id ${runId.trim()}`,
     };
   }
 
   return {
-    handoff_eligible: true,
-    handoff_namespace: namespace,
-    handoff_command: `./scripts/handoff-kind-run-to-local.sh --namespace ${namespace} --run-id ${runId.trim()}`,
+    handoff_eligible: false,
+    handoff_namespace: null,
+    handoff_command: null,
   };
 }
 
@@ -1436,7 +1442,7 @@ async function readGitHubPullRequestPatch(prUrl, filePath) {
   return null;
 }
 
-async function loadRunSummaryFromDbRecord(runRecord) {
+async function loadRunSummaryFromDbRecord(runRecord, options = {}) {
   const events = await readEventsFromDb(runRecord.run_id);
   const planEvent = events.find((e) => e.event_type === "task.plan_generated");
   const plan = planEvent?.data?.plan ?? null;
@@ -1450,7 +1456,9 @@ async function loadRunSummaryFromDbRecord(runRecord) {
   if (!fallbackRepoUrl && typeof runRecord.workspace_path === "string" && runRecord.workspace_path) {
     fallbackRepoUrl = await getWorkspaceRepoUrl(runRecord.workspace_path);
   }
-  const handoffMeta = await buildHandoffMetadata(runRecord.project_id, runRecord.run_id);
+  const handoffMeta = options.includeHandoff
+    ? await buildHandoffMetadata(runRecord.project_id, runRecord.run_id)
+    : null;
 
   return {
     project_id: runRecord.project_id,
@@ -1465,7 +1473,7 @@ async function loadRunSummaryFromDbRecord(runRecord) {
       ? Date.parse(last.timestamp)
       : (runRecord.updated_at ? Date.parse(String(runRecord.updated_at)) : null),
     workspace_path: runRecord.workspace_path ?? "",
-    ...handoffMeta,
+    ...(handoffMeta ?? {}),
     ...sourceMeta,
     ticket_repo_url: fallbackRepoUrl,
   };
@@ -1508,7 +1516,7 @@ async function loadRunFromDb(projectId, runId) {
   if (!runRecord) {
     throw new Error(`Run not found: ${projectId}/${runId}`);
   }
-  const summary = await loadRunSummaryFromDbRecord(runRecord);
+  const summary = await loadRunSummaryFromDbRecord(runRecord, { includeHandoff: true });
   const events = await readEventsFromDb(runRecord.run_id);
   const planEvent = events.find((e) => e.event_type === "task.plan_generated");
   const db = await getDatabasePool();
@@ -1956,7 +1964,7 @@ function extractRunSourceMetadata(events, session = null, projectRepoUrl = null)
   };
 }
 
-async function loadRunSummary(projectId, runId, runPath, session = null) {
+async function loadRunSummary(projectId, runId, runPath, session = null, options = {}) {
   const events = await readEvents(runPath);
   const canonicalRunId = resolveCanonicalRunId(runId, events, session);
   const planEvent = events.find((e) => e.event_type === "task.plan_generated");
@@ -1968,7 +1976,7 @@ async function loadRunSummary(projectId, runId, runPath, session = null) {
   const projectRepoUrl = await getProjectRepoUrl(projectId);
   const sourceMeta = extractRunSourceMetadata(events, session, projectRepoUrl);
   const fallbackRepoUrl = sourceMeta.ticket_repo_url ?? await getWorkspaceRepoUrl(runPath);
-  const handoffMeta = await buildHandoffMetadata(projectId, canonicalRunId);
+  const handoffMeta = options.includeHandoff ? await buildHandoffMetadata(projectId, canonicalRunId) : null;
   return {
     project_id: projectId,
     run_id: canonicalRunId,
@@ -1982,7 +1990,7 @@ async function loadRunSummary(projectId, runId, runPath, session = null) {
       ? Date.parse(last.timestamp)
       : (session?.updated_at ? Date.parse(session.updated_at) : null),
     workspace_path: runPath,
-    ...handoffMeta,
+    ...(handoffMeta ?? {}),
     ...resumeMeta,
     ...sourceMeta,
     ticket_repo_url: fallbackRepoUrl,
@@ -1991,7 +1999,7 @@ async function loadRunSummary(projectId, runId, runPath, session = null) {
 
 async function loadRun(projectId, runId) {
   const runPath = await resolveRunPath(projectId, runId);
-  const summary = await loadRunSummary(projectId, runId, runPath);
+  const summary = await loadRunSummary(projectId, runId, runPath, null, { includeHandoff: true });
   const events = await readEvents(runPath);
   const planEvent = events.find((e) => e.event_type === "task.plan_generated");
   const step_models = await loadStepModels(runPath);
