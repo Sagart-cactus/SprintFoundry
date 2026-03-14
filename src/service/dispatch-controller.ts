@@ -7,6 +7,7 @@ import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
 import { parse as parseYaml } from "yaml";
 import type { TaskSource } from "../shared/types.js";
+import { validateAgentSandboxWholeRunHosting } from "./agent-sandbox-platform.js";
 import {
   extractGitHubTrigger,
   extractLinearTrigger,
@@ -269,6 +270,13 @@ async function loadYamlFile(filePath: string): Promise<Record<string, unknown>> 
   const interpolated = interpolateEnvVars(raw);
   const parsed = parseYaml(interpolated);
   return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {};
+}
+
+async function validateDispatchPlatformConfig(configDir: string): Promise<void> {
+  const platformPath = path.join(configDir, "platform.yaml");
+  const rawPlatform = await loadYamlFile(platformPath).catch(() => null);
+  if (!rawPlatform) return;
+  await validateAgentSandboxWholeRunHosting(rawPlatform as any);
 }
 
 function queueKey(projectId: string): string {
@@ -896,6 +904,7 @@ class DispatchController implements DispatchControllerRuntime {
   }
 
   async start(): Promise<void> {
+    await validateDispatchPlatformConfig(this.configDir);
     if (this.redis.connect) {
       await this.redis.connect();
     }

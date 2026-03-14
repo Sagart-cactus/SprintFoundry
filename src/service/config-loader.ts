@@ -2,6 +2,7 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import { parse as parseYaml } from "yaml";
 import type { AgentDefinition, PlatformConfig, ProjectConfig } from "../shared/types.js";
+import { normalizeAgentSandboxPlatformConfig } from "./agent-sandbox-platform.js";
 
 export async function loadYaml<T>(filePath: string): Promise<T> {
   const raw = await fs.readFile(filePath, "utf-8");
@@ -58,6 +59,7 @@ export async function loadConfig(configDir: string, projectName?: string) {
   const resolved = project!;
   // Ensure optional fields are never undefined
   platform.k8s = platform.k8s ?? {};
+  normalizeAgentSandboxPlatformConfig(platform);
   resolved.rules = resolved.rules ?? [];
   resolved.agents = resolved.agents ?? [];
   resolved.integrations = resolved.integrations ?? ({} as typeof resolved.integrations);

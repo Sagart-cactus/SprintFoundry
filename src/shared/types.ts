@@ -259,6 +259,7 @@ export interface PlatformConfig {
     quota_scope?: string;
     agent_sandbox?: {
       enabled?: boolean;
+      whole_run_hosting_enabled?: boolean;
       template_name?: string;
       warm_pool_name?: string;
       api_group?: string;
