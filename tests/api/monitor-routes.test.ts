@@ -552,6 +552,7 @@ beforeAll(async () => {
         ticket_source: "prompt",
         ticket_title: "Session-backed run",
         status: "executing",
+        hosting_mode: "local",
         current_step: 1,
         total_steps: 3,
         plan_classification: "new_feature",
@@ -564,6 +565,103 @@ beforeAll(async () => {
         updated_at: "2026-02-28T00:01:00Z",
         completed_at: null,
         error: null,
+      },
+      null,
+      2
+    ),
+    "utf-8"
+  );
+
+  const cancelledWorkspace = path.join(tmpWorkspacesRoot, "run-session-cancelled");
+  mkdirSync(cancelledWorkspace, { recursive: true });
+  writeFileSync(
+    path.join(cancelledWorkspace, ".events.jsonl"),
+    [
+      JSON.stringify({ event_type: "task.created", timestamp: "2026-02-28T01:00:00Z", data: {} }),
+      JSON.stringify({ event_type: "step.started", timestamp: "2026-02-28T01:01:00Z", data: { step: 1 } }),
+      JSON.stringify({ event_type: "task.cancelled", timestamp: "2026-02-28T01:01:30Z", data: { signal: "SIGTERM" } }),
+    ].join("\n") + "\n",
+    "utf-8"
+  );
+  writeFileSync(
+    path.join(tmpSessionsRoot, "run-session-cancelled.json"),
+    JSON.stringify(
+      {
+        run_id: "run-session-cancelled",
+        project_id: "session-only-project",
+        ticket_id: "PROMPT-2",
+        ticket_source: "prompt",
+        ticket_title: "Cancelled session-backed run",
+        status: "executing",
+        hosting_mode: "local",
+        current_step: 1,
+        total_steps: 3,
+        plan_classification: "bug_fix",
+        workspace_path: cancelledWorkspace,
+        branch: null,
+        pr_url: null,
+        total_tokens: 0,
+        total_cost_usd: 0,
+        created_at: "2026-02-28T01:00:00Z",
+        updated_at: "2026-02-28T01:01:00Z",
+        completed_at: null,
+        error: null,
+      },
+      null,
+      2
+    ),
+    "utf-8"
+  );
+
+  const cleanupRecoveredWorkspace = path.join(tmpWorkspacesRoot, "run-session-cleanup-recovered");
+  mkdirSync(cleanupRecoveredWorkspace, { recursive: true });
+  writeFileSync(
+    path.join(cleanupRecoveredWorkspace, ".events.jsonl"),
+    [
+      JSON.stringify({ event_type: "workspace.snapshot.completed", timestamp: "2026-02-28T02:00:00Z", data: { bucket: "snapshots" } }),
+      JSON.stringify({
+        event_type: "workspace.cleanup.failed",
+        timestamp: "2026-02-28T02:01:00Z",
+        data: { error: "connect ECONNREFUSED 127.0.0.1:9000" },
+      }),
+    ].join("\n") + "\n",
+    "utf-8"
+  );
+  writeFileSync(
+    path.join(tmpSessionsRoot, "run-session-cleanup-recovered.json"),
+    JSON.stringify(
+      {
+        run_id: "run-session-cleanup-recovered",
+        project_id: "session-only-project",
+        ticket_id: "PROMPT-3",
+        ticket_source: "prompt",
+        ticket_title: "Recovered cleanup session-backed run",
+        status: "completed",
+        hosting_mode: "k8s-agent-sandbox",
+        current_step: 1,
+        total_steps: 1,
+        plan_classification: "bug_fix",
+        workspace_path: cleanupRecoveredWorkspace,
+        branch: null,
+        pr_url: null,
+        total_tokens: 0,
+        total_cost_usd: 0,
+        created_at: "2026-02-28T02:00:00Z",
+        updated_at: "2026-02-28T02:02:00Z",
+        completed_at: "2026-02-28T02:02:00Z",
+        error: null,
+        terminal_workflow_state: "cleanup_completed",
+        durable_snapshot: {
+          status: "completed",
+          backend: "s3",
+          bucket: "snapshots",
+          terminal_status: "completed",
+          manifest_key: "manifest.json",
+          archive_key: "workspace.tar.gz",
+          session_key: "session.json",
+          exported_at: "2026-02-28T02:00:00Z",
+          error: null,
+        },
       },
       null,
       2
@@ -604,6 +702,7 @@ beforeAll(async () => {
         ticket_source: "prompt",
         ticket_title: "Aliased run",
         status: "planning",
+        hosting_mode: "local",
         current_step: 0,
         total_steps: 0,
         plan_classification: "bug_fix",
@@ -742,6 +841,7 @@ describe("GET /api/runs", () => {
     const run = data.runs.find((r: any) => r.run_id === "run-session-only");
     expect(run).toBeDefined();
     expect(run.project_id).toBe("session-only-project");
+    expect(run.hosting_mode).toBe("local");
   });
 
   it("includes resume metadata in run summaries", async () => {
@@ -777,6 +877,24 @@ describe("GET /api/run", () => {
     const data = JSON.parse(body);
     expect(data.run_id).toBe("run-session-only");
     expect(data.project_id).toBe("session-only-project");
+    expect(data.hosting_mode).toBe("local");
+  });
+
+  it("infers cancelled status from task.cancelled events for session-backed runs", async () => {
+    const { status, body } = await get(`${BASE}/api/run?project=session-only-project&run=run-session-cancelled`);
+    expect(status).toBe(200);
+    const data = JSON.parse(body);
+    expect(data.status).toBe("cancelled");
+  });
+
+  it("prefers persisted cleanup_completed state over older cleanup failure events", async () => {
+    const { status, body } = await get(
+      `${BASE}/api/run?project=session-only-project&run=run-session-cleanup-recovered`
+    );
+    expect(status).toBe(200);
+    const data = JSON.parse(body);
+    expect(data.terminal_workflow_state).toBe("cleanup_completed");
+    expect(data.durable_snapshot?.status).toBe("completed");
   });
 
   it("includes runtime skill summary on step objects when runtime metadata is present", async () => {

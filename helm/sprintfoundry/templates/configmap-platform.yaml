@@ -129,6 +129,14 @@ data:
       default_secret_profile: default
       secret_profiles:
         default: []
+      agent_sandbox:
+        enabled: true
+        whole_run_hosting_enabled: true
+        template_name: default
+        warm_pool_name: ""
+        api_group: extensions.agents.x-k8s.io
+        api_version: v1alpha1
+        claim_plural: sandboxclaims
 
     lifecycle:
       enabled: false

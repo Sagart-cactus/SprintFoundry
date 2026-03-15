@@ -42,6 +42,7 @@ function makeRun(overrides?: Partial<TaskRun>): TaskRun {
     plan: null,
     validated_plan: null,
     status: overrides?.status ?? "pending",
+    hosting_mode: overrides?.hosting_mode,
     steps: overrides?.steps ?? [],
     total_tokens_used: overrides?.total_tokens_used ?? 0,
     total_cost_usd: overrides?.total_cost_usd ?? 0,
@@ -68,7 +69,7 @@ describe("SessionManager", () => {
 
   it("persists and retrieves a session", async () => {
     const mgr = new SessionManager(testDir);
-    const run = makeRun({ run_id: "run-abc" });
+    const run = makeRun({ run_id: "run-abc", hosting_mode: "k8s-job-whole-run" });
 
     await mgr.persist(run, { workspace_path: "/tmp/ws", branch: "feat/test" });
 
@@ -80,6 +81,7 @@ describe("SessionManager", () => {
     expect(session!.ticket_source).toBe("github");
     expect(session!.ticket_title).toBe("Test ticket");
     expect(session!.status).toBe("pending");
+    expect(session!.hosting_mode).toBe("k8s-job-whole-run");
     expect(session!.workspace_path).toBe("/tmp/ws");
     expect(session!.branch).toBe("feat/test");
     expect(session!.total_tokens).toBe(0);
@@ -172,6 +174,22 @@ describe("SessionManager", () => {
     expect(session!.total_tokens).toBe(50000);
     expect(session!.total_cost_usd).toBe(1.25);
     expect(session!.workspace_path).toBe("/tmp/ws2");
+  });
+
+  it("preserves workspace_path and branch when a later persist omits them", async () => {
+    const mgr = new SessionManager(testDir);
+    const run = makeRun({ run_id: "run-preserve-workspace", status: "executing" });
+
+    await mgr.persist(run, { workspace_path: "/tmp/ws-preserved", branch: "feat/preserved" });
+
+    run.status = "completed";
+    run.completed_at = new Date("2026-02-27T10:05:00Z");
+    await mgr.persist(run);
+
+    const session = await mgr.get("run-preserve-workspace");
+    expect(session?.workspace_path).toBe("/tmp/ws-preserved");
+    expect(session?.branch).toBe("feat/preserved");
+    expect(session?.terminal_workflow_state).toBe("terminal_pending_snapshot");
   });
 
   it("marks terminal runs as pending snapshot by default", async () => {
@@ -310,7 +328,7 @@ describe("SessionManager", () => {
     expect(result).toBe(false);
   });
 
-  it("updateStatus changes only the status field", async () => {
+  it("updateStatus records terminal metadata for cancelled runs", async () => {
     const mgr = new SessionManager(testDir);
     const run = makeRun({ run_id: "run-cancel", status: "executing" });
 
@@ -321,6 +339,8 @@ describe("SessionManager", () => {
     const session = await mgr.get("run-cancel");
     expect(session!.status).toBe("cancelled");
     expect(session!.ticket_id).toBe("TEST-1"); // unchanged
+    expect(session!.completed_at).toMatch(/^20/);
+    expect(session!.terminal_workflow_state).toBe("terminal_pending_snapshot");
   });
 
   it("updateStatus succeeds even when sink upsert fails", async () => {

@@ -32,6 +32,9 @@ import { RunSnapshotExportService } from "./service/run-snapshot-export-service.
 import { RunSnapshotStore } from "./service/run-snapshot-store.js";
 import { WorkspaceManager } from "./service/workspace-manager.js";
 import { K8sRunSnapshotController } from "./service/k8s-run-snapshot-controller.js";
+import { validateAgentSandboxWholeRunHosting } from "./service/agent-sandbox-platform.js";
+import { EventSinkClient } from "./service/event-sink-client.js";
+import { EventStore } from "./service/event-store.js";
 
 const RUN_SANDBOX_MODE_ENV = "SPRINTFOUNDRY_RUN_SANDBOX_MODE";
 const WHOLE_RUN_SANDBOX_MODE = "k8s-whole-run";
@@ -40,6 +43,19 @@ const AUTO_RESUME_ENV = "SPRINTFOUNDRY_AUTO_RESUME_EXISTING_RUN";
 function isTruthy(value: string | undefined): boolean {
   const normalized = String(value ?? "").trim().toLowerCase();
   return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+function resolveEventSinkClient(
+  project: ProjectConfig,
+  env: NodeJS.ProcessEnv = process.env
+): EventSinkClient | undefined {
+  const sinkUrl =
+    env.SPRINTFOUNDRY_EVENT_SINK_URL?.trim() ||
+    project.integrations?.event_sink?.url?.trim() ||
+    "";
+  if (!sinkUrl) return undefined;
+  const internalApiToken = env.SPRINTFOUNDRY_INTERNAL_API_TOKEN?.trim() || undefined;
+  return new EventSinkClient(sinkUrl, globalThis.fetch, internalApiToken);
 }
 
 async function maybeRunRuntimeCliPassthrough(): Promise<void> {
@@ -169,6 +185,8 @@ program
     }
 
     const { platform, project } = await loadConfig(opts.config, opts.project);
+    await validateAgentSandboxWholeRunHosting(platform);
+    const eventSinkClient = resolveEventSinkClient(project);
     const registry = buildPluginRegistry(platform, project);
     const executionBackendName = resolveExecutionBackendName(platform, project);
     const executionBackend = createExecutionBackend(platform, project);
@@ -177,7 +195,7 @@ program
     const directAgentWasDefaulted = !opts.agent && Boolean(directAgent);
 
     const ticketId = opts.ticket ?? `prompt-${Date.now()}`;
-    const sessionManager = new SessionManager();
+    const sessionManager = new SessionManager(undefined, eventSinkClient);
     let currentRunId = process.env.SPRINTFOUNDRY_RUN_ID?.trim() || "";
     let shuttingDown = false;
     const markCancelledAndExit = (signal: NodeJS.Signals) => {
@@ -187,9 +205,26 @@ program
       void (async () => {
         if (currentRunId) {
           try {
+            const session = await sessionManager.get(currentRunId);
             const updated = await sessionManager.updateStatus(currentRunId, "cancelled");
+            if (updated && session?.workspace_path) {
+              const events = new EventStore(platform.events_dir, eventSinkClient);
+              await events.initialize(session.workspace_path);
+              await events.store({
+                event_id: `task-cancelled-${currentRunId}-${Date.now()}`,
+                run_id: currentRunId,
+                event_type: "task.cancelled",
+                timestamp: new Date(),
+                data: {
+                  signal,
+                  hosting_mode: session.hosting_mode ?? process.env.SPRINTFOUNDRY_HOSTING_MODE ?? null,
+                  execution_backend: process.env.SPRINTFOUNDRY_EXECUTION_BACKEND ?? null,
+                },
+              });
+              await events.close();
+            }
             if (updated) {
-              console.error(`[run] Received ${signal}; marked run ${currentRunId} as cancelled.`);
+              console.error(`[run] Received ${signal}; marked run ${currentRunId} as cancelled and emitted task.cancelled.`);
             } else {
               console.error(`[run] Received ${signal}; run ${currentRunId} session was not available for cancellation.`);
             }
@@ -304,6 +339,7 @@ program
   .action(async (opts) => {
     try {
       const { platform, project } = await loadConfig(opts.config, opts.project);
+      await validateAgentSandboxWholeRunHosting(platform);
       const executionBackendName = resolveExecutionBackendName(platform, project);
       console.log("Configuration valid.");
       console.log(`  Project: ${project.name} (${project.project_id})`);
@@ -373,6 +409,7 @@ program
     }
 
     const { platform, project } = await loadConfig(opts.config, opts.project);
+    await validateAgentSandboxWholeRunHosting(platform);
     const registry = buildPluginRegistry(platform, project);
     const executionBackend = createExecutionBackend(platform, project);
     const service = new OrchestrationService(platform, project, registry, executionBackend);
@@ -437,7 +474,10 @@ program
       destination
     );
 
-    const sessionManager = new SessionManager();
+    const eventSinkUrl = project.integrations?.event_sink?.url?.trim() || process.env.SPRINTFOUNDRY_EVENT_SINK_URL?.trim() || "";
+    const internalApiToken = process.env.SPRINTFOUNDRY_INTERNAL_API_TOKEN?.trim() || undefined;
+    const sinkClient = eventSinkUrl ? new EventSinkClient(eventSinkUrl, globalThis.fetch, internalApiToken) : undefined;
+    const sessionManager = new SessionManager(undefined, sinkClient);
     const restoredAt = new Date().toISOString();
     const restoredSession = {
       ...result.session,
@@ -445,11 +485,33 @@ program
       updated_at: restoredAt,
     };
     await sessionManager.upsertMetadata(restoredSession);
+    const events = new EventStore(undefined, sinkClient);
+    await events.initialize(destination);
+    await events.store({
+      event_id: `workspace-snapshot-restored-${id}-${Date.now()}`,
+      run_id: String(id),
+      event_type: "workspace.snapshot.restored",
+      timestamp: new Date(restoredAt),
+      data: {
+        manifest_archive_key: result.manifest.archive_key,
+        session_key: result.manifest.session_key,
+        archive_key: result.manifest.archive_key,
+        runtime_home_path: result.runtimeHomePath,
+        compatibility_warnings: result.compatibilityWarnings,
+      },
+    });
+    await events.close();
 
     console.log(`Snapshot restore complete.`);
     console.log(`  Run: ${id}`);
     console.log(`  Workspace: ${destination}`);
+    if (result.runtimeHomePath) {
+      console.log(`  Runtime home: ${result.runtimeHomePath}`);
+    }
     console.log(`  Status: ${restoredSession.status}`);
+    for (const warning of result.compatibilityWarnings) {
+      console.log(`  Warning: ${warning}`);
+    }
   });
 
 program
@@ -890,6 +952,9 @@ program
     console.log(`\n  Session: ${session.run_id}`);
     console.log(`  ${"─".repeat(50)}`);
     console.log(`  Status:         ${session.status}`);
+    if (session.hosting_mode) {
+      console.log(`  Hosting:        ${session.hosting_mode}`);
+    }
     console.log(`  Project:        ${session.project_id}`);
     console.log(`  Ticket:         ${session.ticket_id} (${session.ticket_source})`);
     console.log(`  Title:          ${session.ticket_title}`);

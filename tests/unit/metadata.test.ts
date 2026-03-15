@@ -25,6 +25,7 @@ function extractMetadata(
     ticket_source: run.ticket?.source ?? "prompt",
     ticket_title: run.ticket?.title ?? "Unknown",
     status: run.status,
+    hosting_mode: run.hosting_mode ?? "local",
     current_step: currentStep,
     total_steps: totalSteps,
     plan_classification: run.plan?.classification ?? null,
@@ -50,6 +51,7 @@ describe("Metadata — serialize from TaskRun", () => {
     expect(meta.ticket_id).toBe("TEST-123");
     expect(meta.ticket_source).toBe("github");
     expect(meta.status).toBe("executing");
+    expect(meta.hosting_mode).toBe("local");
     expect(meta.workspace_path).toBe("/tmp/ws");
     expect(meta.branch).toBe("feat/test");
     expect(meta.pr_url).toBeNull();

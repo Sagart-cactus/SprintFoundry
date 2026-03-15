@@ -71,6 +71,7 @@ interface RunPayload {
   ticket_source: string;
   ticket_title: string;
   status: string;
+  hosting_mode: string | null;
   current_step: number;
   total_steps: number;
   plan_classification: string | null;
@@ -340,6 +341,7 @@ function parseRunPayload(body: unknown, limits: IngestionLimits): { value?: RunP
   const ticket_source = asString(body.ticket_source);
   const ticket_title = asString(body.ticket_title);
   const status = asString(body.status);
+  const hosting_mode = asNullableString(body.hosting_mode);
   const current_step = asInteger(body.current_step, 0);
   const total_steps = asInteger(body.total_steps, 0);
   const plan_classification = asNullableString(body.plan_classification);
@@ -377,6 +379,7 @@ function parseRunPayload(body: unknown, limits: IngestionLimits): { value?: RunP
   if (ticket_source) enforceMaxLength("ticket_source", ticket_source, limits.genericFieldMaxChars, errors);
   if (ticket_title) enforceMaxLength("ticket_title", ticket_title, limits.genericFieldMaxChars, errors);
   if (status) enforceMaxLength("status", status, limits.genericFieldMaxChars, errors);
+  if (hosting_mode) enforceMaxLength("hosting_mode", hosting_mode, limits.genericFieldMaxChars, errors);
   if (plan_classification) enforceMaxLength("plan_classification", plan_classification, limits.genericFieldMaxChars, errors);
   if (workspace_path) enforceMaxLength("workspace_path", workspace_path, limits.genericFieldMaxChars, errors);
   if (branch) enforceMaxLength("branch", branch, limits.genericFieldMaxChars, errors);
@@ -410,6 +413,7 @@ function parseRunPayload(body: unknown, limits: IngestionLimits): { value?: RunP
       ticket_source,
       ticket_title,
       status,
+      hosting_mode,
       current_step,
       total_steps,
       plan_classification,
@@ -790,6 +794,7 @@ export function registerEventIngestionRoutes(
             ticket_source,
             ticket_title,
             status,
+            hosting_mode,
             current_step,
             total_steps,
             plan_classification,
@@ -804,8 +809,8 @@ export function registerEventIngestionRoutes(
             error
           )
           VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9,
-            $10, $11, $12, $13, $14, $15, $16, $17, $18
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+            $11, $12, $13, $14, $15, $16, $17, $18, $19
           )
           ON CONFLICT (run_id)
           DO UPDATE SET
@@ -814,6 +819,7 @@ export function registerEventIngestionRoutes(
             ticket_source = EXCLUDED.ticket_source,
             ticket_title = EXCLUDED.ticket_title,
             status = EXCLUDED.status,
+            hosting_mode = EXCLUDED.hosting_mode,
             current_step = EXCLUDED.current_step,
             total_steps = EXCLUDED.total_steps,
             plan_classification = EXCLUDED.plan_classification,
@@ -834,6 +840,7 @@ export function registerEventIngestionRoutes(
           payload.ticket_source,
           payload.ticket_title,
           payload.status,
+          payload.hosting_mode,
           payload.current_step,
           payload.total_steps,
           normalizedPlanClassification,

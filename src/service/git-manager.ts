@@ -135,10 +135,10 @@ export class GitManager {
     this.exec(["git", "push", "-u", "origin", "HEAD"], workspacePath);
 
     // Use GitHub CLI if available, otherwise return placeholder
+    const currentBranch = this.currentBranchName(workspacePath);
+    const owner = this.githubOwnerFromRepoUrl(this.repoConfig.url);
+    const headSpec = owner ? `${owner}:${currentBranch}` : currentBranch;
     try {
-      const currentBranch = this.currentBranchName(workspacePath);
-      const owner = this.githubOwnerFromRepoUrl(this.repoConfig.url);
-      const headSpec = owner ? `${owner}:${currentBranch}` : currentBranch;
       const result = this.exec(
         [
           "gh",
@@ -157,6 +157,10 @@ export class GitManager {
       );
       return result.trim();
     } catch {
+      const existingPrUrl = this.findExistingPullRequestUrl(workspacePath, headSpec, currentBranch);
+      if (existingPrUrl) {
+        return existingPrUrl;
+      }
       return `Branch pushed. Create PR manually for ${run.ticket.id}.`;
     }
   }
@@ -192,6 +196,33 @@ export class GitManager {
       throw new Error("Unable to resolve current git branch for PR creation");
     }
     return branch;
+  }
+
+  private findExistingPullRequestUrl(
+    workspacePath: string,
+    headSpec: string,
+    currentBranch: string
+  ): string | null {
+    const candidates = [
+      ["gh", "pr", "list", "--head", headSpec, "--json", "url", "--limit", "1"],
+      ["gh", "pr", "list", "--head", currentBranch, "--json", "url", "--limit", "1"],
+    ];
+
+    for (const command of candidates) {
+      try {
+        const raw = this.exec(command, workspacePath).trim();
+        if (!raw) continue;
+        const parsed = JSON.parse(raw) as Array<{ url?: unknown }>;
+        const url = Array.isArray(parsed)
+          ? String(parsed[0]?.url ?? "").trim()
+          : "";
+        if (url) return url;
+      } catch {
+        continue;
+      }
+    }
+
+    return null;
   }
 
   private githubOwnerFromRepoUrl(url: string): string | null {

@@ -178,7 +178,8 @@ export interface SkillDefinition {
 }
 
 export type CodexSkillDefinition = SkillDefinition;
-export type ExecutionBackendName = "local" | "docker" | "k8s-pod" | "agent-sandbox";
+export type ExecutionBackendName = "local" | "docker" | "agent-sandbox";
+export type HostingMode = "local" | "docker" | "k8s-job-whole-run" | "k8s-agent-sandbox";
 
 export type SkillSource =
   | {
@@ -258,6 +259,7 @@ export interface PlatformConfig {
     quota_scope?: string;
     agent_sandbox?: {
       enabled?: boolean;
+      whole_run_hosting_enabled?: boolean;
       template_name?: string;
       warm_pool_name?: string;
       api_group?: string;
@@ -457,6 +459,7 @@ export interface RunEnvironmentRecord {
   tenant_id?: string;
   sandbox_id: string;
   execution_backend: ExecutionBackendName | string;
+  hosting_mode: HostingMode | string;
   workspace_path: string;
   workspace_volume_ref?: string;
   network_profile?: string;
@@ -477,6 +480,7 @@ export interface TaskRun {
   status: RunStatus;
   sandbox_id?: string;
   execution_backend?: ExecutionBackendName | string;
+  hosting_mode?: HostingMode | string;
   workspace_volume_ref?: string;
   network_profile?: string;
   secret_profile?: string;
@@ -548,6 +552,7 @@ export type EventType =
   | "task.stack_detected"
   | "task.started"
   | "task.completed"
+  | "task.cancelled"
   | "task.failed"
   | "step.started"
   | "step.completed"
@@ -633,6 +638,7 @@ export interface RunSessionMetadata {
   ticket_source: TaskSource;
   ticket_title: string;
   status: RunStatus;
+  hosting_mode?: HostingMode | string;
   current_step: number;
   total_steps: number;
   plan_classification: string | null;

@@ -268,6 +268,7 @@ describe("OrchestrationService", () => {
       project_id: makeProjectConfig().project_id,
       sandbox_id: "sandbox-1",
       execution_backend: "test",
+      hosting_mode: "k8s-job-whole-run",
       workspace_path: workspacePath,
       checkpoint_generation: 0,
       metadata: {},
@@ -311,6 +312,7 @@ describe("OrchestrationService", () => {
     expect(run.status).toBe("completed");
     expect(run.sandbox_id).toBe("sandbox-1");
     expect(run.execution_backend).toBe("test");
+    expect(run.hosting_mode).toBe("k8s-job-whole-run");
 
     const runStatePath = path.join(workspacePath, ".sprintfoundry", "run-state.json");
     let persisted: any;
@@ -332,12 +334,14 @@ describe("OrchestrationService", () => {
     expect(sandboxCreated?.data).toMatchObject({
       sandbox_id: "sandbox-1",
       execution_backend: "test",
+      hosting_mode: "k8s-job-whole-run",
       checkpoint_generation: 0,
       workspace_path: workspacePath,
     });
     expect(sandboxDestroyed?.data).toMatchObject({
       sandbox_id: "sandbox-1",
       execution_backend: "test",
+      hosting_mode: "k8s-job-whole-run",
       reason: "completed",
     });
     expect(stepStarted?.data).toMatchObject({
@@ -357,6 +361,7 @@ describe("OrchestrationService", () => {
       project_id: makeProjectConfig().project_id,
       sandbox_id: "sandbox-existing",
       execution_backend: "test",
+      hosting_mode: "k8s-job-whole-run",
       workspace_path: workspacePath,
       checkpoint_generation: 0,
       metadata: {},
@@ -393,12 +398,14 @@ describe("OrchestrationService", () => {
     expect(run.run_environment?.metadata).toEqual({ resumed: true });
     expect(run.sandbox_id).toBe("sandbox-existing");
     expect(run.execution_backend).toBe("test");
+    expect(run.hosting_mode).toBe("k8s-job-whole-run");
 
     const storedEvents = ((service as any).events.store as any).mock.calls.map((c: any[]) => c[0]);
     const sandboxResumed = storedEvents.find((event: any) => event.event_type === "sandbox.resumed");
     expect(sandboxResumed?.data).toMatchObject({
       sandbox_id: "sandbox-existing",
       execution_backend: "test",
+      hosting_mode: "k8s-job-whole-run",
       checkpoint_generation: 1,
     });
   });
@@ -411,6 +418,7 @@ describe("OrchestrationService", () => {
       project_id: makeProjectConfig().project_id,
       sandbox_id: "sandbox-existing",
       execution_backend: "k8s-pod",
+      hosting_mode: "local",
       workspace_path: workspacePath,
       checkpoint_generation: 0,
       metadata: {

@@ -56,6 +56,7 @@ import { LifecycleManager, defaultLifecycleConfig } from "./lifecycle-manager.js
 import { NotificationRouter, defaultRoutingConfig } from "./notification-router.js";
 import { MetricsService } from "./metrics-service.js";
 import { trace, type Span } from "@opentelemetry/api";
+import { resolveHostingMode } from "./hosting-mode.js";
 import type {
   ExecutionBackend,
   RunEnvironmentHandle,
@@ -1919,6 +1920,7 @@ export class OrchestrationService {
       project_id: run.project_id,
       sandbox_id: `local-${run.run_id}`,
       execution_backend: "local",
+      hosting_mode: resolveHostingMode({ explicitHostingMode: run.hosting_mode, executionBackend: "local" }),
       workspace_path: workspacePath,
       checkpoint_generation: 0,
       metadata: {},
@@ -2029,6 +2031,7 @@ export class OrchestrationService {
   private applyRunEnvironmentMetadata(run: TaskRun, handle: RunEnvironmentHandle): void {
     run.sandbox_id = handle.sandbox_id;
     run.execution_backend = handle.execution_backend;
+    run.hosting_mode = handle.hosting_mode;
     run.workspace_volume_ref = handle.workspace_volume_ref;
     run.network_profile = handle.network_profile;
     run.secret_profile = handle.secret_profile;
@@ -2042,13 +2045,21 @@ export class OrchestrationService {
     extra?: Record<string, unknown>
   ): Record<string, unknown> {
     const handle = this.getRunEnvironment(run);
+    const metadata = handle?.metadata && typeof handle.metadata === "object"
+      ? handle.metadata as Record<string, unknown>
+      : {};
     return {
       sandbox_id: handle?.sandbox_id ?? run.sandbox_id,
       execution_backend: handle?.execution_backend ?? run.execution_backend,
+      hosting_mode: handle?.hosting_mode ?? run.hosting_mode,
       tenant_id: run.tenant_id,
       workspace_volume_ref: handle?.workspace_volume_ref ?? run.workspace_volume_ref,
       network_profile: handle?.network_profile ?? run.network_profile,
       isolation_level: handle?.isolation_level ?? run.isolation_level,
+      claim_name: typeof metadata.claim_name === "string" ? metadata.claim_name : undefined,
+      template_name: typeof metadata.template_name === "string" ? metadata.template_name : undefined,
+      bound_sandbox_name: typeof metadata.bound_sandbox_name === "string" ? metadata.bound_sandbox_name : undefined,
+      sandbox_namespace: typeof metadata.namespace === "string" ? metadata.namespace : undefined,
       ...(extra ?? {}),
     };
   }
@@ -2203,6 +2214,7 @@ export class OrchestrationService {
       steps: stepExecutions,
       sandbox_id: recoveredRunEnvironment?.sandbox_id,
       execution_backend: recoveredRunEnvironment?.execution_backend,
+      hosting_mode: recoveredRunEnvironment?.hosting_mode ?? session.hosting_mode,
       workspace_volume_ref: recoveredRunEnvironment?.workspace_volume_ref,
       checkpoint_generation: recoveredRunEnvironment?.checkpoint_generation,
       run_environment: recoveredRunEnvironment,
@@ -2245,6 +2257,10 @@ export class OrchestrationService {
       tenant_id: typeof event.data.tenant_id === "string" ? event.data.tenant_id : previous?.tenant_id,
       sandbox_id: String(event.data.sandbox_id ?? previous?.sandbox_id ?? ""),
       execution_backend: String(event.data.execution_backend ?? previous?.execution_backend ?? "local"),
+      hosting_mode: resolveHostingMode({
+        explicitHostingMode: event.data.hosting_mode ?? previous?.hosting_mode ?? session.hosting_mode,
+        executionBackend: String(event.data.execution_backend ?? previous?.execution_backend ?? "local"),
+      }),
       workspace_path: session.workspace_path ?? previous?.workspace_path ?? "",
       workspace_volume_ref:
         typeof event.data.workspace_volume_ref === "string"

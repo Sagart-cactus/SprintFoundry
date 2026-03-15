@@ -43,10 +43,14 @@ wait_for_health() {
 }
 
 migrate() {
-  echo "[infra] applying migrations/001_create_event_tables.sql"
-  docker compose -f "${COMPOSE_FILE}" exec -T postgres \
-    psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
-    < "${ROOT_DIR}/migrations/001_create_event_tables.sql"
+  local migration
+  for migration in "${ROOT_DIR}"/migrations/*.sql; do
+    [ -f "${migration}" ] || continue
+    echo "[infra] applying $(basename "${migration}")"
+    docker compose -f "${COMPOSE_FILE}" exec -T postgres \
+      psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
+      < "${migration}"
+  done
   echo "[infra] migrations complete"
 }
 
