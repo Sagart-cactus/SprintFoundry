@@ -820,6 +820,7 @@ describe("dispatch-controller", () => {
       redisClient: redis,
       autoStartConsumer: false,
       k8sMode: true,
+      validatePlatformConfig: async () => {},
       createSandboxHost: async (resources, _task, namespace) => {
         createdHosts.push(resources);
         createdNamespaces.push(namespace);
