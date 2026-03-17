@@ -66,6 +66,58 @@ function toPositiveInt(value, fallback) {
   return Math.floor(n);
 }
 
+async function fileExists(targetPath) {
+  try {
+    await fs.access(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function resolveCliInvocation() {
+  const explicitCli = String(process.env.SPRINTFOUNDRY_MONITOR_CLI_BIN ?? "").trim();
+  if (explicitCli) {
+    return {
+      command: explicitCli,
+      prefixArgs: [],
+      cwd: repoRoot,
+      label: explicitCli,
+    };
+  }
+
+  const packagedEntry = path.join(repoRoot, "dist", "index.js");
+  if (await fileExists(packagedEntry)) {
+    return {
+      command: process.execPath,
+      prefixArgs: [packagedEntry],
+      cwd: repoRoot,
+      label: `${process.execPath} ${packagedEntry}`,
+    };
+  }
+
+  const sourceEntry = path.join(repoRoot, "src", "index.ts");
+  if (await fileExists(sourceEntry)) {
+    return {
+      command: "pnpm",
+      prefixArgs: ["dev", "--"],
+      cwd: repoRoot,
+      label: "pnpm dev --",
+    };
+  }
+
+  return {
+    command: "sprintfoundry",
+    prefixArgs: [],
+    cwd: repoRoot,
+    label: "sprintfoundry",
+  };
+}
+
+function renderCliCommand(invocation, cliArgs) {
+  return `${invocation.label} ${cliArgs.join(" ")}`.trim();
+}
+
 function isProjectConfigFileName(name) {
   if (!/\.ya?ml$/i.test(name)) return false;
   const lower = name.toLowerCase();
@@ -777,9 +829,10 @@ function enqueueAutoexecuteTask(task) {
 }
 
 async function executeAutoexecuteTask(task) {
-  const args = ["dev", "--", "run", "--source", task.source, "--ticket", task.ticketId, "--config", configRoot];
+  const invocation = await resolveCliInvocation();
+  const cliArgs = ["run", "--source", task.source, "--ticket", task.ticketId, "--config", configRoot];
   if (task.projectArg) {
-    args.push("--project", task.projectArg);
+    cliArgs.push("--project", task.projectArg);
   }
 
   if (autoexecuteDryRun) {
@@ -787,7 +840,7 @@ async function executeAutoexecuteTask(task) {
       ts: new Date().toISOString(),
       status: "dry_run",
       task,
-      command: `pnpm ${args.join(" ")}`,
+      command: renderCliCommand(invocation, cliArgs),
     });
     return;
   }
@@ -797,11 +850,16 @@ async function executeAutoexecuteTask(task) {
       ...process.env,
       SPRINTFOUNDRY_TRIGGER_SOURCE: task.source === "linear" ? "linear_webhook" : "github_webhook",
     };
-    execFile("pnpm", args, { cwd: repoRoot, env: childEnv, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile(
+      invocation.command,
+      [...invocation.prefixArgs, ...cliArgs],
+      { cwd: invocation.cwd, env: childEnv, maxBuffer: 4 * 1024 * 1024 },
+      (err, stdout, stderr) => {
       autoexecuteHistory.push({
         ts: new Date().toISOString(),
         status: err ? "failed" : "completed",
         task,
+        command: renderCliCommand(invocation, cliArgs),
         stdout: String(stdout ?? "").slice(-4000),
         stderr: String(stderr ?? "").slice(-4000),
       });
@@ -810,7 +868,8 @@ async function executeAutoexecuteTask(task) {
         return;
       }
       resolve();
-    });
+      }
+    );
   });
 }
 
@@ -1575,6 +1634,13 @@ async function loadRunSummaryFromDbRecord(runRecord, options = {}) {
   const sandboxHost = options.includeSandboxHost && hostingMode === "k8s-agent-sandbox"
     ? await lookupSandboxHost(runRecord.project_id, runRecord.run_id)
     : null;
+  const operationalAlerts = buildOperationalAlerts({
+    status: hasEvents ? inferStatus(events) : (runRecord.status ?? "unknown"),
+    hostingMode,
+    snapshotState,
+    sandboxHost,
+    handoffMeta,
+  });
 
   return {
     project_id: runRecord.project_id,
@@ -1593,6 +1659,7 @@ async function loadRunSummaryFromDbRecord(runRecord, options = {}) {
     terminal_workflow_state: snapshotState.terminal_workflow_state,
     durable_snapshot: snapshotState.durable_snapshot,
     sandbox_host: sandboxHost,
+    operational_alerts: operationalAlerts,
     ...(handoffMeta ?? {}),
     ...sourceMeta,
     ticket_repo_url: fallbackRepoUrl,
@@ -2039,6 +2106,60 @@ function extractSnapshotState(events, session = null) {
   };
 }
 
+function buildOperationalAlerts({ status, hostingMode, snapshotState, sandboxHost, handoffMeta }) {
+  const alerts = [];
+  const terminalState = snapshotState?.terminal_workflow_state;
+  const durableSnapshot = snapshotState?.durable_snapshot;
+  const sandboxState = String(sandboxHost?.lifecycle_state ?? "").trim();
+
+  if (terminalState === "snapshot_failed") {
+    alerts.push({
+      level: "error",
+      code: "snapshot_failed",
+      label: "Snapshot failed",
+      detail: durableSnapshot?.error || "Workspace snapshot or cleanup failed. Manual recovery may be required.",
+    });
+  } else if (terminalState === "snapshot_uploading") {
+    alerts.push({
+      level: "warn",
+      code: "snapshot_uploading",
+      label: "Cleanup pending",
+      detail: "Snapshot export is still in progress.",
+    });
+  } else if (
+    hostingMode === "k8s-agent-sandbox" &&
+    (status === "completed" || status === "failed") &&
+    !terminalState
+  ) {
+    alerts.push({
+      level: "warn",
+      code: "snapshot_missing",
+      label: "Snapshot status missing",
+      detail: "Run reached a terminal state without a snapshot lifecycle event.",
+    });
+  }
+
+  if (sandboxState === "not_found" || sandboxState === "failed" || sandboxState === "not_ready") {
+    alerts.push({
+      level: sandboxState === "not_found" ? "warn" : "error",
+      code: `sandbox_${sandboxState}`,
+      label: sandboxState === "not_found" ? "Sandbox not found" : "Sandbox unhealthy",
+      detail: `Sandbox lifecycle state: ${sandboxState.replace(/_/g, " ")}.`,
+    });
+  }
+
+  if (handoffMeta?.handoff_eligible === true && terminalState !== "cleanup_completed") {
+    alerts.push({
+      level: "warn",
+      code: "handoff_available",
+      label: "PVC retained",
+      detail: "Workspace PVC is still present for manual handoff or cleanup.",
+    });
+  }
+
+  return alerts;
+}
+
 function extractRuntimeSkills(runtimeMetadata) {
   if (!runtimeMetadata || typeof runtimeMetadata !== "object") return null;
   const providerMeta = runtimeMetadata.provider_metadata;
@@ -2250,6 +2371,13 @@ async function loadRunSummary(projectId, runId, runPath, session = null, options
   const sandboxHost = options.includeSandboxHost && hostingMode === "k8s-agent-sandbox"
     ? await lookupSandboxHost(projectId, canonicalRunId)
     : null;
+  const operationalAlerts = buildOperationalAlerts({
+    status: hasEvents ? inferStatus(events) : (session?.status ?? "unknown"),
+    hostingMode,
+    snapshotState,
+    sandboxHost,
+    handoffMeta,
+  });
   return {
     project_id: projectId,
     run_id: canonicalRunId,
@@ -2267,6 +2395,7 @@ async function loadRunSummary(projectId, runId, runPath, session = null, options
     terminal_workflow_state: snapshotState.terminal_workflow_state,
     durable_snapshot: snapshotState.durable_snapshot,
     sandbox_host: sandboxHost,
+    operational_alerts: operationalAlerts,
     ...(handoffMeta ?? {}),
     ...resumeMeta,
     ...sourceMeta,
@@ -2822,13 +2951,17 @@ const server = http.createServer(async (req, res) => {
       }
 
       // Also send periodic run summary refreshes so the list view stays current
-      const summaryInterval = setInterval(async () => {
+      const sendRunsSummary = async () => {
         try {
           const runs = await listRunsSelected();
           sseWrite(res, "runs", { runs });
         } catch {
           // Transient failure — skip this tick
         }
+      };
+      void sendRunsSummary();
+      const summaryInterval = setInterval(() => {
+        void sendRunsSummary();
       }, 5000);
 
       req.on("close", () => {
@@ -3077,22 +3210,23 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 404, { error: "Run not found" });
         return;
       }
+      const invocation = await resolveCliInvocation();
       const projectArg = await getProjectArgForProjectId(project);
-      const args = ["dev", "--", "resume", canonicalRunId, "--config", configRoot];
+      const cliArgs = ["resume", canonicalRunId, "--config", configRoot];
       if (projectArg) {
-        args.push("--project", projectArg);
+        cliArgs.push("--project", projectArg);
       }
       if (step != null) {
-        args.push("--step", String(step));
+        cliArgs.push("--step", String(step));
       }
       if (prompt) {
-        args.push("--prompt", prompt);
+        cliArgs.push("--prompt", prompt);
       }
 
       let pid = null;
       await new Promise((resolve, reject) => {
-        const child = spawn("pnpm", args, {
-          cwd: repoRoot,
+        const child = spawn(invocation.command, [...invocation.prefixArgs, ...cliArgs], {
+          cwd: invocation.cwd,
           env: process.env,
           detached: true,
           stdio: "ignore",
@@ -3109,7 +3243,7 @@ const server = http.createServer(async (req, res) => {
         ok: true,
         queued: true,
         pid,
-        command: `pnpm ${args.join(" ")}`,
+        command: renderCliCommand(invocation, cliArgs),
         project,
         run: canonicalRunId,
         ...(step != null ? { step } : {}),

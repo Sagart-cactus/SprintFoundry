@@ -41,14 +41,14 @@ pnpm build
 ## Quick Start
 
 ```bash
-# Copy and fill in your config
-cp config/project.example.yaml config/project.yaml
+# Create a project config with guided setup
+sprintfoundry init
 
-# Check all dependencies are installed and configured
-sprintfoundry doctor
+# Check the profile you plan to run
+sprintfoundry doctor --profile local
 
-# Validate your config
-sprintfoundry validate --project my-project
+# Validate config and required env vars
+sprintfoundry validate --strict --project my-project
 
 # Run on a GitHub issue
 sprintfoundry run --project my-project --source github --ticket 42
@@ -64,9 +64,18 @@ sprintfoundry run --project my-project --source prompt --prompt "Review auth log
 
 # Run a custom agent defined in a YAML file
 sprintfoundry run --project my-project --source prompt --prompt "..." --agent my-agent --agent-file agents/my-agent.yaml
+
+# Inspect a finished or failed run
+sprintfoundry logs <run-id>
+
+# Resume the latest failed or cancelled run
+sprintfoundry resume --latest --project my-project
 ```
 
 From source, replace `sprintfoundry` with `pnpm dev --`.
+
+If you want a hand-written starting point instead of the wizard, use
+`config/project.minimal.yaml` as the baseline template.
 
 ## Monitor
 
@@ -140,11 +149,14 @@ Use `docker compose -f docker-compose.distributed.yml down -v` to also remove th
 sprintfoundry <command> [options]
 
 Commands:
+  init             Guided project setup
   run              Execute an end-to-end task
   validate         Validate platform and project configuration
   review           Submit a human review decision for a pending gate
   monitor          Start the monitor web UI
   doctor           Check all system dependencies and configuration
+  logs             Show the event timeline for a run
+  resume           Resume a failed or cancelled run
   project create   Interactively create a new project configuration
   agent create     Interactively create a new custom agent definition
 
@@ -168,6 +180,7 @@ Options (review):
 
 Options (doctor):
   --project <name>        Project to load for runtime-aware checks
+  --profile <profile>     local | distributed | k8s
 ```
 
 ## Configuration
@@ -201,6 +214,8 @@ integrations:
 ```
 
 See [docs/configuration.md](docs/configuration.md) for the full reference.
+For common failures, see [docs/troubleshooting.md](docs/troubleshooting.md).
+For Kubernetes setup, start with [docs/k8s-quickstart.md](docs/k8s-quickstart.md).
 
 ## Runtime Modes
 

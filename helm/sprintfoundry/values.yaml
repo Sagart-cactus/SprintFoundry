@@ -94,8 +94,12 @@ secrets:
 # Per-Project Configuration
 # =============================================================================
 # Each project gets its own namespace, secret (with API keys), configmap, and
-# resource quota. The dispatch-controller creates agent Jobs in the project's
-# namespace and injects the project secret via envFrom.
+# resource quota. The default contract is:
+#   namespace: <project id>
+#   secret: sprintfoundry-project-<project id>-secrets
+#   configmap: sprintfoundry-project-<project id>-config
+# The dispatch-controller creates agent Jobs in the project's namespace and
+# injects the project secret via envFrom.
 #
 # Three patterns for managing API keys:
 #   1. Inline (dev/testing): set apiKeys directly in values
@@ -103,7 +107,7 @@ secrets:
 #   3. ExternalSecrets (production): enable externalSecret, point to AWS SM / Vault
 projects: []
   # - id: "my-project"
-  #   # -- Namespace for this project's agent Jobs (defaults to project id)
+  #   # -- Namespace for this project's agent Jobs (defaults to the project id)
   #   namespace: ""
   #   # -- API keys injected into agent Jobs as environment variables
   #   apiKeys:

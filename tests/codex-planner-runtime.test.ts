@@ -155,12 +155,16 @@ describe("CodexPlannerRuntime", () => {
       "utf-8"
     );
     const previousHome = process.env.HOME;
+    const previousCodexHome = process.env.CODEX_HOME;
     process.env.HOME = fakeHome;
+    delete process.env.CODEX_HOME;
     try {
       await writeCodexConfigToml("sk-test");
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
     }
 
     const authRaw = JSON.parse(await fs.readFile(authPath, "utf-8")) as Record<string, unknown>;

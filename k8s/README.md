@@ -2,6 +2,8 @@
 
 This directory contains Kustomize manifests for running SprintFoundry in Kubernetes.
 
+Start with [docs/k8s-quickstart.md](../docs/k8s-quickstart.md) if you are setting this up for the first time. This file is the lower-level manifest reference.
+
 ## Layout
 
 - `base/`:
@@ -113,3 +115,15 @@ scripts/onboard-project.sh \
   --project-id my-project \
   --config-file config/project-my-project.yaml
 ```
+
+By default the project contract is:
+
+- namespace: `my-project`
+- secret: `sprintfoundry-project-my-project-secrets`
+- configmap: `sprintfoundry-project-my-project-config`
+
+You can override those with:
+
+- `SPRINTFOUNDRY_K8S_NAMESPACE`
+- `SPRINTFOUNDRY_K8S_PROJECT_SECRET_NAME`
+- `SPRINTFOUNDRY_K8S_PROJECT_CONFIGMAP_NAME`

@@ -417,8 +417,8 @@ describe("OrchestrationService", () => {
       run_id: "run-1",
       project_id: makeProjectConfig().project_id,
       sandbox_id: "sandbox-existing",
-      execution_backend: "k8s-pod",
-      hosting_mode: "local",
+      execution_backend: "agent-sandbox",
+      hosting_mode: "k8s-agent-sandbox",
       workspace_path: workspacePath,
       checkpoint_generation: 0,
       metadata: {
@@ -453,19 +453,19 @@ describe("OrchestrationService", () => {
     expect(metricsSpy).toHaveBeenCalledTimes(3);
     expect(metricsSpy).toHaveBeenCalledWith({
       project_id: "test-project",
-      execution_backend: "k8s-pod",
+      execution_backend: "agent-sandbox",
       stage: "workspace_volume_create",
       durationMs: 120,
     });
     expect(metricsSpy).toHaveBeenCalledWith({
       project_id: "test-project",
-      execution_backend: "k8s-pod",
+      execution_backend: "agent-sandbox",
       stage: "pod_ready_wait",
       durationMs: 850,
     });
     expect(metricsSpy).toHaveBeenCalledWith({
       project_id: "test-project",
-      execution_backend: "k8s-pod",
+      execution_backend: "agent-sandbox",
       stage: "total",
       durationMs: 1100,
     });
@@ -478,7 +478,8 @@ describe("OrchestrationService", () => {
       run_id: "run-1",
       project_id: makeProjectConfig().project_id,
       sandbox_id: "sandbox-existing",
-      execution_backend: "k8s-pod",
+      execution_backend: "agent-sandbox",
+      hosting_mode: "k8s-agent-sandbox",
       workspace_path: workspacePath,
       checkpoint_generation: 0,
       metadata: {

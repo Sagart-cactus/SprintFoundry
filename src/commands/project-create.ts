@@ -8,6 +8,7 @@ interface ProjectAnswers {
   name: string;
   stack: string;
   agents: string[];
+  runProfile: "local" | "local-distributed" | "k8s-whole-run";
   repoUrl: string;
   defaultBranch: string;
   ticketSource: string;
@@ -132,6 +133,31 @@ async function gatherAnswers(): Promise<ProjectAnswers> {
     choices: getAgentChoices(stack),
   });
 
+  // Phase 3: Run Profile
+  console.log("\n  Run Profile\n");
+
+  const runProfile = await select({
+    message: "Where will you run SprintFoundry?",
+    choices: [
+      {
+        name: "Local CLI only",
+        value: "local",
+        description: "Fastest setup. Filesystem-backed runs and local monitor.",
+      },
+      {
+        name: "Local distributed services",
+        value: "local-distributed",
+        description: "Run Event API, monitor, Postgres, and Redis locally.",
+      },
+      {
+        name: "Kubernetes whole-run hosting",
+        value: "k8s-whole-run",
+        description: "Dispatch/controller + sandbox-hosted whole runs in Kubernetes.",
+      },
+    ],
+    default: "local",
+  }) as ProjectAnswers["runProfile"];
+
   // Phase 3: Repository
   console.log("\n  Repository\n");
 
@@ -232,6 +258,7 @@ async function gatherAnswers(): Promise<ProjectAnswers> {
     name,
     stack,
     agents,
+    runProfile,
     repoUrl,
     defaultBranch,
     ticketSource,
@@ -332,17 +359,50 @@ function renderYaml(config: Record<string, unknown>): string {
   return header + body;
 }
 
-function printNextSteps(projectId: string, filePath: string): void {
+function printNextSteps(answers: ProjectAnswers, filePath: string): void {
+  const runCommand =
+    answers.ticketSource === "prompt"
+      ? `sprintfoundry run --project ${answers.projectId} --source prompt --prompt "Add a small validation task"`
+      : `sprintfoundry run --project ${answers.projectId} --source ${answers.ticketSource} --ticket ${
+          answers.ticketSource === "github"
+            ? "42"
+            : answers.ticketSource === "linear"
+              ? "LIN-123"
+              : "PROJ-123"
+        }`;
+
   console.log(`\n  Configuration saved to ${filePath}\n`);
   console.log("  Next steps:\n");
   console.log("  1. Set required environment variables:");
   console.log("     export SPRINTFOUNDRY_ANTHROPIC_KEY=sk-ant-...");
+  if (answers.apiProviders.includes("openai")) {
+    console.log("     export SPRINTFOUNDRY_OPENAI_KEY=sk-proj-...");
+  }
   console.log("");
   console.log("  2. Validate the config:");
-  console.log(`     sprintfoundry validate --project ${projectId}`);
+  console.log(`     sprintfoundry validate --project ${answers.projectId}`);
   console.log("");
-  console.log("  3. Run on a ticket:");
-  console.log(`     sprintfoundry run --source github --ticket 42 --project ${projectId}`);
+  if (answers.runProfile === "local-distributed") {
+    console.log("  3. Start local distributed services:");
+    console.log("     pnpm dev:distributed");
+    console.log("");
+    console.log("  4. Run your first task:");
+    console.log(`     ${runCommand}`);
+  } else if (answers.runProfile === "k8s-whole-run") {
+    console.log("  3. Onboard the project namespace and config:");
+    console.log(`     ./scripts/onboard-project.sh --project-id ${answers.projectId} --config-file ${filePath} --dry-run`);
+    console.log("");
+    console.log("  4. Run a Kubernetes readiness check:");
+    console.log("     sprintfoundry doctor --profile k8s");
+    console.log("");
+    console.log("  5. Queue your first run through dispatch once the cluster is ready.");
+  } else {
+    console.log("  3. Run your first task:");
+    console.log(`     ${runCommand}`);
+    console.log("");
+    console.log("  4. Watch runs live in another terminal:");
+    console.log("     sprintfoundry monitor");
+  }
   console.log("");
 }
 
@@ -367,5 +427,5 @@ export async function runProjectCreate(configDir: string): Promise<void> {
 
   await fs.mkdir(configDir, { recursive: true });
   await fs.writeFile(filePath, yaml, "utf-8");
-  printNextSteps(answers.projectId, filePath);
+  printNextSteps(answers, filePath);
 }

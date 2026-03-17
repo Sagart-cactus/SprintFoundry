@@ -133,6 +133,11 @@ export class SessionManager {
     }
   }
 
+  async getLatestByStatus(statuses: RunStatus[]): Promise<RunSessionMetadata | null> {
+    const sessions = await this.list();
+    return sessions.find((session) => statuses.includes(session.status)) ?? null;
+  }
+
   /**
    * Move a session to the archive directory.
    */

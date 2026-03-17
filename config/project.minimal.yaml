@@ -1,0 +1,23 @@
+# SprintFoundry — Minimal Project Configuration
+
+project_id: my-project
+name: My Project
+
+repo:
+  url: git@github.com:org/repo.git
+  default_branch: main
+
+api_keys:
+  anthropic: ${SPRINTFOUNDRY_ANTHROPIC_KEY}
+
+integrations:
+  ticket_source:
+    type: prompt
+    config: {}
+
+branch_strategy:
+  prefix: feat/
+  include_ticket_id: true
+  naming: kebab-case
+
+rules: []

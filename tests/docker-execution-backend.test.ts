@@ -58,6 +58,7 @@ describe("DockerExecutionBackend", () => {
       tenant_id: "tenant-1",
       sandbox_id: "sf-run-run-1",
       execution_backend: "docker",
+      hosting_mode: "docker",
       workspace_path: "/tmp/workspace-run-1",
     });
     expect(handle.metadata).toMatchObject({
@@ -96,6 +97,7 @@ describe("DockerExecutionBackend", () => {
         project_id: "project-1",
         sandbox_id: "sf-run-run-1",
         execution_backend: "docker",
+        hosting_mode: "docker",
         workspace_path: "/tmp/workspace-run-1",
         checkpoint_generation: 0,
         metadata: {
@@ -179,6 +181,7 @@ describe("DockerExecutionBackend", () => {
       project_id: "project-1",
       sandbox_id: "sf-run-run-1",
       execution_backend: "docker",
+      hosting_mode: "docker",
       workspace_path: "/tmp/workspace-run-1",
       checkpoint_generation: 0,
       metadata: { image: "sprintfoundry/agent-developer:latest" },
@@ -211,6 +214,7 @@ describe("DockerExecutionBackend", () => {
       project_id: "project-1",
       sandbox_id: "sf-run-run-1",
       execution_backend: "docker",
+      hosting_mode: "docker",
       workspace_path: "/tmp/workspace-run-1",
       checkpoint_generation: 2,
       metadata: {

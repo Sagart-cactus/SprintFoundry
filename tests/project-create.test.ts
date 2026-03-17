@@ -9,6 +9,7 @@ function baseAnswers(overrides: Partial<ProjectAnswers> = {}): ProjectAnswers {
     name: "Demo Project",
     stack: "js",
     agents: ["product", "developer", "qa"],
+    runProfile: "local",
     repoUrl: "git@github.com:acme/demo-project.git",
     defaultBranch: "main",
     ticketSource: "prompt",

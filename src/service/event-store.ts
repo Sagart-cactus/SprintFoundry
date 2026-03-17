@@ -131,7 +131,13 @@ export class EventStore {
   async loadFromFile(filePath: string): Promise<TaskEvent[]> {
     const content = await fs.readFile(filePath, "utf-8");
     const lines = content.trim().split("\n").filter(Boolean);
-    const loaded = lines.map((line) => JSON.parse(line) as TaskEvent);
+    const loaded = lines.map((line) => {
+      const parsed = JSON.parse(line) as TaskEvent & { timestamp: string | Date };
+      return {
+        ...parsed,
+        timestamp: parsed.timestamp instanceof Date ? parsed.timestamp : new Date(parsed.timestamp),
+      } as TaskEvent;
+    });
     this.events.push(...loaded);
     return loaded;
   }

@@ -63,7 +63,9 @@ if [[ ! -d "$TEMPLATE_DIR" ]]; then
   exit 1
 fi
 
-PROJECT_NAMESPACE="sprintfoundry-project-${PROJECT_ID}"
+PROJECT_NAMESPACE="${SPRINTFOUNDRY_K8S_NAMESPACE:-$PROJECT_ID}"
+PROJECT_SECRET_NAME="${SPRINTFOUNDRY_K8S_PROJECT_SECRET_NAME:-sprintfoundry-project-${PROJECT_ID}-secrets}"
+PROJECT_CONFIGMAP_NAME="${SPRINTFOUNDRY_K8S_PROJECT_CONFIGMAP_NAME:-sprintfoundry-project-${PROJECT_ID}-config}"
 WORK_DIR="$(mktemp -d -t sf-onboard-${PROJECT_ID}-XXXX)"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
@@ -79,6 +81,8 @@ render_template() {
       *)
         line="${line//__PROJECT_ID__/$PROJECT_ID}"
         line="${line//__PROJECT_NAMESPACE__/$PROJECT_NAMESPACE}"
+        line="${line//__PROJECT_SECRET_NAME__/$PROJECT_SECRET_NAME}"
+        line="${line//__PROJECT_CONFIGMAP_NAME__/$PROJECT_CONFIGMAP_NAME}"
         echo "$line"
         ;;
     esac
@@ -105,17 +109,17 @@ echo "[onboard] Verifying namespace..."
 kubectl get namespace "$PROJECT_NAMESPACE" >/dev/null
 
 echo "[onboard] Verifying configmap..."
-kubectl -n "$PROJECT_NAMESPACE" get configmap project-config >/dev/null
+kubectl -n "$PROJECT_NAMESPACE" get configmap "$PROJECT_CONFIGMAP_NAME" >/dev/null
 
 echo "[onboard] Waiting for ExternalSecret target Secret sync..."
 for _ in $(seq 1 24); do
-  if kubectl -n "$PROJECT_NAMESPACE" get secret project-runtime-secrets >/dev/null 2>&1; then
-    echo "[onboard] Secret synced: project-runtime-secrets"
+  if kubectl -n "$PROJECT_NAMESPACE" get secret "$PROJECT_SECRET_NAME" >/dev/null 2>&1; then
+    echo "[onboard] Secret synced: $PROJECT_SECRET_NAME"
     exit 0
   fi
   sleep 5
 done
 
-echo "[onboard] Secret sync check failed: project-runtime-secrets not found after 120s" >&2
+echo "[onboard] Secret sync check failed: $PROJECT_SECRET_NAME not found after 120s" >&2
 echo "[onboard] Verify ExternalSecrets operator and ClusterSecretStore configuration." >&2
 exit 1

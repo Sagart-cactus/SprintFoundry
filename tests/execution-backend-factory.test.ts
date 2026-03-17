@@ -42,7 +42,7 @@ describe("execution backend factory", () => {
   });
 
   it("forces local step execution inside a whole-run k8s runner pod", () => {
-    const platform = makePlatformConfig({ execution_backend: "k8s-pod" });
+    const platform = makePlatformConfig({ execution_backend: "k8s-pod" as any });
     const project = makeProjectConfig({ execution_backend_override: "docker" });
     const env = { SPRINTFOUNDRY_RUN_SANDBOX_MODE: "k8s-whole-run" } as NodeJS.ProcessEnv;
 
@@ -61,7 +61,7 @@ describe("execution backend factory", () => {
 
   it("fails fast when a project override still requests k8s-pod", () => {
     const platform = makePlatformConfig();
-    const project = makeProjectConfig({ execution_backend_override: "k8s-pod" });
+    const project = makeProjectConfig({ execution_backend_override: "k8s-pod" as any });
 
     expect(() => createExecutionBackend(platform, project, {} as NodeJS.ProcessEnv)).toThrow(
       /deprecated execution backend 'k8s-pod'/

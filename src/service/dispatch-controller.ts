@@ -27,6 +27,7 @@ import {
   type GitHubAutoexecuteConfig,
   type LinearAutoexecuteConfig,
 } from "./webhook-handler.js";
+import { describeProjectK8sContract } from "./k8s-project-contract.js";
 
 const require = createRequire(import.meta.url);
 const RUN_SANDBOX_MODE_ENV = "SPRINTFOUNDRY_RUN_SANDBOX_MODE";
@@ -1494,9 +1495,7 @@ class DispatchController implements DispatchControllerRuntime {
   private async dispatchTask(task: DispatchQueueItem): Promise<void> {
     if (this.k8sMode) {
       const project = await this.findProjectById(task.project_id);
-      const namespace = asString(process.env.SPRINTFOUNDRY_K8S_NAMESPACE) || task.project_id;
-      const secretName = asString(process.env.SPRINTFOUNDRY_K8S_PROJECT_SECRET_NAME) || `sprintfoundry-project-${task.project_id}-secrets`;
-      const configMapName = asString(process.env.SPRINTFOUNDRY_K8S_PROJECT_CONFIGMAP_NAME) || `sprintfoundry-project-${task.project_id}-config`;
+      const { namespace, secretName, configMapName } = describeProjectK8sContract(task.project_id);
       const eventSinkUrl = asString(process.env[EVENT_SINK_URL_ENV]) || asString(project?.eventSinkUrl);
       if (!this.agentSandboxWholeRunConfig.enabled) {
         throw new Error(

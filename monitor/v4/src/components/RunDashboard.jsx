@@ -102,6 +102,7 @@ function RunCard({ run, onClick, expanded = false }) {
     ? run.last_event_ts - new Date(run.started_at).getTime()
     : null
   const src = run.ticket_source ? sourceStyle(run.ticket_source) : null
+  const operationalAlerts = Array.isArray(run.operational_alerts) ? run.operational_alerts : []
 
   return (
     <button
@@ -161,6 +162,24 @@ function RunCard({ run, onClick, expanded = false }) {
         {steps.length > 0 && (
           <div className="mb-2.5">
             <StepPipeline steps={steps} expanded={expanded} />
+          </div>
+        )}
+
+        {operationalAlerts.length > 0 && (
+          <div className="mb-2.5 flex flex-wrap gap-1.5">
+            {operationalAlerts.slice(0, 2).map(alert => (
+              <span
+                key={alert.code || alert.label}
+                className={`inline-flex items-center rounded border px-1.5 py-px text-2xs font-medium ${
+                  alert.level === 'error'
+                    ? 'bg-status-error-light text-status-error border-status-error-border'
+                    : 'bg-status-warning-light text-status-warning border-status-warning-border'
+                }`}
+                title={alert.detail || ''}
+              >
+                {alert.label}
+              </span>
+            ))}
           </div>
         )}
 

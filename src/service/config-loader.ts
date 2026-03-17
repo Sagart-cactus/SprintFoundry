@@ -4,18 +4,51 @@ import { parse as parseYaml } from "yaml";
 import type { AgentDefinition, PlatformConfig, ProjectConfig } from "../shared/types.js";
 import { normalizeAgentSandboxPlatformConfig } from "./agent-sandbox-platform.js";
 
-export async function loadYaml<T>(filePath: string): Promise<T> {
-  const raw = await fs.readFile(filePath, "utf-8");
-  // Interpolate environment variables: ${VAR_NAME}
-  const interpolated = raw.replace(/\$\{(\w+)\}/g, (_, varName) => {
-    return process.env[varName] ?? "";
-  });
-  return parseYaml(interpolated) as T;
+export interface LoadConfigOptions {
+  strictEnv?: boolean;
 }
 
-export async function loadConfig(configDir: string, projectName?: string) {
+function interpolateEnvVars(
+  raw: string,
+  options?: { strictEnv?: boolean; source?: string }
+): string {
+  const missing = new Set<string>();
+  const interpolated = raw.replace(/\$\{(\w+)\}/g, (_match, varName) => {
+    const value = process.env[varName];
+    if (value === undefined || value === "") {
+      missing.add(varName);
+      return "";
+    }
+    return value;
+  });
+
+  if (missing.size > 0) {
+    const suffix = options?.source ? ` in ${options.source}` : "";
+    const message =
+      `[config] Missing environment variable${missing.size === 1 ? "" : "s"}${suffix}: ` +
+      `${Array.from(missing).sort().join(", ")}. Values will resolve to empty strings.`;
+    if (options?.strictEnv) {
+      throw new Error(message);
+    }
+    console.warn(message);
+  }
+
+  return interpolated;
+}
+
+export async function loadYaml<T>(filePath: string, options?: LoadConfigOptions): Promise<T> {
+  const raw = await fs.readFile(filePath, "utf-8");
+  return parseYaml(
+    interpolateEnvVars(raw, {
+      strictEnv: options?.strictEnv,
+      source: path.basename(filePath),
+    })
+  ) as T;
+}
+
+export async function loadConfig(configDir: string, projectName?: string, options?: LoadConfigOptions) {
   const platformPath = path.join(configDir, "platform.yaml");
-  const platform = await loadYaml<PlatformConfig>(platformPath);
+  const platform = await loadYaml<PlatformConfig>(platformPath, options);
 
   // Resolve project config path:
   //   --project given: try <name>.yaml, then project-<name>.yaml
@@ -30,11 +63,15 @@ export async function loadConfig(configDir: string, projectName?: string) {
     let loaded = false;
     for (const candidate of candidates) {
       try {
-        project = await loadYaml<ProjectConfig>(candidate);
+        await fs.access(candidate);
+        project = await loadYaml<ProjectConfig>(candidate, options);
         console.log(`Loaded project config: ${path.basename(candidate)}`);
         loaded = true;
         break;
-      } catch {
+      } catch (error) {
+        if (error instanceof Error && /Missing environment variable/.test(error.message)) {
+          throw error;
+        }
         // try next candidate
       }
     }
@@ -48,10 +85,14 @@ export async function loadConfig(configDir: string, projectName?: string) {
   } else {
     const projectPath = path.join(configDir, "project.yaml");
     try {
-      project = await loadYaml<ProjectConfig>(projectPath);
-    } catch {
+      await fs.access(projectPath);
+      project = await loadYaml<ProjectConfig>(projectPath, options);
+    } catch (error) {
+      if (error instanceof Error && /Missing environment variable/.test(error.message)) {
+        throw error;
+      }
       throw new Error(
-        "config/project.yaml not found. Copy config/project.example.yaml to config/project.yaml and configure it."
+        "config/project.yaml not found. Run `sprintfoundry init` or copy config/project.example.yaml to config/project.yaml and configure it."
       );
     }
   }
@@ -79,13 +120,20 @@ export async function loadConfig(configDir: string, projectName?: string) {
       if (!entry.endsWith(".yaml") && !entry.endsWith(".yml")) continue;
       try {
         const raw = await fs.readFile(path.join(agentsDir, entry), "utf-8");
-        const interpolated = raw.replace(/\$\{(\w+)\}/g, (_, v) => process.env[v] ?? "");
+        const interpolated = interpolateEnvVars(raw, {
+          strictEnv: options?.strictEnv,
+          source: path.join("agents", entry),
+        });
         const def = parseYaml(interpolated) as AgentDefinition;
         if (def?.type && !platform.agent_definitions.find((a) => a.type === def.type)) {
           platform.agent_definitions.push(def);
         }
-      } catch {
-        // Skip malformed or unreadable agent files
+      } catch (error) {
+        console.warn(
+          `[config] Skipped malformed agent file: ${entry} — ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
       }
     }
   } catch {

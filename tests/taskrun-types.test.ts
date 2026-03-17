@@ -88,6 +88,7 @@ describe("TaskRun run-environment fields", () => {
         tenant_id: "tenant-a",
         sandbox_id: "sandbox-1",
         execution_backend: "local",
+        hosting_mode: "local",
         workspace_path: "/tmp/workspace",
         workspace_volume_ref: "workspace-1",
         network_profile: "github-only",

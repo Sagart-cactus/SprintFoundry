@@ -11,6 +11,11 @@ function getDefaultStepNumber(steps) {
   return running?.step_number ?? failed?.step_number ?? steps[0]?.step_number ?? null
 }
 
+function alertTone(level) {
+  if (level === 'error') return 'bg-status-error-light text-status-error border-status-error-border'
+  return 'bg-status-warning-light text-status-warning border-status-warning-border'
+}
+
 export default function RunDetail({ projectId, runId }) {
   const { run, events, loading } = useRunDetail(projectId, runId)
   const [selectedStep, setSelectedStep] = useState(null)
@@ -111,6 +116,7 @@ export default function RunDetail({ projectId, runId }) {
     ? run.last_event_ts - new Date(run.started_at).getTime()
     : null
   const handoffEligible = run.handoff_eligible === true && typeof run.handoff_command === 'string' && run.handoff_command.trim().length > 0
+  const operationalAlerts = Array.isArray(run.operational_alerts) ? run.operational_alerts : []
 
   return (
     <div className="max-w-6xl space-y-4 animate-fade-in">
@@ -242,6 +248,15 @@ export default function RunDetail({ projectId, runId }) {
           </div>
 
           {/* Pipeline */}
+          {operationalAlerts.length > 0 && (
+            <div className="mb-4 flex flex-wrap gap-2">
+              {operationalAlerts.map(alert => (
+                <span key={alert.code || alert.label} className={`inline-flex items-center rounded border px-2 py-1 text-2xs font-medium ${alertTone(alert.level)}`} title={alert.detail || ''}>
+                  {alert.label}
+                </span>
+              ))}
+            </div>
+          )}
           <FullPipeline steps={steps} selectedStep={selectedStep} onSelectStep={setSelectedStep} stepModels={run.step_models} />
         </div>
       </div>
