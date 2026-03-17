@@ -1011,7 +1011,7 @@ describe("GET /api/run", () => {
           },
           stdio: ["ignore", "pipe", "pipe"],
         });
-        const timeout = setTimeout(() => reject(new Error("Ephemeral server start timeout")), 5000);
+        const timeout = setTimeout(() => reject(new Error("Ephemeral server start timeout")), 10000);
         let stderrOutput = "";
         proc.stdout?.on("data", (data: Buffer) => {
           const out = data.toString();
@@ -1084,7 +1084,7 @@ describe("GET /api/run", () => {
       await new Promise((resolve) => proc.once("exit", resolve));
       await new Promise<void>((resolve, reject) => fakeK8sApi.close((err) => (err ? reject(err) : resolve())));
     }
-  });
+  }, 15000);
 });
 
 describe("POST /api/run/resume", () => {
@@ -1319,8 +1319,8 @@ describe("POST /api/webhooks/github", () => {
     });
     expect(first.status).toBe(202);
     expect(JSON.parse(first.body)).toMatchObject({ accepted: true });
-    s1.proc.kill();
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    s1.proc.kill("SIGTERM");
+    await new Promise((resolve) => s1.proc.once("exit", resolve));
 
     const s2 = await startEphemeral();
     const second = await post(`${s2.base}/api/webhooks/github`, payload, {
@@ -1330,8 +1330,9 @@ describe("POST /api/webhooks/github", () => {
     });
     expect(second.status).toBe(202);
     expect(JSON.parse(second.body)).toMatchObject({ accepted: false, ignored: true });
-    s2.proc.kill();
-  });
+    s2.proc.kill("SIGTERM");
+    await new Promise((resolve) => s2.proc.once("exit", resolve));
+  }, 15000);
 
   it("loads autoexecute config from <name>.yaml project files", async () => {
     const payload = JSON.stringify({

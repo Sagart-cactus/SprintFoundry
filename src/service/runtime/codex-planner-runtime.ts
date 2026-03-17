@@ -208,7 +208,11 @@ type CodexAuthState = {
  * - ~/.codex/auth.json with OPENAI_API_KEY (current CLI key path)
  */
 export async function writeCodexConfigToml(apiKey: string, targetCodexHome?: string): Promise<void> {
-  const configDir = targetCodexHome?.trim() || process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
+  const configDir =
+    targetCodexHome?.trim() ||
+    process.env.CODEX_HOME ||
+    (process.env.HOME ? path.join(process.env.HOME, ".codex") : "") ||
+    path.join(os.homedir(), ".codex");
   const configPath = path.join(configDir, "config.toml");
   const authPath = path.join(configDir, "auth.json");
   await fs.mkdir(configDir, { recursive: true });

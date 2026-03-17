@@ -69,6 +69,20 @@ api_key: "prefix-\${NONEXISTENT_VAR_FOR_TEST}-suffix"
     expect(result.api_key).toBe("prefix--suffix");
   });
 
+  it("loadYaml throws in strict mode when env vars are missing", async () => {
+    delete process.env.NONEXISTENT_VAR_FOR_STRICT_TEST;
+
+    const yamlContent = `
+api_key: \${NONEXISTENT_VAR_FOR_STRICT_TEST}
+`;
+    const filePath = path.join(tmpDir, "strict-missing.yaml");
+    await fs.writeFile(filePath, yamlContent, "utf-8");
+
+    await expect(loadYaml<any>(filePath, { strictEnv: true })).rejects.toThrow(
+      /Missing environment variable/
+    );
+  });
+
   // --- loadConfig ---
 
   it("loadConfig loads platform.yaml + project.yaml", async () => {
@@ -214,5 +228,48 @@ agent_definitions: []
     await fs.writeFile(path.join(tmpDir, "platform.yaml"), platformYaml, "utf-8");
 
     await expect(loadConfig(tmpDir)).rejects.toThrow(/project\.yaml not found/);
+  });
+
+  it("loadConfig throws in strict mode when project config env vars are missing", async () => {
+    const platformYaml = `
+defaults:
+  model_per_agent: {}
+  budgets:
+    per_agent_tokens: 100
+    per_task_total_tokens: 100
+    per_task_max_cost_usd: 1
+  timeouts:
+    agent_timeout_minutes: 1
+    task_timeout_minutes: 1
+    human_gate_timeout_hours: 1
+  max_rework_cycles: 1
+rules: []
+agent_definitions: []
+`;
+    const projectYaml = `
+project_id: strict-env-project
+name: Strict Env Project
+repo:
+  url: https://github.com/test/repo.git
+  default_branch: main
+api_keys:
+  anthropic: \${MISSING_STRICT_ENV}
+rules: []
+integrations:
+  ticket_source:
+    type: prompt
+    config: {}
+branch_strategy:
+  prefix: "feat/"
+  include_ticket_id: true
+  naming: kebab-case
+`;
+    delete process.env.MISSING_STRICT_ENV;
+    await fs.writeFile(path.join(tmpDir, "platform.yaml"), platformYaml, "utf-8");
+    await fs.writeFile(path.join(tmpDir, "project.yaml"), projectYaml, "utf-8");
+
+    await expect(loadConfig(tmpDir, undefined, { strictEnv: true })).rejects.toThrow(
+      /Missing environment variable/
+    );
   });
 });

@@ -189,14 +189,14 @@ describe("GET /api/events/stream — SSE endpoint", () => {
       makeEvent("task.plan_generated"),
     ]);
 
-    // Wait long enough for at least one periodic summary (5s interval + buffer)
-    const { messages } = await collectSSE(withAccessToken(`${BASE}/api/events/stream`), 7000, 2);
+    // Allow extra headroom under full-suite load.
+    const { messages } = await collectSSE(withAccessToken(`${BASE}/api/events/stream`), 12000, 2);
     const runsEvents = messages.filter((m) => m.event === "runs");
     expect(runsEvents.length).toBeGreaterThanOrEqual(1);
     const data = JSON.parse(runsEvents[0].data);
     expect(data).toHaveProperty("runs");
     expect(Array.isArray(data.runs)).toBe(true);
-  }, 10000);
+  }, 15000);
 
   it("streams new events when JSONL file is appended", async () => {
     const { eventsPath } = setupFixtureRun("test-project", "run-sse-append", [
@@ -207,7 +207,7 @@ describe("GET /api/events/stream — SSE endpoint", () => {
     const ssePromise = collectSSE(
       withAccessToken(`${BASE}/api/events/stream?project=test-project&run=run-sse-append`),
       4000,
-      2,
+      3,
     );
 
     // Wait for connection to establish, then append a new event

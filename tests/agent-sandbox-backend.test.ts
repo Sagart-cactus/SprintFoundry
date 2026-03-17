@@ -83,11 +83,11 @@ describe("AgentSandboxExecutionBackend", () => {
     const localBackend = {
       executeStep: vi.fn(async () => ({
         agentResult: {
-          status: "complete",
+          status: "complete" as const,
           summary: "ok",
-          artifacts_created: [],
-          artifacts_modified: [],
-          issues: [],
+          artifacts_created: [] as string[],
+          artifacts_modified: [] as string[],
+          issues: [] as string[],
           metadata: {
             observed_env: {
               execution_backend: process.env.SPRINTFOUNDRY_EXECUTION_BACKEND,

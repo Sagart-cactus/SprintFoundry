@@ -62,6 +62,7 @@ import type {
   RunEnvironmentHandle,
   SandboxTeardownReason,
 } from "./execution/index.js";
+import { hasFailingChecks, runPreflight } from "./preflight.js";
 
 const RUN_STATE_DIR = ".sprintfoundry";
 const RUN_STATE_FILE = "run-state.json";
@@ -71,6 +72,14 @@ const EVENT_SINK_URL_ENV = "SPRINTFOUNDRY_EVENT_SINK_URL";
 function isTruthy(value: string | undefined): boolean {
   const normalized = String(value ?? "").trim().toLowerCase();
   return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+function formatElapsedSeconds(totalSeconds: number): string {
+  const normalized = Math.max(0, Math.floor(totalSeconds));
+  const minutes = Math.floor(normalized / 60);
+  const seconds = normalized % 60;
+  if (minutes === 0) return `${seconds}s`;
+  return `${minutes}m ${seconds}s`;
 }
 
 interface ExecutePlanOptions {
@@ -107,6 +116,9 @@ export class OrchestrationService {
   private metricsService: MetricsService;
   private artifactUploader: ArtifactUploader;
   private tracer = trace.getTracer("sprintfoundry", "1.0.0");
+  private readonly budgetWarningThresholds = [0.5, 0.75, 0.9];
+  private readonly emittedBudgetWarnings = new Map<string, Set<number>>();
+  private readonly budgetConsentRequested = new Set<string>();
 
   constructor(
     private platformConfig: PlatformConfig,
@@ -502,6 +514,10 @@ export class OrchestrationService {
     this.metricsService.recordRunStarted({ project_id: this.projectConfig.project_id, source, run_id: run.run_id });
 
     try {
+      if (!opts?.dryRun) {
+        await this.runServicePreflight();
+      }
+
       // 2. Fetch ticket details (or create from prompt)
       const ticket = source === "prompt"
         ? this.createTicketFromPrompt(ticketId, promptText!)
@@ -767,6 +783,9 @@ export class OrchestrationService {
         const parallelGroup = this.findParallelGroup(ready, plan.parallel_groups);
 
         if (parallelGroup.length > 1) {
+          console.log(
+            `[parallel] Running steps ${parallelGroup.map((step) => step.step_number).join(", ")} concurrently.`
+          );
           // Phase 1: Execute in parallel, collecting rework signals instead of handling them inline.
           // This prevents multiple parallel steps from each spawning an independent developer rework call.
           const reworkSignals: Array<{ step: PlanStep; agentResult: AgentResult; currentRework: number }> = [];
@@ -874,6 +893,15 @@ export class OrchestrationService {
               primarySignal.currentRework + 1,
               previousReworkResults
             );
+            await this.announceReworkPlan(
+              run,
+              primarySignal.step,
+              mergedReason,
+              reworkPlan,
+              primarySignal.currentRework + 1,
+              maxRework,
+              budget
+            );
 
             for (const reworkStep of reworkPlan.steps) {
               const reworkResult = await this.executeStep(
@@ -899,8 +927,12 @@ export class OrchestrationService {
           for (let i = 0; i < parallelGroup.length; i++) {
             if (results[i] === "completed") {
               completed.add(parallelGroup[i].step_number);
+              console.log(`[parallel] Step ${parallelGroup[i].step_number} completed.`);
             }
           }
+          console.log(
+            `[parallel] Group completed: ${parallelGroup.map((step) => step.step_number).join(", ")}.`
+          );
         } else {
           // Execute sequentially
           const step = ready[0];
@@ -926,6 +958,16 @@ export class OrchestrationService {
             this.persistSession(run, { workspace_path: workspacePath });
             return;
           }
+        }
+
+        const budgetApproved = await this.maybeRequireBudgetConfirmation(
+          run,
+          this.resolveBudget(run.ticket),
+          workspacePath
+        );
+        if (!budgetApproved) {
+          this.persistSession(run, { workspace_path: workspacePath });
+          return;
         }
 
         // Check for human gates after completed steps
@@ -983,6 +1025,8 @@ export class OrchestrationService {
       });
       this.persistSession(run, { workspace_path: workspacePath });
     } finally {
+      this.emittedBudgetWarnings.delete(run.run_id);
+      this.budgetConsentRequested.delete(run.run_id);
       await this.teardownRunEnvironment(run, runEnvironment, workspacePath);
     }
   }
@@ -1152,55 +1196,61 @@ export class OrchestrationService {
 
       // Spawn the agent container and run
       let runtimeActivityCount = 0;
-      const result = await this.agentRunner.run({
-        runId: run.run_id,
-        stepNumber: step.step_number,
-        stepAttempt: currentRework + 1,
-        agent: step.agent,
-        task: effectiveTask,
-        context_inputs: step.context_inputs,
-        workspacePath,
-        modelConfig,
-        apiKey,
-        tokenBudget: budget.per_agent_tokens,
-        timeoutMinutes: this.platformConfig.defaults.timeouts.agent_timeout_minutes,
-        previousStepResults: this.gatherPreviousResults(run, step),
-        plugins: agentDef?.plugins,
-        cliFlags,
-        containerResources,
-        runEnvironment,
-        resumeSessionId,
-        resumeReason,
-        onRuntimeActivity: async (activity: RuntimeActivityEvent) => {
-          runtimeActivityCount += 1;
-          await this.emitEvent(run.run_id, activity.type, {
-            step: step.step_number,
+      const stopHeartbeat = this.startStepHeartbeat(run, step);
+      const result = await (async () => {
+        try {
+          return await this.agentRunner.run({
+            runId: run.run_id,
+            stepNumber: step.step_number,
+            stepAttempt: currentRework + 1,
             agent: step.agent,
-            ...activity.data,
+            task: effectiveTask,
+            context_inputs: step.context_inputs,
+            workspacePath,
+            modelConfig,
+            apiKey,
+            tokenBudget: budget.per_agent_tokens,
+            timeoutMinutes: this.platformConfig.defaults.timeouts.agent_timeout_minutes,
+            previousStepResults: this.gatherPreviousResults(run, step),
+            plugins: agentDef?.plugins,
+            cliFlags,
+            containerResources,
+            runEnvironment,
+            resumeSessionId,
+            resumeReason,
+            onRuntimeActivity: async (activity: RuntimeActivityEvent) => {
+              runtimeActivityCount += 1;
+              await this.emitEvent(run.run_id, activity.type, {
+                step: step.step_number,
+                agent: step.agent,
+                ...activity.data,
+              });
+              switch (activity.type) {
+                case "agent_tool_call": {
+                  const toolName = typeof activity.data.tool_name === "string" ? activity.data.tool_name : "unknown";
+                  this.metricsService.recordToolCall({ agent: step.agent, tool_name: toolName });
+                  break;
+                }
+                case "agent_file_edit": {
+                  const filePath = typeof activity.data.path === "string" ? activity.data.path : "";
+                  const ext = filePath.includes(".") ? filePath.split(".").pop() ?? "unknown" : "unknown";
+                  this.metricsService.recordFileEdit({ agent: step.agent, extension: ext });
+                  break;
+                }
+                case "agent_command_run":
+                  this.metricsService.recordCommandRun({ agent: step.agent });
+                  break;
+                case "agent_guardrail_block":
+                  this.metricsService.recordGuardrailBlock({ agent: step.agent, provider: runtime.provider });
+                  break;
+              }
+            },
+            sinkClient: this.eventSinkClient,
           });
-          // Mirror selected activity events as metrics
-          switch (activity.type) {
-            case "agent_tool_call": {
-              const toolName = typeof activity.data.tool_name === "string" ? activity.data.tool_name : "unknown";
-              this.metricsService.recordToolCall({ agent: step.agent, tool_name: toolName });
-              break;
-            }
-            case "agent_file_edit": {
-              const filePath = typeof activity.data.path === "string" ? activity.data.path : "";
-              const ext = filePath.includes(".") ? filePath.split(".").pop() ?? "unknown" : "unknown";
-              this.metricsService.recordFileEdit({ agent: step.agent, extension: ext });
-              break;
-            }
-            case "agent_command_run":
-              this.metricsService.recordCommandRun({ agent: step.agent });
-              break;
-            case "agent_guardrail_block":
-              this.metricsService.recordGuardrailBlock({ agent: step.agent, provider: runtime.provider });
-              break;
-          }
-        },
-        sinkClient: this.eventSinkClient,
-      });
+        } finally {
+          stopHeartbeat();
+        }
+      })();
 
       console.log(`[step ${step.step_number}] Agent ${step.agent} finished: status=${result.agentResult.status}, tokens=${result.tokens_used}, cost=$${result.cost_usd.toFixed(2)}, duration=${result.duration_seconds.toFixed(1)}s`);
       if (result.agentResult.summary) {
@@ -1293,6 +1343,10 @@ export class OrchestrationService {
         }
 
         stepExec.status = "completed";
+        const totalPlannedSteps = run.validated_plan?.steps.length ?? run.plan?.steps.length ?? 0;
+        const completedStepCount = run.steps.filter((candidate) => candidate.status === "completed").length;
+        const remainingSteps = Math.max(0, totalPlannedSteps - completedStepCount);
+        await this.maybeEmitBudgetWarnings(run, budget, step, remainingSteps);
         await this.upsertStepResultToSink(run.run_id, stepExec, currentRework + 1);
         await this.emitEvent(run.run_id, "step.completed", {
           step: step.step_number,
@@ -1344,6 +1398,9 @@ export class OrchestrationService {
             }
 
             reworkCounts.set(step.step_number, currentRework + 1);
+            console.log(
+              `[rework] Quality gate failed for step ${step.step_number}; retrying ${step.agent} (${currentRework + 1}/${maxRework}).`
+            );
             return this.executeStep(
               run,
               step,
@@ -1418,6 +1475,15 @@ export class OrchestrationService {
           run.steps,
           currentRework + 1,
           previousReworkResults
+        );
+        await this.announceReworkPlan(
+          run,
+          step,
+          result.agentResult.rework_reason ?? "Rework requested",
+          reworkPlan,
+          currentRework + 1,
+          maxRework,
+          budget
         );
 
         // Execute the rework step(s) then retry this step
@@ -1706,6 +1772,158 @@ export class OrchestrationService {
     } finally {
       clearTimeout(timeout);
     }
+  }
+
+  private startStepHeartbeat(run: TaskRun, step: PlanStep): () => void {
+    const startedAt = Date.now();
+    const interval = setInterval(() => {
+      const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000);
+      const elapsed = formatElapsedSeconds(elapsedSeconds);
+      console.log(`[step ${step.step_number}] Still running... (elapsed: ${elapsed})`);
+      void this.emitEvent(run.run_id, "step.heartbeat", {
+        step: step.step_number,
+        agent: step.agent,
+        elapsed_seconds: elapsedSeconds,
+        ...this.buildSandboxEventData(run),
+      });
+    }, 60_000);
+    interval.unref?.();
+    return () => clearInterval(interval);
+  }
+
+  private calculateRemainingBudgetUsd(run: TaskRun, budget: BudgetConfig): number | null {
+    if (!(budget.per_task_max_cost_usd > 0)) return null;
+    return Math.max(0, budget.per_task_max_cost_usd - run.total_cost_usd);
+  }
+
+  private async maybeEmitBudgetWarnings(
+    run: TaskRun,
+    budget: BudgetConfig,
+    step: PlanStep,
+    remainingSteps: number
+  ): Promise<void> {
+    if (!(budget.per_task_max_cost_usd > 0)) return;
+    const spentRatio = run.total_cost_usd / budget.per_task_max_cost_usd;
+    let emitted = this.emittedBudgetWarnings.get(run.run_id);
+    if (!emitted) {
+      emitted = new Set<number>();
+      this.emittedBudgetWarnings.set(run.run_id, emitted);
+    }
+
+    for (const threshold of this.budgetWarningThresholds) {
+      if (spentRatio < threshold || emitted.has(threshold)) continue;
+      emitted.add(threshold);
+      const pct = Math.round(threshold * 100);
+      const message =
+        `[budget] $${run.total_cost_usd.toFixed(2)} spent of $${budget.per_task_max_cost_usd.toFixed(2)} ` +
+        `limit (${pct}%) after step ${step.step_number}; ${remainingSteps} step${remainingSteps === 1 ? "" : "s"} remaining`;
+      console.warn(message);
+      await this.emitEvent(run.run_id, "task.budget_warning", {
+        step: step.step_number,
+        threshold_percent: pct,
+        total_cost: run.total_cost_usd,
+        cost_limit: budget.per_task_max_cost_usd,
+        remaining_steps: remainingSteps,
+        ...this.buildSandboxEventData(run),
+      });
+    }
+  }
+
+  private async maybeRequireBudgetConfirmation(
+    run: TaskRun,
+    budget: BudgetConfig,
+    workspacePath: string
+  ): Promise<boolean> {
+    const threshold = budget.confirm_threshold_usd ?? 0;
+    if (!(threshold > 0) || run.total_cost_usd < threshold || this.budgetConsentRequested.has(run.run_id)) {
+      return true;
+    }
+
+    this.budgetConsentRequested.add(run.run_id);
+    const remainingBudget = this.calculateRemainingBudgetUsd(run, budget);
+    const approved = await this.requestHumanReview(
+      run,
+      run.steps.at(-1)?.step_number ?? 0,
+      `Budget confirmation required: spend crossed $${threshold.toFixed(2)}.`,
+      workspacePath
+    );
+    if (!approved) {
+      run.status = "failed";
+      run.error = `Budget confirmation rejected after crossing $${threshold.toFixed(2)}.`;
+      await this.emitEvent(run.run_id, "task.failed", {
+        error: run.error,
+        reason: "budget_confirmation_rejected",
+        spent_usd: run.total_cost_usd,
+        remaining_budget_usd: remainingBudget,
+        ...this.buildSandboxEventData(run),
+      });
+      return false;
+    }
+
+    await this.emitEvent(run.run_id, "task.budget_warning", {
+      threshold_percent: null,
+      confirmation_required: true,
+      spent_usd: run.total_cost_usd,
+      remaining_budget_usd: remainingBudget,
+      ...this.buildSandboxEventData(run),
+    });
+    run.status = "executing";
+    return true;
+  }
+
+  private describeStepSequence(steps: PlanStep[]): string {
+    return steps.map((item) => `${item.agent}`).join(" -> ");
+  }
+
+  private async announceReworkPlan(
+    run: TaskRun,
+    currentStep: PlanStep,
+    reason: string,
+    reworkPlan: Pick<ExecutionPlan, "steps">,
+    currentCycle: number,
+    maxRework: number,
+    budget: BudgetConfig
+  ): Promise<void> {
+    const issueCount = reason
+      .split(";")
+      .map((item) => item.trim())
+      .filter(Boolean).length;
+    const remainingBudget = this.calculateRemainingBudgetUsd(run, budget);
+    console.log(
+      `[rework] ${currentStep.agent} triggered rework cycle ${currentCycle}/${maxRework}: ${reason}`
+    );
+    console.log(`[rework] Plan: ${this.describeStepSequence(reworkPlan.steps)}`);
+    if (remainingBudget != null) {
+      console.log(`[rework] Remaining budget: $${remainingBudget.toFixed(2)}`);
+    }
+    await this.emitEvent(run.run_id, "task.rework_planned", {
+      step: currentStep.step_number,
+      agent: currentStep.agent,
+      reason,
+      issue_count: issueCount,
+      rework_cycle: currentCycle,
+      max_rework_cycles: maxRework,
+      plan_steps: reworkPlan.steps.map((item) => ({
+        step_number: item.step_number,
+        agent: item.agent,
+        depends_on: item.depends_on,
+      })),
+      remaining_budget_usd: remainingBudget,
+      ...this.buildSandboxEventData(run),
+    });
+  }
+
+  private async runServicePreflight(): Promise<void> {
+    const result = await runPreflight(this.platformConfig, this.projectConfig);
+    const failing = result.checks.filter((check) => check.severity === "fail");
+    if (!hasFailingChecks(result)) {
+      return;
+    }
+
+    const summary = failing
+      .map((check) => `${check.label}: ${check.detail}${check.fixHint ? ` Fix: ${check.fixHint}` : ""}`)
+      .join(" | ");
+    throw new Error(`Preflight checks failed. ${summary}`);
   }
 
   private resolveNpmRegistry(workspacePath: string): string {

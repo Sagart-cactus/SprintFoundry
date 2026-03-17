@@ -39,7 +39,11 @@ export class TicketFetcher {
   private async fetchLinear(ticketId: string): Promise<TicketDetails> {
     const config = this.integrations.ticket_source.config;
     const apiKey = config.api_key;
-    if (!apiKey) throw new Error("Linear API key not configured");
+    if (!apiKey) {
+      throw new Error(
+        "Linear API key not configured. Set LINEAR_API_KEY or add integrations.ticket_source.config.api_key in your project config."
+      );
+    }
 
     const query = `
       query {
@@ -94,7 +98,9 @@ export class TicketFetcher {
     const owner = config.owner;
     const repo = config.repo;
     if (!token || !owner || !repo) {
-      throw new Error("GitHub integration not fully configured (need token, owner, repo)");
+      throw new Error(
+        "GitHub integration not fully configured (need token, owner, repo). Ensure integrations.ticket_source.config includes token, owner, and repo in your project config."
+      );
     }
 
     const resp = await fetch(
@@ -144,7 +150,9 @@ export class TicketFetcher {
     const email = config.email;
     const apiToken = config.api_token;
     if (!host || !email || !apiToken) {
-      throw new Error("Jira integration not fully configured (need host, email, api_token)");
+      throw new Error(
+        "Jira integration not fully configured (need host, email, api_token). Ensure integrations.ticket_source.config includes host, email, and api_token in your project config."
+      );
     }
 
     const auth = Buffer.from(`${email}:${apiToken}`).toString("base64");

@@ -32,7 +32,11 @@ Configured projects:
 {{- end }}
 {{- else }}
 No projects configured. Add projects to values.yaml or create project
-namespaces, secrets, and configmaps manually. See the chart README for details.
+namespaces, secrets, and configmaps manually. The default contract is:
+  namespace: <project id>
+  secret: sprintfoundry-project-<project id>-secrets
+  configmap: sprintfoundry-project-<project id>-config
+See the chart README for details.
 
 Example:
   projects:

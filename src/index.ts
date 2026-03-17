@@ -35,6 +35,13 @@ import { K8sRunSnapshotController } from "./service/k8s-run-snapshot-controller.
 import { validateAgentSandboxWholeRunHosting } from "./service/agent-sandbox-platform.js";
 import { EventSinkClient } from "./service/event-sink-client.js";
 import { EventStore } from "./service/event-store.js";
+import {
+  hasFailingChecks,
+  resolvePreflightProfile,
+  runPreflight,
+  summarizePreflight,
+  type PreflightProfile,
+} from "./service/preflight.js";
 
 const RUN_SANDBOX_MODE_ENV = "SPRINTFOUNDRY_RUN_SANDBOX_MODE";
 const WHOLE_RUN_SANDBOX_MODE = "k8s-whole-run";
@@ -43,6 +50,37 @@ const AUTO_RESUME_ENV = "SPRINTFOUNDRY_AUTO_RESUME_EXISTING_RUN";
 function isTruthy(value: string | undefined): boolean {
   const normalized = String(value ?? "").trim().toLowerCase();
   return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+function normalizeDoctorProfile(value: unknown): PreflightProfile | undefined {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "local" || normalized === "distributed" || normalized === "k8s") {
+    return normalized;
+  }
+  return undefined;
+}
+
+function formatDurationMs(durationMs: number): string {
+  const totalSeconds = Math.max(0, Math.round(durationMs / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes === 0) return `${seconds}s`;
+  return `${minutes}m ${seconds}s`;
+}
+
+function summarizeEventData(data: Record<string, unknown>): string {
+  if (typeof data.error === "string" && data.error.trim()) return data.error.trim();
+  if (typeof data.reason === "string" && data.reason.trim()) return data.reason.trim();
+  if (typeof data.agent === "string" && typeof data.step === "number") {
+    return `step ${data.step} (${data.agent})`;
+  }
+  if (typeof data.step === "number") {
+    return `step ${data.step}`;
+  }
+  if (typeof data.ticketId === "string") {
+    return data.ticketId;
+  }
+  return "";
 }
 
 function resolveEventSinkClient(
@@ -262,6 +300,7 @@ program
         `  Direct agent: ${directAgent}${directAgentWasDefaulted ? " (default)" : ""}${opts.agentFile ? ` (from ${opts.agentFile})` : ""}`
       );
     }
+    console.log("  Tip: run `sprintfoundry monitor` in another terminal to watch live progress at http://127.0.0.1:4310/");
     console.log("");
 
     let run: TaskRun;
@@ -336,14 +375,19 @@ program
   .description("Validate project configuration")
   .option("--config <dir>", "Config directory", "config")
   .option("--project <name>", "Project name (loads <name>.yaml or project-<name>.yaml)")
+  .option("--strict", "Fail when environment-backed config values resolve to empty strings")
   .action(async (opts) => {
     try {
-      const { platform, project } = await loadConfig(opts.config, opts.project);
+      const { platform, project } = await loadConfig(opts.config, opts.project, {
+        strictEnv: Boolean(opts.strict),
+      });
       await validateAgentSandboxWholeRunHosting(platform);
       const executionBackendName = resolveExecutionBackendName(platform, project);
+      const detectedProfile = resolvePreflightProfile(platform, project);
       console.log("Configuration valid.");
       console.log(`  Project: ${project.name} (${project.project_id})`);
       console.log(`  Execution backend: ${executionBackendName}`);
+      console.log(`  Run profile: ${detectedProfile}`);
       console.log(`  Repo: ${project.repo.url}`);
       if (project.stack) console.log(`  Stack: ${project.stack}`);
       if (project.agents) console.log(`  Agents: ${project.agents.join(", ")}`);
@@ -392,13 +436,22 @@ program
   });
 
 program
-  .command("resume <id>")
+  .command("resume [id]")
   .description("Resume a failed/cancelled run from the last failed step or a specific step")
+  .option("--latest", "Resume the most recent failed or cancelled run")
   .option("--step <number>", "Step number to resume from")
   .option("--prompt <text>", "Additional operator prompt for the resumed step")
   .option("--config <dir>", "Config directory", "config")
   .option("--project <name>", "Project name (loads <name>.yaml or project-<name>.yaml)")
   .action(async (id, opts) => {
+    if (!id && !opts.latest) {
+      console.error("Error: provide a run id or use --latest");
+      process.exit(1);
+    }
+    if (id && opts.latest) {
+      console.error("Error: use either a run id or --latest, not both");
+      process.exit(1);
+    }
     const step =
       opts.step !== undefined
         ? Number.parseInt(String(opts.step), 10)
@@ -413,8 +466,17 @@ program
     const registry = buildPluginRegistry(platform, project);
     const executionBackend = createExecutionBackend(platform, project);
     const service = new OrchestrationService(platform, project, registry, executionBackend);
+    const sessionManager = new SessionManager();
+    const targetRunId = opts.latest
+      ? (await sessionManager.getLatestByStatus(["failed", "cancelled"]))?.run_id
+      : String(id);
 
-    console.log(`Resuming run ${id}...`);
+    if (!targetRunId) {
+      console.error("Error: no failed or cancelled runs were found.");
+      process.exit(1);
+    }
+
+    console.log(`Resuming run ${targetRunId}...`);
     if (step !== undefined) {
       console.log(`  Resume step: ${step}`);
     }
@@ -422,7 +484,7 @@ program
       console.log("  Operator prompt: provided");
     }
 
-    const run = await service.resumeTask(id, {
+    const run = await service.resumeTask(targetRunId, {
       ...(step !== undefined ? { step } : {}),
       ...(opts.prompt ? { prompt: String(opts.prompt) } : {}),
     });
@@ -440,6 +502,43 @@ program
       console.error(`  Error: ${run.error}`);
       process.exit(1);
     }
+  });
+
+program
+  .command("logs <id>")
+  .description("Show a run event timeline from the workspace event log")
+  .action(async (id) => {
+    const mgr = new SessionManager();
+    const session = await mgr.get(String(id));
+    if (!session) {
+      console.error(`Session not found: ${id}`);
+      process.exit(1);
+    }
+    if (!session.workspace_path) {
+      console.error(`Run ${id} does not have a workspace path; logs are not available.`);
+      process.exit(1);
+    }
+
+    const eventsPath = path.join(session.workspace_path, ".events.jsonl");
+    const store = new EventStore();
+    const events = await store.loadFromFile(eventsPath).catch(() => []);
+    if (events.length === 0) {
+      console.error(`No events found at ${eventsPath}`);
+      process.exit(1);
+    }
+
+    console.log(`\n  Timeline: ${session.run_id}`);
+    console.log(`  ${"─".repeat(80)}`);
+    const startedAt = Date.parse(session.created_at);
+    for (const event of events.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())) {
+      const timestamp = event.timestamp.toISOString().slice(11, 19);
+      const elapsed = Number.isFinite(startedAt)
+        ? formatDurationMs(event.timestamp.getTime() - startedAt)
+        : "-";
+      const summary = summarizeEventData(event.data);
+      console.log(`  ${timestamp}  ${elapsed.padEnd(7)} [${event.event_type}]${summary ? ` ${summary}` : ""}`);
+    }
+    console.log("");
   });
 
 program
@@ -620,250 +719,54 @@ program
   .description("Check that all SprintFoundry system dependencies are installed and configured")
   .option("--config <dir>", "Config directory", "config")
   .option("--project <name>", "Project name (loads <name>.yaml or project-<name>.yaml)")
+  .option("--profile <profile>", "Check a specific profile: local | distributed | k8s")
   .action(async (opts) => {
-    const { execFile } = await import("child_process");
-    const os = await import("os");
-    const { promisify } = await import("util");
-    const exec = promisify(execFile);
-
-    type Severity = "pass" | "warn" | "fail";
-    type Check = { severity: Severity; label: string; detail: string };
-    const checks: Check[] = [];
-
-    const add = (severity: Severity, label: string, detail: string) => {
-      checks.push({ severity, label, detail });
-    };
-
-    const run = async (cmd: string, args: string[]): Promise<{ ok: boolean; stdout: string }> => {
+    try {
+      const { platform, project } = await loadConfig(opts.config, opts.project);
+      const profile = normalizeDoctorProfile(opts.profile) ?? resolvePreflightProfile(platform, project);
+      const result = await runPreflight(platform, project, { profile });
+      const __filename = fileURLToPath(import.meta.url);
+      const __dirname = path.dirname(__filename);
+      const monitorServerPath = path.resolve(__dirname, "../monitor/server.mjs");
+      console.log("");
+      console.log(`SprintFoundry Doctor (${result.profile})`);
+      console.log("");
+      for (const line of summarizePreflight(result)) {
+        console.log(line);
+      }
       try {
-        const { stdout } = await exec(cmd, args, { timeout: 5000 });
-        return { ok: true, stdout: stdout.trim() };
+        await fs.access(monitorServerPath);
+        console.log(`  [OK] Monitor assets       ${monitorServerPath}`);
       } catch {
-        return { ok: false, stdout: "" };
+        console.log(`  [FAIL] Monitor assets     missing ${monitorServerPath}`);
+        console.log("         Fix: reinstall SprintFoundry or rebuild the repository.");
       }
-    };
-
-    const nodeVer = process.version;
-    const nodeMajor = parseInt(nodeVer.slice(1).split(".")[0], 10);
-    if (nodeMajor >= 20) {
-      add("pass", "Node.js", `${nodeVer} (required: >=20)`);
-    } else {
-      add("fail", "Node.js", `${nodeVer} (requires >=20)`);
-    }
-
-    const gitVer = await run("git", ["--version"]);
-    add(gitVer.ok ? "pass" : "fail", "Git", gitVer.ok ? gitVer.stdout : "not found in PATH");
-
-    const npmVer = await run("npm", ["--version"]);
-    add(npmVer.ok ? "pass" : "warn", "npm", npmVer.ok ? `v${npmVer.stdout}` : "not found (needed for npm install flow)");
-
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = path.dirname(__filename);
-    const monitorServerPath = path.resolve(__dirname, "../monitor/server.mjs");
-    try {
-      await fs.access(monitorServerPath);
-      add("pass", "Monitor assets", `found ${monitorServerPath}`);
-    } catch {
-      add("fail", "Monitor assets", `missing ${monitorServerPath}`);
-    }
-
-    try {
-      const runsRoot = path.join(
-        process.env.SPRINTFOUNDRY_RUNS_ROOT || os.tmpdir(),
-        "sprintfoundry-doctor-write-test"
-      );
-      await fs.mkdir(runsRoot, { recursive: true });
-      await fs.writeFile(path.join(runsRoot, ".doctor"), "ok", "utf-8");
-      add("pass", "Runs root writable", runsRoot);
-    } catch (err) {
-      add("fail", "Runs root writable", err instanceof Error ? err.message : String(err));
-    }
-
-    let platform: PlatformConfig | null = null;
-    let project: ProjectConfig | null = null;
-    try {
-      const loaded = await loadConfig(opts.config, opts.project);
-      platform = loaded.platform;
-      project = loaded.project;
-      add("pass", "Config load", `project=${project.project_id} config_dir=${opts.config}`);
-    } catch (err) {
-      add(
-        "warn",
-        "Config load",
-        `could not load config (${err instanceof Error ? err.message : String(err)})`
-      );
-    }
-
-    const anthropicKey = process.env.SPRINTFOUNDRY_ANTHROPIC_KEY || process.env.ANTHROPIC_API_KEY;
-    const openaiKey =
-      process.env.SPRINTFOUNDRY_OPENAI_KEY ||
-      process.env.OPENAI_API_KEY ||
-      process.env.AGENTSDLC_OPENAI_KEY;
-
-    let needsClaudeCli = false;
-    let needsCodexCli = false;
-    let needsAnthropicKey = false;
-    let needsOpenaiKey = false;
-    let needsDocker = false;
-
-    const applyRuntimeNeeds = (rt: RuntimeConfig) => {
-      if (rt.provider === "claude-code") {
-        if (rt.mode === "local_process") needsClaudeCli = true;
-        if (rt.mode === "local_sdk") needsAnthropicKey = true;
-      } else if (rt.provider === "codex") {
-        if (rt.mode === "local_process") needsCodexCli = true;
-        if (rt.mode === "local_sdk") needsOpenaiKey = true;
+      console.log("");
+      if (hasFailingChecks(result)) {
+        console.log("  Found failing checks. Fix these before running.\n");
+        process.exit(1);
       }
-    };
-
-    if (platform && project) {
-      const executionBackendName = resolveExecutionBackendName(platform, project);
-      if (executionBackendName === "docker") {
-        needsDocker = true;
-      }
-      const byAgent = platform.defaults.runtime_per_agent ?? {};
-      const agentRoleById = new Map(
-        platform.agent_definitions.map((a) => [a.type, a.role] as const)
-      );
-      const fallbackRuntime: RuntimeConfig = {
-        provider: "claude-code",
-        mode: "local_process",
-      };
-
-      const resolveRuntime = (agentId: string): RuntimeConfig => {
-        return (
-          project!.runtime_overrides?.[agentId] ??
-          byAgent[agentId] ??
-          byAgent[agentRoleById.get(agentId) ?? ""] ??
-          fallbackRuntime
-        );
-      };
-
-      const configuredAgents =
-        project.agents && project.agents.length > 0
-          ? project.agents
-          : platform.agent_definitions.map((a) => a.type);
-
-      for (const agentId of configuredAgents) {
-        applyRuntimeNeeds(resolveRuntime(agentId));
-      }
-
-      applyRuntimeNeeds(
-        project.planner_runtime_override ??
-        platform.defaults.planner_runtime ?? {
-          provider: "claude-code",
-          mode: "local_process",
-        }
-      );
-
-      const ticketType = project.integrations?.ticket_source?.type;
-      if (ticketType === "github" && !process.env.GITHUB_TOKEN && !project.repo.token) {
-        add(
-          "warn",
-          "GitHub auth",
-          "ticket source is github but GITHUB_TOKEN/repo.token is not set"
-        );
-      }
-    } else {
-      // Conservative defaults when config cannot be loaded.
-      needsClaudeCli = true;
-      needsAnthropicKey = true;
-    }
-
-    if (needsClaudeCli) {
-      const claudeVer = await run("claude", ["--version"]);
-      add(
-        claudeVer.ok ? "pass" : "fail",
-        "Claude CLI",
-        claudeVer.ok ? claudeVer.stdout : "required by runtime but not found in PATH"
-      );
-    } else {
-      add("pass", "Claude CLI", "not required by current runtime config");
-    }
-
-    if (needsCodexCli) {
-      const codexVer = await run("codex", ["--version"]);
-      add(
-        codexVer.ok ? "pass" : "fail",
-        "Codex CLI",
-        codexVer.ok ? codexVer.stdout : "required by runtime but not found in PATH"
-      );
-    } else {
-      add("pass", "Codex CLI", "not required by current runtime config");
-    }
-
-    if (needsDocker) {
-      const dockerBin = await run("docker", ["--version"]);
-      if (!dockerBin.ok) {
-        add("fail", "Docker", "required by docker execution backend but docker is not installed");
-      } else {
-        const dockerDaemon = await run("docker", ["info", "--format", "{{.ServerVersion}}"]);
-        add(
-          dockerDaemon.ok ? "pass" : "fail",
-          "Docker daemon",
-          dockerDaemon.ok
-            ? `running (server ${dockerDaemon.stdout})`
-            : "docker installed but daemon is not reachable"
-        );
-      }
-    } else {
-      const dockerBin = await run("docker", ["--version"]);
-      add(
-        dockerBin.ok ? "pass" : "warn",
-        "Docker",
-        dockerBin.ok ? "installed (optional for current config)" : "not installed (optional)"
-      );
-    }
-
-    if (needsAnthropicKey) {
-      add(
-        anthropicKey ? "pass" : "fail",
-        "Anthropic key",
-        anthropicKey
-          ? "set (SPRINTFOUNDRY_ANTHROPIC_KEY/ANTHROPIC_API_KEY)"
-          : "missing but required for claude-code runtime"
-      );
-    } else {
-      add("pass", "Anthropic key", anthropicKey ? "set" : "not required by current runtime config");
-    }
-
-    if (needsOpenaiKey) {
-      add(
-        openaiKey ? "pass" : "fail",
-        "OpenAI key",
-        openaiKey
-          ? "set (SPRINTFOUNDRY_OPENAI_KEY/OPENAI_API_KEY)"
-          : "missing but required for codex runtime"
-      );
-    } else {
-      add("pass", "OpenAI key", openaiKey ? "set" : "not required by current runtime config");
-    }
-
-    console.log("\nSprintFoundry Doctor\n");
-    let failed = 0;
-    let warned = 0;
-    for (const c of checks) {
-      const icon =
-        c.severity === "pass" ? "[OK]" : c.severity === "warn" ? "[WARN]" : "[FAIL]";
-      const label = c.label.padEnd(20);
-      console.log(`  ${icon} ${label} ${c.detail}`);
-      if (c.severity === "fail") failed += 1;
-      if (c.severity === "warn") warned += 1;
-    }
-    console.log("");
-    if (failed === 0) {
-      if (warned > 0) {
-        console.log(`  Completed with ${warned} warning(s).\n`);
+      const warningCount = result.checks.filter((check) => check.severity === "warn").length;
+      if (warningCount > 0) {
+        console.log(`  Completed with ${warningCount} warning(s).\n`);
       } else {
         console.log("  All checks passed.\n");
       }
-    } else {
-      console.log(`  Found ${failed} failing check(s). Fix these before running.\n`);
+    } catch (error) {
+      console.error(`Doctor failed: ${error instanceof Error ? error.message : String(error)}`);
       process.exit(1);
     }
   });
 
 const projectCmd = new Command("project").description("Project management commands");
+
+program
+  .command("init")
+  .description("Guided SprintFoundry setup")
+  .option("--config <dir>", "Config directory", "config")
+  .action(async (opts) => {
+    await runProjectCreate(opts.config);
+  });
 
 projectCmd
   .command("create")
@@ -964,6 +867,9 @@ program
     console.log(`  Steps:          ${session.current_step}/${session.total_steps}`);
     console.log(`  Tokens:         ${session.total_tokens.toLocaleString()}`);
     console.log(`  Cost:           $${session.total_cost_usd.toFixed(2)}`);
+    if (session.terminal_workflow_state) {
+      console.log(`  Terminal flow:  ${session.terminal_workflow_state}`);
+    }
     if (session.workspace_path) {
       console.log(`  Workspace:      ${session.workspace_path}`);
     }
@@ -980,6 +886,9 @@ program
     }
     if (session.error) {
       console.log(`  Error:          ${session.error}`);
+    }
+    if (session.durable_snapshot?.manifest_key) {
+      console.log(`  Snapshot:       ${session.durable_snapshot.manifest_key}`);
     }
 
     if (opts.activity && session.workspace_path) {

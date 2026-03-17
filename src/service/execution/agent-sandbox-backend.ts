@@ -192,6 +192,7 @@ export class AgentSandboxExecutionBackend implements ExecutionBackend {
       },
       waitForSandboxBinding: async (namespace, claimName) => {
         const deadline = Date.now() + 60_000;
+        let lastLoggedSeconds = -1;
         while (Date.now() < deadline) {
           const result = await customObjectsApi.getNamespacedCustomObject({
             group: apiGroup,
@@ -220,9 +221,18 @@ export class AgentSandboxExecutionBackend implements ExecutionBackend {
               return { sandboxName };
             }
           }
+          const elapsedSeconds = Math.floor((60_000 - (deadline - Date.now())) / 1000);
+          if (elapsedSeconds >= 0 && elapsedSeconds % 10 === 0 && elapsedSeconds !== lastLoggedSeconds) {
+            lastLoggedSeconds = elapsedSeconds;
+            console.log(
+              `[sandbox] Waiting for SandboxClaim '${claimName}' to bind... (${elapsedSeconds}s elapsed)`
+            );
+          }
           await new Promise((resolve) => setTimeout(resolve, 1_000));
         }
-        return {};
+        throw new Error(
+          `SandboxClaim '${claimName}' failed to bind after 60s. Check that the Agent Sandbox controller is running and required CRDs are installed.`
+        );
       },
       deleteSandboxClaim: async (namespace, claimName) => {
         try {

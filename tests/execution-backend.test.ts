@@ -18,6 +18,7 @@ class TestExecutionBackend implements ExecutionBackend {
       project_id: run.project_id,
       sandbox_id: "sandbox-test",
       execution_backend: "test",
+      hosting_mode: "local",
       workspace_path: workspacePath,
       checkpoint_generation: 0,
       metadata: {},

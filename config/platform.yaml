@@ -40,6 +40,7 @@ defaults:
     per_agent_tokens: 500000       # 500K tokens max per single agent run
     per_task_total_tokens: 3000000 # 3M tokens max across all agents for one task
     per_task_max_cost_usd: 25.00   # $25 hard cap per task
+    confirm_threshold_usd: 0       # optional human gate once spend crosses this threshold
 
   timeouts:
     agent_timeout_minutes: 30      # single agent max

@@ -282,6 +282,17 @@ describe("SessionManager", () => {
     expect(sessions).toEqual([]);
   });
 
+  it("returns the latest failed or cancelled session by status", async () => {
+    const mgr = new SessionManager(testDir);
+    await mgr.persist(makeRun({ run_id: "run-pass", status: "completed" }));
+    await mgr.persist(makeRun({ run_id: "run-failed-old", status: "failed" }));
+    await mgr.persist(makeRun({ run_id: "run-cancelled-new", status: "cancelled" }));
+
+    const latest = await mgr.getLatestByStatus(["failed", "cancelled"]);
+
+    expect(latest?.run_id).toBe("run-cancelled-new");
+  });
+
   it("archives a session", async () => {
     const mgr = new SessionManager(testDir);
     const run = makeRun({ run_id: "run-archive" });

@@ -496,6 +496,7 @@ describe("AgentRunner", () => {
       project_id: makeProjectConfig().project_id,
       sandbox_id: "sandbox-123",
       execution_backend: "mock",
+      hosting_mode: "local",
       workspace_path: "/tmp/test-workspace",
       checkpoint_generation: 0,
       metadata: {},
