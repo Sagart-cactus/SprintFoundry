@@ -468,11 +468,11 @@ program
     const service = new OrchestrationService(platform, project, registry, executionBackend);
     const sessionManager = new SessionManager();
     const targetRunId = opts.latest
-      ? (await sessionManager.getLatestByStatus(["failed", "cancelled"]))?.run_id
+      ? (await sessionManager.getLatestByStatus(["failed", "cancelled"], { projectId: project.project_id }))?.run_id
       : String(id);
 
     if (!targetRunId) {
-      console.error("Error: no failed or cancelled runs were found.");
+      console.error(`Error: no failed or cancelled runs were found for project ${project.project_id}.`);
       process.exit(1);
     }
 

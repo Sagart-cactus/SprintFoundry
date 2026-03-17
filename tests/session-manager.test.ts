@@ -293,6 +293,17 @@ describe("SessionManager", () => {
     expect(latest?.run_id).toBe("run-cancelled-new");
   });
 
+  it("filters the latest failed or cancelled session by project id when requested", async () => {
+    const mgr = new SessionManager(testDir);
+    await mgr.persist(makeRun({ run_id: "run-other-project", status: "cancelled", project_id: "other-project" }));
+    await mgr.persist(makeRun({ run_id: "run-this-project", status: "failed", project_id: "test-project" }));
+
+    const latest = await mgr.getLatestByStatus(["failed", "cancelled"], { projectId: "test-project" });
+
+    expect(latest?.run_id).toBe("run-this-project");
+    expect(latest?.project_id).toBe("test-project");
+  });
+
   it("archives a session", async () => {
     const mgr = new SessionManager(testDir);
     const run = makeRun({ run_id: "run-archive" });

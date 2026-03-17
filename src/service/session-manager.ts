@@ -133,9 +133,16 @@ export class SessionManager {
     }
   }
 
-  async getLatestByStatus(statuses: RunStatus[]): Promise<RunSessionMetadata | null> {
+  async getLatestByStatus(
+    statuses: RunStatus[],
+    options?: { projectId?: string }
+  ): Promise<RunSessionMetadata | null> {
     const sessions = await this.list();
-    return sessions.find((session) => statuses.includes(session.status)) ?? null;
+    return sessions.find(
+      (session) =>
+        statuses.includes(session.status) &&
+        (!options?.projectId || session.project_id === options.projectId)
+    ) ?? null;
   }
 
   /**
