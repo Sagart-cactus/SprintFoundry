@@ -515,7 +515,10 @@ export class OrchestrationService {
 
     try {
       if (!opts?.dryRun) {
-        await this.runServicePreflight();
+        await this.runServicePreflight({
+          includePlanner: !opts?.agent,
+          agentIds: opts?.agent ? [opts.agent] : undefined,
+        });
       }
 
       // 2. Fetch ticket details (or create from prompt)
@@ -1913,8 +1916,8 @@ export class OrchestrationService {
     });
   }
 
-  private async runServicePreflight(): Promise<void> {
-    const result = await runPreflight(this.platformConfig, this.projectConfig);
+  private async runServicePreflight(options?: { includePlanner?: boolean; agentIds?: string[] }): Promise<void> {
+    const result = await runPreflight(this.platformConfig, this.projectConfig, options);
     const failing = result.checks.filter((check) => check.severity === "fail");
     if (!hasFailingChecks(result)) {
       return;

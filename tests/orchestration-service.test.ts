@@ -536,6 +536,28 @@ describe("OrchestrationService", () => {
     expect(mockAgentRunner.run).not.toHaveBeenCalled();
   });
 
+  it("limits preflight to the direct agent runtime and skips planner requirements for direct runs", async () => {
+    const preflightSpy = vi.spyOn(service as any, "runServicePreflight").mockResolvedValue(undefined);
+    mockAgentRunner.run.mockResolvedValue({
+      agentResult: makeResult(),
+      tokens_used: 100,
+      cost_usd: 0.01,
+      duration_seconds: 5,
+      container_id: "local-1",
+    });
+
+    const run = await service.handleTask("prompt-1", "prompt", "Create a file", {
+      agent: "developer",
+    });
+
+    expect(preflightSpy).toHaveBeenCalledWith({
+      includePlanner: false,
+      agentIds: ["developer"],
+    });
+    expect(mockOrchestratorAgent.generatePlan).not.toHaveBeenCalled();
+    expect(run.status).toBe("completed");
+  });
+
   it("handleTask with source=prompt creates ticket from prompt text", async () => {
     const plan = makeDevQaPlan();
     mockOrchestratorAgent.generatePlan.mockResolvedValue(plan);

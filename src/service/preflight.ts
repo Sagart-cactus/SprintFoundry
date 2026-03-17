@@ -67,7 +67,11 @@ export function resolvePreflightProfile(
   return "local";
 }
 
-function collectRuntimeRequirements(platform: PlatformConfig, project: ProjectConfig) {
+function collectRuntimeRequirements(
+  platform: PlatformConfig,
+  project: ProjectConfig,
+  options?: { includePlanner?: boolean; agentIds?: string[] }
+) {
   const executionBackendName = resolveExecutionBackendName(platform, project);
   const byAgent = platform.defaults.runtime_per_agent ?? {};
   const fallbackRuntime: RuntimeConfig = { provider: "claude-code", mode: "local_process" };
@@ -80,9 +84,11 @@ function collectRuntimeRequirements(platform: PlatformConfig, project: ProjectCo
     fallbackRuntime;
 
   const configuredAgents =
-    project.agents && project.agents.length > 0
-      ? project.agents
-      : platform.agent_definitions.map((a) => a.type);
+    options?.agentIds && options.agentIds.length > 0
+      ? options.agentIds
+      : project.agents && project.agents.length > 0
+        ? project.agents
+        : platform.agent_definitions.map((a) => a.type);
 
   let needsClaudeCli = false;
   let needsCodexCli = false;
@@ -104,13 +110,15 @@ function collectRuntimeRequirements(platform: PlatformConfig, project: ProjectCo
     applyRuntimeNeeds(resolveRuntime(agentId));
   }
 
-  applyRuntimeNeeds(
-    project.planner_runtime_override ??
-      platform.defaults.planner_runtime ?? {
-        provider: "claude-code",
-        mode: "local_process",
-      }
-  );
+  if (options?.includePlanner !== false) {
+    applyRuntimeNeeds(
+      project.planner_runtime_override ??
+        platform.defaults.planner_runtime ?? {
+          provider: "claude-code",
+          mode: "local_process",
+        }
+    );
+  }
 
   return {
     executionBackendName,
@@ -135,7 +143,7 @@ function add(
 export async function runPreflight(
   platform: PlatformConfig,
   project: ProjectConfig,
-  options?: { profile?: PreflightProfile }
+  options?: { profile?: PreflightProfile; includePlanner?: boolean; agentIds?: string[] }
 ): Promise<PreflightResult> {
   const profile = options?.profile ?? resolvePreflightProfile(platform, project);
   const checks: PreflightCheck[] = [];
@@ -182,7 +190,7 @@ export async function runPreflight(
     "Verify repo.url auth (token or SSH key) and that the default branch exists."
   );
 
-  const requirements = collectRuntimeRequirements(platform, project);
+  const requirements = collectRuntimeRequirements(platform, project, options);
   const anthropicKey = process.env.SPRINTFOUNDRY_ANTHROPIC_KEY || process.env.ANTHROPIC_API_KEY || project.api_keys.anthropic;
   const openaiKey = process.env.SPRINTFOUNDRY_OPENAI_KEY || process.env.OPENAI_API_KEY || project.api_keys.openai;
 
