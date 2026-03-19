@@ -169,6 +169,53 @@ describe("AgentRunner", () => {
     expect(parsed.summary).toContain("did not produce a result file");
   });
 
+  it("readAgentResult recovers a missing result file from Codex stdout patch output", async () => {
+    const workspacePath = path.join(tmpDir, "workspace-recover-result");
+    await fs.mkdir(workspacePath, { recursive: true });
+    await fs.writeFile(
+      path.join(workspacePath, ".codex-runtime.step-1.attempt-1.stdout.log"),
+      [
+        JSON.stringify({ type: "thread.started", thread_id: "thread-1" }),
+        JSON.stringify({
+          type: "item.completed",
+          item: {
+            id: "msg-1",
+            type: "agent_message",
+            text: [
+              "Applied the requested changes directly.",
+              "",
+              "*** Begin Patch",
+              "*** Add File: kind-workflow-smoke.txt",
+              "+linear workflow kind smoke",
+              "*** Add File: .agent-result.json",
+              "+{",
+              "+  \"status\": \"complete\",",
+              "+  \"summary\": \"Added the smoke artifact\",",
+              "+  \"artifacts_created\": [\"kind-workflow-smoke.txt\"],",
+              "+  \"artifacts_modified\": [],",
+              "+  \"issues\": [],",
+              "+  \"metadata\": {}",
+              "+}",
+              "*** End Patch",
+            ].join("\n"),
+          },
+        }),
+        JSON.stringify({ type: "turn.completed", usage: { input_tokens: 1, output_tokens: 1 } }),
+      ].join("\n"),
+      "utf-8"
+    );
+
+    const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig());
+    const parsed = await (runner as any).readAgentResult(workspacePath);
+
+    expect(parsed.status).toBe("complete");
+    expect(parsed.summary).toBe("Added the smoke artifact");
+    expect(parsed.metadata).toMatchObject({ recovered_from_codex_output: true });
+    await expect(
+      fs.readFile(path.join(workspacePath, "kind-workflow-smoke.txt"), "utf-8")
+    ).resolves.toBe("linear workflow kind smoke\n");
+  });
+
   it("readAgentResult returns failure stub for invalid JSON", async () => {
     const workspacePath = path.join(tmpDir, "workspace-invalid");
     await fs.mkdir(workspacePath, { recursive: true });

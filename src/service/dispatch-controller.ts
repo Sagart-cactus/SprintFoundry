@@ -6,7 +6,7 @@ import { execFile } from "node:child_process";
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
 import { parse as parseYaml } from "yaml";
-import type { PlatformConfig, TaskSource } from "../shared/types.js";
+import type { PlatformConfig, TaskSource, TicketWorkflowStage } from "../shared/types.js";
 import {
   DEFAULT_AGENT_SANDBOX_API_GROUP,
   DEFAULT_AGENT_SANDBOX_API_VERSION,
@@ -28,6 +28,12 @@ import {
   type LinearAutoexecuteConfig,
 } from "./webhook-handler.js";
 import { describeProjectK8sContract } from "./k8s-project-contract.js";
+import { extractTicketIdFromBranch } from "./branch-strategy.js";
+import {
+  normalizeTicketWorkflowConfig,
+  resolveWorkflowStageForLinearTicket,
+  type NormalizedTicketWorkflowConfig,
+} from "./ticket-workflow.js";
 
 const require = createRequire(import.meta.url);
 const RUN_SANDBOX_MODE_ENV = "SPRINTFOUNDRY_RUN_SANDBOX_MODE";
@@ -116,6 +122,9 @@ export interface DispatchQueueItem {
   ticket_id: string;
   prompt?: string;
   agent?: string;
+  workflow_stage?: TicketWorkflowStage;
+  workflow_branch?: string;
+  workflow_pr_url?: string;
   trigger_source?: string;
   metadata?: Record<string, unknown>;
   created_at: string;
@@ -159,7 +168,7 @@ export interface K8sJobManifest {
               }
           >;
           envFrom: Array<{ secretRef: { name: string } }>;
-          volumeMounts: Array<{ name: string; mountPath: string; readOnly?: boolean }>;
+          volumeMounts: Array<{ name: string; mountPath: string; readOnly?: boolean; subPath?: string }>;
           resources: {
             requests: { cpu: string; memory: string };
             limits: { cpu: string; memory: string };
@@ -228,7 +237,7 @@ export interface SandboxTemplateManifest {
               }
           >;
           envFrom: Array<{ secretRef: { name: string } }>;
-          volumeMounts: Array<{ name: string; mountPath: string; readOnly?: boolean }>;
+          volumeMounts: Array<{ name: string; mountPath: string; readOnly?: boolean; subPath?: string }>;
           resources: {
             requests: { cpu: string; memory: string };
             limits: { cpu: string; memory: string };
@@ -283,6 +292,12 @@ interface DispatchProjectConfig {
   maxConcurrentRuns: number;
   validConfig: boolean;
   eventSinkUrl?: string;
+  workflow?: NormalizedTicketWorkflowConfig | null;
+  branchPrefix?: string;
+  linearSource?: {
+    api_key?: string;
+    api_url?: string;
+  };
   github?: {
     owner: string;
     repo: string;
@@ -450,6 +465,21 @@ function normalizeTicketId(source: TaskSource, body: Record<string, unknown>): s
   return ticketId || null;
 }
 
+function resolveLinearPayloadStateName(payload: Record<string, unknown>): string {
+  const data = isRecord(payload.data) ? payload.data : {};
+  const issue = isRecord(data.issue) ? data.issue : {};
+  const state = isRecord(data.state) ? data.state : {};
+  const issueState = isRecord(issue.state) ? issue.state : {};
+  return asString(
+    data.stateName ||
+    state.name ||
+    data.state ||
+    issueState.name ||
+    issue.state ||
+    "",
+  );
+}
+
 function generateRunId(idGenerator: () => string): string {
   return `run-${Date.now()}-${idGenerator()}`;
 }
@@ -550,6 +580,15 @@ async function defaultLocalRunExecutor(task: DispatchQueueItem, configDir: strin
   if (task.agent) {
     cliArgs.push("--agent", task.agent);
   }
+  if (task.workflow_stage) {
+    cliArgs.push("--workflow-stage", task.workflow_stage);
+  }
+  if (task.workflow_branch) {
+    cliArgs.push("--workflow-branch", task.workflow_branch);
+  }
+  if (task.workflow_pr_url) {
+    cliArgs.push("--workflow-pr-url", task.workflow_pr_url);
+  }
 
   const runningFromJsEntrypoint = process.argv[1]?.endsWith(".js");
   const command = runningFromJsEntrypoint ? process.execPath : "pnpm";
@@ -573,7 +612,7 @@ async function defaultLocalRunExecutor(task: DispatchQueueItem, configDir: strin
 }
 
 function buildWholeRunRunnerArgs(task: DispatchQueueItem): string[] {
-  const args = ["run", "--source", task.source, "--config", "/config"];
+  const args = ["run", "--source", task.source, "--config", "/opt/sprintfoundry/config"];
 
   if (task.source === "prompt") {
     if (task.prompt) {
@@ -591,7 +630,22 @@ function buildWholeRunRunnerArgs(task: DispatchQueueItem): string[] {
     args.push("--agent", task.agent);
   }
 
+  if (task.workflow_stage) {
+    args.push("--workflow-stage", task.workflow_stage);
+  }
+  if (task.workflow_branch) {
+    args.push("--workflow-branch", task.workflow_branch);
+  }
+  if (task.workflow_pr_url) {
+    args.push("--workflow-pr-url", task.workflow_pr_url);
+  }
+
   return args;
+}
+
+function buildMountedProjectConfigPath(task: DispatchQueueItem): string {
+  const projectName = asString(task.project_arg) || task.project_id;
+  return `/opt/sprintfoundry/config/project-${projectName}.yaml`;
 }
 
 function buildWholeRunRunnerEnv(
@@ -671,6 +725,7 @@ function buildWholeRunRunnerPodSpec(
   const projectConfigMapName = asString(options?.projectConfigMapName) || `sprintfoundry-project-${task.project_id}-config`;
   const workspacePvcName = makeRunWorkspacePvcName(task.run_id);
   const eventSinkUrl = asString(options?.eventSinkUrl) || asString(process.env[EVENT_SINK_URL_ENV]);
+  const mountedProjectConfigPath = buildMountedProjectConfigPath(task);
   const args = buildWholeRunRunnerArgs(task);
   const env = buildWholeRunRunnerEnv(task, {
     projectSecretName,
@@ -691,7 +746,12 @@ function buildWholeRunRunnerPodSpec(
         env,
         envFrom: [{ secretRef: { name: projectSecretName } }],
         volumeMounts: [
-          { name: "project-config", mountPath: "/config", readOnly: true },
+          {
+            name: "project-config",
+            mountPath: mountedProjectConfigPath,
+            subPath: "project.yaml",
+            readOnly: true,
+          },
           { name: "workspace", mountPath: "/workspace" },
         ],
         resources: {
@@ -1373,8 +1433,13 @@ class DispatchController implements DispatchControllerRuntime {
 
       const integrations = isRecord(rawProject.integrations) ? rawProject.integrations : {};
       const ticketSource = isRecord(integrations.ticket_source) ? integrations.ticket_source : {};
+      const scmIntegration = isRecord(integrations.scm) ? integrations.scm : {};
       const sourceType = asString(ticketSource.type);
       const ticketSourceConfig = isRecord(ticketSource.config) ? ticketSource.config : {};
+      const scmType = asString(scmIntegration.type);
+      const scmConfig = isRecord(scmIntegration.config) ? scmIntegration.config : {};
+      const workflow = normalizeTicketWorkflowConfig(rawProject.ticket_workflow as any);
+      const branchStrategy = isRecord(rawProject.branch_strategy) ? rawProject.branch_strategy : {};
 
       const cfg: DispatchProjectConfig = {
         fileName,
@@ -1383,11 +1448,19 @@ class DispatchController implements DispatchControllerRuntime {
         maxConcurrentRuns: resolveProjectConcurrentLimit(rawProject, this.defaultMaxConcurrentRuns),
         validConfig: isValidProjectConfig(rawProject),
         eventSinkUrl: asString((isRecord(integrations.event_sink) ? integrations.event_sink.url : undefined) ?? ""),
+        workflow,
+        branchPrefix: asString(branchStrategy.prefix),
+        linearSource: sourceType === "linear"
+          ? {
+              api_key: asString(ticketSourceConfig.api_key),
+              api_url: asString(ticketSourceConfig.api_url),
+            }
+          : undefined,
       };
 
-      if (sourceType === "github") {
-        const owner = toLower(ticketSourceConfig.owner);
-        const repo = toLower(ticketSourceConfig.repo);
+      if (sourceType === "github" || scmType === "github") {
+        const owner = toLower(sourceType === "github" ? ticketSourceConfig.owner : scmConfig.owner);
+        const repo = toLower(sourceType === "github" ? ticketSourceConfig.repo : scmConfig.repo);
         const autoCfg = normalizeGitHubAutoexecuteConfig(rawProject);
         if (owner && repo && autoCfg.enabled) {
           cfg.github = { owner, repo, autoCfg };
@@ -1466,6 +1539,84 @@ class DispatchController implements DispatchControllerRuntime {
     return created !== "OK";
   }
 
+  private buildLinearWorkflowTask(
+    project: DispatchProjectConfig,
+    payload: Record<string, unknown>,
+    ticketId: string
+  ): DispatchQueueItem | null {
+    if (!project.workflow) return null;
+
+    const stateName = resolveLinearPayloadStateName(payload);
+    const stage = resolveWorkflowStageForLinearTicket(
+      {
+        id: ticketId,
+        source: "linear",
+        title: ticketId,
+        description: "",
+        state: stateName,
+        labels: [],
+        priority: "p2",
+        acceptance_criteria: [],
+        linked_tickets: [],
+        comments: [],
+        author: "workflow",
+        raw: {},
+      },
+      project.workflow,
+    ) ?? (asString(payload.action) === "create" ? "developer" : null);
+    if (!stage) return null;
+
+    return {
+      run_id: generateRunId(this.idGenerator),
+      project_id: project.projectId,
+      project_arg: project.projectArg,
+      source: "linear",
+      ticket_id: ticketId,
+      agent: project.workflow.agents[stage],
+      workflow_stage: stage,
+      trigger_source: "linear_webhook",
+      metadata: {
+        type: asString(payload.type),
+        action: asString(payload.action),
+        state: stateName,
+      },
+      created_at: new Date(this.now()).toISOString(),
+    };
+  }
+
+  private buildGitHubWorkflowTask(
+    project: DispatchProjectConfig,
+    payload: Record<string, unknown>
+  ): DispatchQueueItem | null {
+    if (!project.workflow) return null;
+    const pullRequest = isRecord(payload.pull_request) ? payload.pull_request : {};
+    const head = isRecord(pullRequest.head) ? pullRequest.head : {};
+    const branch = asString(head.ref);
+    const prUrl = asString(pullRequest.html_url);
+    const ticketId = extractTicketIdFromBranch(branch);
+    if (!ticketId) return null;
+
+    return {
+      run_id: generateRunId(this.idGenerator),
+      project_id: project.projectId,
+      project_arg: project.projectArg,
+      source: "linear",
+      ticket_id: ticketId,
+      agent: project.workflow.agents.merge,
+      workflow_stage: "merge",
+      workflow_branch: branch,
+      workflow_pr_url: prUrl || undefined,
+      trigger_source: "github_webhook",
+      metadata: {
+        event: "pull_request",
+        action: asString(payload.action),
+        branch,
+        pr_url: prUrl,
+      },
+      created_at: new Date(this.now()).toISOString(),
+    };
+  }
+
   private async enqueueInternal(task: DispatchQueueItem): Promise<void> {
     await this.redis.lPush(queueKey(task.project_id), JSON.stringify(task));
   }
@@ -1528,6 +1679,10 @@ class DispatchController implements DispatchControllerRuntime {
         claimPlural: this.agentSandboxWholeRunConfig.claimPlural,
       });
       await this.createSandboxHost({ workspacePvc, template, claim }, task, namespace);
+      // Whole-run sandboxes continue independently of the controller process.
+      // Release the dispatch slot after host creation so queued work is not
+      // blocked until the active-run TTL expires.
+      await this.releaseProjectSlot(task.project_id, task.run_id);
       return;
     }
 
@@ -1617,6 +1772,9 @@ class DispatchController implements DispatchControllerRuntime {
       ticket_id: ticketId,
       prompt: asString(body.prompt) || undefined,
       agent: asString(body.agent) || undefined,
+      workflow_stage: (asString(body.workflow_stage) as TicketWorkflowStage) || undefined,
+      workflow_branch: asString(body.workflow_branch) || undefined,
+      workflow_pr_url: asString(body.workflow_pr_url) || undefined,
       trigger_source: "api_dispatch",
       created_at: new Date(this.now()).toISOString(),
     };
@@ -1665,6 +1823,60 @@ class DispatchController implements DispatchControllerRuntime {
     }
 
     const action = asString(payload.action);
+    if (matched.workflow && event === "pull_request") {
+      const normalizedEvent = `${event}.${action}`;
+      if (!autoCfg.allowedEvents.has(normalizedEvent)) {
+        res.status(202).json({
+          accepted: false,
+          ignored: true,
+          reason: `event_not_allowed:${normalizedEvent}`,
+          project_id: matched.projectId,
+        });
+        return;
+      }
+
+      const task = this.buildGitHubWorkflowTask(matched, payload);
+      if (!task) {
+        res.status(202).json({
+          accepted: false,
+          ignored: true,
+          reason: "workflow_task_not_resolved",
+          project_id: matched.projectId,
+        });
+        return;
+      }
+
+      const pullRequest = isRecord(payload.pull_request) ? payload.pull_request : {};
+      const fallbackDelivery =
+        `${matched.projectId}:${event}:${action}:${task.ticket_id}:${asString(pullRequest.updated_at)}`;
+      const deliveryKey = delivery || fallbackDelivery;
+      const dedupeTtl = Math.max(60, Math.floor(autoCfg.dedupeWindowMinutes * 60) || this.dedupeTtlSeconds);
+
+      if (await this.shouldDedupe(matched.projectId, deliveryKey, dedupeTtl)) {
+        res.status(202).json({
+          accepted: false,
+          ignored: true,
+          reason: "duplicate_event",
+          project_id: matched.projectId,
+          ticket_id: task.ticket_id,
+        });
+        return;
+      }
+
+      await this.enqueueInternal(task);
+      const depth = await this.redis.lLen(queueKey(task.project_id));
+
+      res.status(202).json({
+        accepted: true,
+        queued: true,
+        queue_depth: depth,
+        project_id: task.project_id,
+        ticket_id: task.ticket_id,
+        workflow_stage: task.workflow_stage,
+      });
+      return;
+    }
+
     const trigger = extractGitHubTrigger(payload, event, action, autoCfg);
     if (!trigger.allowed || !trigger.ticketId) {
       res.status(202).json({
@@ -1792,20 +2004,33 @@ class DispatchController implements DispatchControllerRuntime {
       return;
     }
 
-    const task: DispatchQueueItem = {
-      run_id: generateRunId(this.idGenerator),
-      project_id: matched.projectId,
-      project_arg: matched.projectArg,
-      source: "linear",
-      ticket_id: trigger.ticketId,
-      trigger_source: "linear_webhook",
-      metadata: {
-        type: asString(payload.type),
-        action: asString(payload.action),
-        delivery,
-      },
-      created_at: new Date(this.now()).toISOString(),
-    };
+    const task = matched.workflow
+      ? this.buildLinearWorkflowTask(matched, payload, trigger.ticketId)
+      : {
+          run_id: generateRunId(this.idGenerator),
+          project_id: matched.projectId,
+          project_arg: matched.projectArg,
+          source: "linear" as const,
+          ticket_id: trigger.ticketId,
+          trigger_source: "linear_webhook",
+          metadata: {
+            type: asString(payload.type),
+            action: asString(payload.action),
+            delivery,
+          },
+          created_at: new Date(this.now()).toISOString(),
+        };
+
+    if (!task) {
+      res.status(202).json({
+        accepted: false,
+        ignored: true,
+        reason: "workflow_task_not_resolved",
+        project_id: matched.projectId,
+        ticket_id: trigger.ticketId,
+      });
+      return;
+    }
 
     await this.enqueueInternal(task);
     const depth = await this.redis.lLen(queueKey(task.project_id));

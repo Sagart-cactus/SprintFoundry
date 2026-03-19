@@ -20,6 +20,9 @@ defaults:
     developer:
       provider: anthropic
       model: claude-sonnet-4-5-20250929
+    merge-bot:
+      provider: anthropic
+      model: claude-sonnet-4-5-20250929
     qa:
       provider: anthropic
       model: claude-sonnet-4-5-20250929
@@ -79,6 +82,9 @@ defaults:
       provider: claude-code
       mode: local_process
     developer:
+      provider: claude-code
+      mode: local_process
+    merge-bot:
       provider: claude-code
       mode: local_process
     qa:
@@ -158,6 +164,8 @@ k8s:
       fqdn_allowlist:
         - github.com
         - api.github.com
+        - api.linear.app
+        - linear.app
         - registry.npmjs.org
         - ghcr.io
       cidr_allowlist: []
@@ -422,6 +430,26 @@ agent_definitions:
       - ticket_details
       - relevant source files
       - architecture docs (if available)
+
+  - type: merge-bot
+    name: Merge Bot
+    role: developer
+    description: >
+      Resolves merge blockers on an existing branch or pull request,
+      runs a basic smoke test, and completes the merge when the PR is ready.
+      Use for workflow-driven merge stages after QA has opened the PR.
+    container_image: sprintfoundry/agent-developer:latest
+    capabilities:
+      - Resolve merge conflicts with minimal edits
+      - Update the branch with the latest default-branch changes
+      - Run targeted smoke validation before merge
+      - Merge a ready PR through the configured SCM integration
+    output_artifacts:
+      - artifacts/merge-report.md
+    required_inputs:
+      - ticket_details
+      - pull_request_context
+      - relevant source files
 
   - type: go-developer
     name: Go Developer Agent

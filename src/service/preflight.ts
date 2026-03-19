@@ -27,7 +27,13 @@ const exec = promisify(execFile);
 
 async function run(cmd: string, args: string[], timeout = 5000): Promise<{ ok: boolean; stdout: string; stderr: string }> {
   try {
-    const { stdout, stderr } = await exec(cmd, args, { timeout });
+    const { stdout, stderr } = await exec(cmd, args, {
+      timeout,
+      env: {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: "0",
+      },
+    });
     return { ok: true, stdout: stdout.trim(), stderr: stderr.trim() };
   } catch (error: any) {
     return {
@@ -41,6 +47,13 @@ async function run(cmd: string, args: string[], timeout = 5000): Promise<{ ok: b
 function isTruthy(value: string | undefined): boolean {
   const normalized = String(value ?? "").trim().toLowerCase();
   return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+function isHostedWholeRunSandbox(env: NodeJS.ProcessEnv = process.env): boolean {
+  return (
+    String(env.SPRINTFOUNDRY_HOSTING_MODE ?? "").trim() === "k8s-agent-sandbox" &&
+    String(env.SPRINTFOUNDRY_RUN_SANDBOX_MODE ?? "").trim() === "k8s-whole-run"
+  );
 }
 
 export function resolvePreflightProfile(
@@ -297,6 +310,11 @@ export async function runPreflight(
   }
 
   if (profile === "k8s") {
+    if (isHostedWholeRunSandbox()) {
+      add(checks, "pass", "Kubernetes host checks", "skipped inside hosted whole-run sandbox");
+      return { profile, checks };
+    }
+
     const kubectl = await run("kubectl", ["version", "--client", "--output=yaml"]);
     add(
       checks,

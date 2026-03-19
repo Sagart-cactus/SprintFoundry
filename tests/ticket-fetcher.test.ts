@@ -58,8 +58,15 @@ describe("TicketFetcher", () => {
             identifier: "LIN-42",
             title: "Fix login bug",
             description: "Login fails on mobile",
+            url: "https://linear.app/acme/issue/LIN-42",
+            state: { id: "state-todo", name: "Todo", type: "unstarted" },
             priority: 2,
             priorityLabel: "High",
+            team: {
+              id: "team-1",
+              key: "LIN",
+              states: { nodes: [{ id: "state-todo", name: "Todo", type: "unstarted" }] },
+            },
             labels: { nodes: [{ name: "bug" }] },
             comments: { nodes: [{ body: "Urgent fix needed" }] },
             creator: { name: "Alice" },
@@ -72,12 +79,69 @@ describe("TicketFetcher", () => {
     const ticket = await fetcher.fetch("abc-123", "linear");
 
     expect(ticket.id).toBe("LIN-42");
+    expect(ticket.identifier).toBe("LIN-42");
     expect(ticket.source).toBe("linear");
     expect(ticket.title).toBe("Fix login bug");
+    expect(ticket.url).toBe("https://linear.app/acme/issue/LIN-42");
+    expect(ticket.state).toBe("Todo");
+    expect(ticket.state_id).toBe("state-todo");
+    expect(ticket.state_type).toBe("unstarted");
+    expect(ticket.team_id).toBe("team-1");
+    expect(ticket.team_key).toBe("LIN");
     expect(ticket.labels).toContain("bug");
     expect(ticket.priority).toBe("p1"); // priority 2 → p1
     expect(ticket.author).toBe("Alice");
     expect(ticket.comments).toContain("Urgent fix needed");
+  });
+
+  it("updateStatus maps Linear review state aliases and posts the PR URL as a comment", async () => {
+    const fetcher = new TicketFetcher(
+      makeIntegration({
+        ticket_source: {
+          type: "linear",
+          config: { api_key: "lin_test_key" },
+        },
+      })
+    );
+
+    const ticket = {
+      id: "LIN-42",
+      identifier: "LIN-42",
+      source: "linear" as const,
+      title: "Fix login bug",
+      description: "Login fails on mobile",
+      labels: [],
+      priority: "p1" as const,
+      acceptance_criteria: [],
+      linked_tickets: [],
+      comments: [],
+      author: "Alice",
+      raw: {
+        id: "issue-123",
+        team: {
+          states: {
+            nodes: [
+              { id: "state-review", name: "In Review", type: "started" },
+              { id: "state-done", name: "Done", type: "completed" },
+            ],
+          },
+        },
+      },
+    };
+
+    (globalThis.fetch as any)
+      .mockResolvedValueOnce(mockFetchResponse({ data: { issueUpdate: { success: true } } }))
+      .mockResolvedValueOnce(mockFetchResponse({ data: { commentCreate: { success: true } } }));
+
+    await fetcher.updateStatus(ticket, "in_review", "https://github.com/test/repo/pull/1");
+
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+
+    const stateUpdateBody = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
+    expect(stateUpdateBody.query).toContain('issueUpdate(id: "issue-123", input: { stateId: "state-review" })');
+
+    const commentBody = JSON.parse((globalThis.fetch as any).mock.calls[1][1].body);
+    expect(commentBody.query).toContain("SprintFoundry PR: https://github.com/test/repo/pull/1");
   });
 
   it("fetchLinear throws on missing API key", async () => {

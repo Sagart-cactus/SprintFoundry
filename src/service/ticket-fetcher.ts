@@ -30,10 +30,15 @@ export class TicketFetcher {
     status: string,
     prUrl?: string
   ): Promise<void> {
-    // TODO: implement per-source status updates
-    console.log(
-      `[ticket] Updating ${ticket.source}/${ticket.id} → ${status}${prUrl ? ` (PR: ${prUrl})` : ""}`
-    );
+    switch (ticket.source) {
+      case "linear":
+        await this.updateLinearStatus(ticket, status, prUrl);
+        return;
+      default:
+        console.log(
+          `[ticket] Updating ${ticket.source}/${ticket.id} → ${status}${prUrl ? ` (PR: ${prUrl})` : ""}`
+        );
+    }
   }
 
   private async fetchLinear(ticketId: string): Promise<TicketDetails> {
@@ -49,8 +54,9 @@ export class TicketFetcher {
       query {
         issue(id: "${ticketId}") {
           id identifier title description url
+          state { id name type }
           priority priorityLabel
-          team { id key }
+          team { id key states { nodes { id name type } } }
           labels { nodes { name } }
           comments { nodes { body } }
           creator { name }
@@ -59,28 +65,22 @@ export class TicketFetcher {
       }
     `;
 
-    const resp = await fetch("https://api.linear.app/graphql", {
-      method: "POST",
-      headers: {
-        Authorization: apiKey,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ query }),
-    });
-
-    if (!resp.ok) {
-      throw new Error(`Linear API error: ${resp.status} ${resp.statusText}`);
-    }
-
-    const data = (await resp.json()) as any;
+    const data = await this.linearRequest(query);
     const issue = data.data?.issue;
     if (!issue) throw new Error(`Linear issue not found: ${ticketId}`);
 
     return {
       id: issue.identifier ?? ticketId,
+      identifier: issue.identifier ?? ticketId,
       source: "linear",
       title: issue.title,
       description: issue.description ?? "",
+      url: issue.url ?? undefined,
+      state: issue.state?.name ?? undefined,
+      state_id: issue.state?.id ?? undefined,
+      state_type: issue.state?.type ?? undefined,
+      team_id: issue.team?.id ?? undefined,
+      team_key: issue.team?.key ?? undefined,
       labels: issue.labels?.nodes?.map((l: any) => l.name) ?? [],
       priority: this.mapLinearPriority(issue.priority),
       acceptance_criteria: this.extractAcceptanceCriteria(issue.description ?? ""),
@@ -262,5 +262,101 @@ export class TicketFetcher {
     };
 
     return adf.content.map(extract).join("\n");
+  }
+
+  private async updateLinearStatus(
+    ticket: TicketDetails,
+    status: string,
+    prUrl?: string
+  ): Promise<void> {
+    const issueId = String(ticket.raw?.id ?? "").trim();
+    if (!issueId) {
+      throw new Error(`Linear ticket ${ticket.id} is missing raw.id needed for state updates`);
+    }
+
+    const stateId = this.resolveLinearStateId(ticket, status);
+    if (!stateId) {
+      throw new Error(`Unable to map Linear status '${status}' for ticket ${ticket.id}`);
+    }
+
+    const mutation = `
+      mutation {
+        issueUpdate(id: "${issueId}", input: { stateId: "${stateId}" }) {
+          success
+        }
+      }
+    `;
+    await this.linearRequest(mutation);
+
+    if (!prUrl) return;
+
+    const commentMutation = `
+      mutation {
+        commentCreate(input: { issueId: "${issueId}", body: "SprintFoundry PR: ${this.escapeGraphqlString(prUrl)}" }) {
+          success
+        }
+      }
+    `;
+    await this.linearRequest(commentMutation);
+  }
+
+  private resolveLinearStateId(ticket: TicketDetails, status: string): string | null {
+    const rawTeamStates = (ticket.raw?.team as any)?.states?.nodes;
+    const states = Array.isArray(rawTeamStates) ? rawTeamStates : [];
+    const normalizedStatus = status.trim().toLowerCase();
+
+    const directMatch = states.find((state: any) => String(state?.name ?? "").trim().toLowerCase() === normalizedStatus);
+    if (directMatch?.id) return String(directMatch.id);
+
+    const aliasMatchers: Record<string, (state: any) => boolean> = {
+      in_review: (state) => {
+        const name = String(state?.name ?? "").toLowerCase();
+        return name.includes("review") || String(state?.type ?? "").toLowerCase() === "started";
+      },
+      done: (state) => {
+        const name = String(state?.name ?? "").toLowerCase();
+        const type = String(state?.type ?? "").toLowerCase();
+        return name.includes("done") || type === "completed";
+      },
+      todo: (state) => {
+        const name = String(state?.name ?? "").toLowerCase();
+        const type = String(state?.type ?? "").toLowerCase();
+        return name.includes("todo") || type === "unstarted";
+      },
+    };
+
+    const matcher = aliasMatchers[normalizedStatus];
+    if (!matcher) return null;
+    const aliasMatch = states.find((state: any) => matcher(state));
+    return aliasMatch?.id ? String(aliasMatch.id) : null;
+  }
+
+  private async linearRequest(query: string): Promise<any> {
+    const config = this.integrations.ticket_source.config;
+    const apiKey = config.api_key;
+    const apiUrl = config.api_url || "https://api.linear.app/graphql";
+
+    const resp = await fetch(apiUrl, {
+      method: "POST",
+      headers: {
+        Authorization: apiKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ query }),
+    });
+
+    if (!resp.ok) {
+      throw new Error(`Linear API error: ${resp.status} ${resp.statusText}`);
+    }
+
+    const data = (await resp.json()) as any;
+    if (Array.isArray(data?.errors) && data.errors.length > 0) {
+      throw new Error(`Linear GraphQL error: ${String(data.errors[0]?.message ?? "unknown error")}`);
+    }
+    return data;
+  }
+
+  private escapeGraphqlString(value: string): string {
+    return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
   }
 }

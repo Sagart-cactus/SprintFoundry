@@ -517,7 +517,8 @@ describe("CodexRuntime local_sdk mode", () => {
     await runtime.runStep(makeContext(tmpDir, { task: "Use synthesized task prompt" }));
 
     const prompt = vi.mocked(mockRunStreamedFn).mock.calls[0]?.[0] as string;
-    expect(prompt).toContain("Read .agent-task.md and AGENTS.md");
+    expect(prompt).toContain("Read AGENTS.md and .agent-context/stack.json from disk when they exist.");
+    expect(prompt).toContain("Read .agent-task.md from disk and follow it as the primary step instructions.");
     expect(prompt).toContain("Primary task: Use synthesized task prompt");
   });
 
@@ -613,7 +614,8 @@ describe("CodexRuntime local_sdk mode", () => {
     await runtime.runStep(makeContext(tmpDir, { task: "Use fallback when task file is empty" }));
 
     const prompt = vi.mocked(mockRunStreamedFn).mock.calls[0]?.[0] as string;
-    expect(prompt).toContain("Read .agent-task.md and AGENTS.md");
+    expect(prompt).toContain("Read AGENTS.md and .agent-context/stack.json from disk when they exist.");
+    expect(prompt).toContain("Read .agent-task.md from disk and follow it as the primary step instructions.");
     expect(prompt).not.toContain("# .agent-task.md");
     expect(prompt).toContain("Primary task: Use fallback when task file is empty");
   });
@@ -800,6 +802,26 @@ describe("CodexRuntime local_process mode (unchanged behavior)", () => {
     expect(callEnv.UNRELATED_PARENT_SECRET).toBeUndefined();
   });
 
+  it("prefers runtime.model over modelConfig.model for OPENAI_MODEL in local_process mode", async () => {
+    const runtime = new CodexRuntime();
+    await runtime.runStep(
+      makeContext(tmpDir, {
+        modelConfig: { provider: "anthropic", model: "claude-sonnet-4-5-20250929" },
+        runtime: {
+          provider: "codex",
+          mode: "local_process",
+          model: "o4-mini",
+        },
+      })
+    );
+
+    const callEnv = vi.mocked(runProcess).mock.calls[0][2].env as Record<
+      string,
+      string | undefined
+    >;
+    expect(callEnv.OPENAI_MODEL).toBe("o4-mini");
+  });
+
   it("passes model_reasoning_effort config for codex local_process model", async () => {
     const runtime = new CodexRuntime();
     await runtime.runStep(
@@ -836,6 +858,12 @@ describe("CodexRuntime local_process mode (unchanged behavior)", () => {
   });
 
   it("keeps synthesized prompt contract in local_process mode", async () => {
+    await fs.writeFile(
+      path.join(tmpDir, ".agent-task.md"),
+      "# Task\nImplement the local process contract\n",
+      "utf-8"
+    );
+
     const runtime = new CodexRuntime();
     await runtime.runStep(
       makeContext(tmpDir, {
@@ -847,7 +875,10 @@ describe("CodexRuntime local_process mode (unchanged behavior)", () => {
     const args = vi.mocked(runProcess).mock.calls[0][1] as string[];
     expect(args[0]).toBe("exec");
     expect(args.some((a) => a.includes("Primary task: Process mode task contract"))).toBe(true);
-    expect(args.some((a) => a.includes("Read .agent-task.md and AGENTS.md"))).toBe(true);
+    expect(args.some((a) => a.includes("# .agent-task.md"))).toBe(true);
+    expect(args.some((a) => a.includes("Implement the local process contract"))).toBe(true);
+    expect(args.some((a) => a.includes("Do not return an apply_patch block"))).toBe(true);
+    expect(args.some((a) => a.includes("Do not use web search to inspect or search for local workspace files"))).toBe(true);
   });
 
   it("uses CLI resume path in local_process mode when resumeSessionId is present", async () => {

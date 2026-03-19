@@ -10,6 +10,12 @@ import type {
   TicketDetails,
   TaskRun,
 } from "../shared/types.js";
+import { buildBranchName } from "./branch-strategy.js";
+
+export interface GitBranchOptions {
+  branchName?: string;
+  branchMode?: "new" | "reuse-or-create" | "existing";
+}
 
 export class GitManager {
   constructor(
@@ -19,9 +25,11 @@ export class GitManager {
 
   async cloneAndBranch(
     workspacePath: string,
-    ticket: TicketDetails
+    ticket: TicketDetails,
+    options?: GitBranchOptions
   ): Promise<string> {
-    const branchName = this.buildBranchName(ticket);
+    const branchName = options?.branchName?.trim() || buildBranchName(ticket, this.branchStrategy);
+    const branchMode = options?.branchMode ?? "new";
 
     // Clone the repository
     const cloneUrl = this.repoConfig.token
@@ -29,10 +37,7 @@ export class GitManager {
       : this.repoConfig.url;
 
     this.exec(["git", "clone", "--depth", "50", cloneUrl, "."], workspacePath);
-    this.exec(
-      ["git", "checkout", "-b", branchName, `origin/${this.repoConfig.default_branch}`],
-      workspacePath
-    );
+    await this.checkoutPreparedBranch(workspacePath, branchName, branchMode);
 
     // Ensure git identity is set (required for checkpoint commits)
     this.ensureGitIdentity(workspacePath);
@@ -165,29 +170,53 @@ export class GitManager {
     }
   }
 
-  private buildBranchName(ticket: TicketDetails): string {
-    const { prefix, include_ticket_id, naming } = this.branchStrategy;
-    const parts: string[] = [];
-    const separator = naming === "snake_case" ? "_" : "-";
-
-    if (include_ticket_id) {
-      parts.push(this.sanitizeBranchSegment(ticket.id, separator));
-    }
-
-    // Slugify the title
-    const slug = this.sanitizeBranchSegment(ticket.title, separator).slice(0, 50);
-
-    parts.push(slug);
-
-    return prefix + parts.join(separator);
+  buildTicketBranch(ticket: TicketDetails): string {
+    return buildBranchName(ticket, this.branchStrategy);
   }
 
-  private sanitizeBranchSegment(value: string, separator: "-" | "_"): string {
-    const sanitized = value
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, separator)
-      .replace(/^[-_]+|[-_]+$/g, "");
-    return sanitized || "work";
+  private async checkoutPreparedBranch(
+    workspacePath: string,
+    branchName: string,
+    branchMode: GitBranchOptions["branchMode"]
+  ): Promise<void> {
+    const remoteBranchExists = this.execRaw(
+      ["git", "ls-remote", "--heads", "origin", branchName],
+      workspacePath
+    ).stdout.trim().length > 0;
+
+    if (branchMode === "existing") {
+      if (!remoteBranchExists) {
+        throw new Error(`Expected existing remote branch '${branchName}', but none was found`);
+      }
+      this.fetchRemoteBranch(workspacePath, branchName);
+      this.exec(["git", "checkout", "-b", branchName, `origin/${branchName}`], workspacePath);
+      return;
+    }
+
+    if (branchMode === "reuse-or-create" && remoteBranchExists) {
+      this.fetchRemoteBranch(workspacePath, branchName);
+      this.exec(["git", "checkout", "-b", branchName, `origin/${branchName}`], workspacePath);
+      return;
+    }
+
+    this.exec(
+      ["git", "checkout", "-b", branchName, `origin/${this.repoConfig.default_branch}`],
+      workspacePath
+    );
+  }
+
+  private fetchRemoteBranch(workspacePath: string, branchName: string): void {
+    this.exec(
+      [
+        "git",
+        "fetch",
+        "--depth",
+        "1",
+        "origin",
+        `refs/heads/${branchName}:refs/remotes/origin/${branchName}`,
+      ],
+      workspacePath
+    );
   }
 
   private currentBranchName(workspacePath: string): string {
@@ -387,6 +416,7 @@ export class GitManager {
       timeout: 60_000,
       env: {
         ...process.env,
+        GIT_TERMINAL_PROMPT: "0",
         GIT_SSH_COMMAND: this.repoConfig.ssh_key_path
           ? `ssh -i ${this.repoConfig.ssh_key_path} -o StrictHostKeyChecking=no`
           : undefined,
@@ -413,6 +443,7 @@ export class GitManager {
       timeout: 60_000,
       env: {
         ...process.env,
+        GIT_TERMINAL_PROMPT: "0",
         GIT_SSH_COMMAND: this.repoConfig.ssh_key_path
           ? `ssh -i ${this.repoConfig.ssh_key_path} -o StrictHostKeyChecking=no`
           : undefined,

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { Command } from "commander";
+import { Option } from "commander";
 import * as fs from "fs/promises";
 import * as path from "path";
 import * as os from "os";
@@ -175,17 +176,21 @@ function buildPluginRegistry(platform: PlatformConfig, project: ProjectConfig): 
     integrations: project.integrations,
   });
 
-  const ticketSource = project.integrations?.ticket_source;
-  if (ticketSource?.type === "github") {
-    const token = String(ticketSource.config?.token ?? "").trim();
-    const owner = String(ticketSource.config?.owner ?? "").trim();
-    const repo = String(ticketSource.config?.repo ?? "").trim();
+  const scmIntegration =
+    project.integrations?.scm?.type === "github"
+      ? project.integrations.scm
+      : project.integrations?.ticket_source?.type === "github"
+        ? {
+            type: "github" as const,
+            config: project.integrations.ticket_source.config,
+          }
+        : null;
+  if (scmIntegration?.type === "github") {
+    const token = String(scmIntegration.config?.token ?? "").trim();
+    const owner = String(scmIntegration.config?.owner ?? "").trim();
+    const repo = String(scmIntegration.config?.repo ?? "").trim();
     if (token && owner && repo) {
-      registry.register(githubSCMModule, {
-        token,
-        owner,
-        repo,
-      });
+      registry.register(githubSCMModule, { token, owner, repo });
     } else {
       console.warn("[sprintfoundry] SCM plugin github not registered: missing token/owner/repo");
     }
@@ -210,6 +215,9 @@ program
   .option("--dry-run", "Plan only — generate and print the execution plan without running agents")
   .option("--agent <agent>", "Run a single agent directly, bypassing SDLC orchestration (default: generic agent)")
   .option("--agent-file <path>", "Path to a YAML/JSON file defining a custom agent inline (used with --agent)")
+  .addOption(new Option("--workflow-stage <stage>").hideHelp())
+  .addOption(new Option("--workflow-branch <branch>").hideHelp())
+  .addOption(new Option("--workflow-pr-url <url>").hideHelp())
   .action(async (opts) => {
     const source = opts.source as TaskSource;
 
@@ -323,6 +331,9 @@ program
           dryRun: !!opts.dryRun,
           agent: directAgent,
           agentFile: opts.agentFile,
+          workflowStage: opts.workflowStage,
+          workflowBranch: opts.workflowBranch,
+          workflowPrUrl: opts.workflowPrUrl,
         });
         currentRunId = run.run_id;
       } else {
@@ -330,6 +341,9 @@ program
           dryRun: !!opts.dryRun,
           agent: directAgent,
           agentFile: opts.agentFile,
+          workflowStage: opts.workflowStage,
+          workflowBranch: opts.workflowBranch,
+          workflowPrUrl: opts.workflowPrUrl,
         });
         currentRunId = run.run_id;
       }
@@ -338,6 +352,9 @@ program
         dryRun: !!opts.dryRun,
         agent: directAgent,
         agentFile: opts.agentFile,
+        workflowStage: opts.workflowStage,
+        workflowBranch: opts.workflowBranch,
+        workflowPrUrl: opts.workflowPrUrl,
       });
       currentRunId = run.run_id;
     }

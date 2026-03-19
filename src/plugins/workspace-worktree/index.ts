@@ -12,6 +12,7 @@ import type {
   WorkspacePlugin,
   WorkspaceInfo,
   PluginModule,
+  WorkspaceCreateOptions,
 } from "../../shared/plugin-types.js";
 import type {
   AgentType,
@@ -20,6 +21,7 @@ import type {
   TaskRun,
   TicketDetails,
 } from "../../shared/types.js";
+import { buildBranchName } from "../../service/branch-strategy.js";
 
 /**
  * Executes a git command synchronously in a given directory.
@@ -32,6 +34,7 @@ function git(args: string[], cwd: string, repoConfig?: RepoConfig): string {
     timeout: 120_000,
     env: {
       ...process.env,
+      GIT_TERMINAL_PROMPT: "0",
       GIT_SSH_COMMAND: repoConfig?.ssh_key_path
         ? `ssh -i ${repoConfig.ssh_key_path} -o StrictHostKeyChecking=no`
         : undefined,
@@ -55,6 +58,7 @@ function gitRaw(args: string[], cwd: string, repoConfig?: RepoConfig): { status:
     timeout: 120_000,
     env: {
       ...process.env,
+      GIT_TERMINAL_PROMPT: "0",
       GIT_SSH_COMMAND: repoConfig?.ssh_key_path
         ? `ssh -i ${repoConfig.ssh_key_path} -o StrictHostKeyChecking=no`
         : undefined,
@@ -125,7 +129,8 @@ class WorktreeWorkspacePlugin implements WorkspacePlugin {
     runId: string,
     repoConfig: RepoConfig,
     branchStrategy: BranchStrategy,
-    ticket: TicketDetails
+    ticket: TicketDetails,
+    options?: WorkspaceCreateOptions
   ): Promise<WorkspaceInfo> {
     this.repoConfig = repoConfig;
     this.branchStrategy = branchStrategy;
@@ -135,17 +140,23 @@ class WorktreeWorkspacePlugin implements WorkspacePlugin {
 
     // 2. Create worktree for this run
     const worktreePath = path.join(this.baseDir, `run-${runId}`);
-    const branchName = this.resolveAvailableBranchName(
-      this.buildBranchName(ticket, branchStrategy),
-      runId
-    );
+    const requestedBranch = options?.branchName?.trim() || buildBranchName(ticket, branchStrategy);
+    const branchMode = options?.branchMode ?? "new";
+    const existingBranch = this.resolveReusableBranchName(requestedBranch, branchMode);
+    const branchName = existingBranch
+      ?? this.resolveAvailableBranchName(requestedBranch, runId);
 
     console.log(`[worktree] Creating worktree for run ${runId}: ${worktreePath}`);
-    git(
-      ["worktree", "add", "-b", branchName, worktreePath, repoConfig.default_branch],
-      this.baseClonePath,
-      repoConfig
-    );
+    if (existingBranch) {
+      this.ensureLocalBranch(existingBranch);
+      git(["worktree", "add", worktreePath, existingBranch], this.baseClonePath, repoConfig);
+    } else {
+      git(
+        ["worktree", "add", "-b", branchName, worktreePath, repoConfig.default_branch],
+        this.baseClonePath,
+        repoConfig
+      );
+    }
 
     // 3. Set up push tracking
     this.ensureGitIdentity(worktreePath);
@@ -307,17 +318,25 @@ class WorktreeWorkspacePlugin implements WorkspacePlugin {
 
   // ---- Helpers ----
 
-  private buildBranchName(ticket: TicketDetails, strategy: BranchStrategy): string {
-    const { prefix, include_ticket_id, naming } = strategy;
-    const parts: string[] = [];
-    const sep = naming === "snake_case" ? "_" : "-";
+  private resolveReusableBranchName(
+    requestedBranch: string,
+    branchMode: WorkspaceCreateOptions["branchMode"]
+  ): string | null {
+    const localExists = this.branchExists(requestedBranch);
+    const remoteExists = this.remoteBranchExists(requestedBranch);
 
-    if (include_ticket_id) {
-      parts.push(this.sanitize(ticket.id, sep));
+    if (branchMode === "existing") {
+      if (!localExists && !remoteExists) {
+        throw new Error(`Expected existing branch '${requestedBranch}', but none was found`);
+      }
+      return requestedBranch;
     }
-    parts.push(this.sanitize(ticket.title, sep).slice(0, 50));
 
-    return prefix + parts.join(sep);
+    if (branchMode === "reuse-or-create" && (localExists || remoteExists)) {
+      return requestedBranch;
+    }
+
+    return null;
   }
 
   private resolveAvailableBranchName(baseName: string, runId: string): string {
@@ -341,9 +360,25 @@ class WorktreeWorkspacePlugin implements WorkspacePlugin {
     return result.status === 0;
   }
 
-  private sanitize(value: string, sep: "-" | "_"): string {
-    const s = value.toLowerCase().replace(/[^a-z0-9]+/g, sep).replace(/^[-_]+|[-_]+$/g, "");
-    return s || "work";
+  private remoteBranchExists(branch: string): boolean {
+    const result = gitRaw(
+      ["show-ref", "--verify", "--quiet", `refs/remotes/origin/${branch}`],
+      this.baseClonePath,
+      this.repoConfig ?? undefined
+    );
+    return result.status === 0;
+  }
+
+  private ensureLocalBranch(branch: string): void {
+    if (this.branchExists(branch)) return;
+    if (!this.remoteBranchExists(branch)) {
+      throw new Error(`Expected remote branch '${branch}', but none was found`);
+    }
+    git(
+      ["branch", branch, `refs/remotes/origin/${branch}`],
+      this.baseClonePath,
+      this.repoConfig ?? undefined
+    );
   }
 
   private injectToken(url: string, token: string): string {

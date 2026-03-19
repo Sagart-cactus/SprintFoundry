@@ -264,6 +264,10 @@ function githubSignature(body: string, secret: string): string {
   return `sha256=${crypto.createHmac("sha256", secret).update(body).digest("hex")}`;
 }
 
+function linearSignature(body: string, secret: string): string {
+  return crypto.createHmac("sha256", secret).update(body).digest("hex");
+}
+
 function makeProjectConfig(configDir: string, fileName: string, content: string): void {
   writeFileSync(path.join(configDir, fileName), content, "utf-8");
 }
@@ -499,6 +503,207 @@ describe("dispatch-controller", () => {
     await runtime.close();
   });
 
+  it("queues developer workflow runs from Linear review state changes", async () => {
+    const configDir = mkdtempSync(path.join(os.tmpdir(), "sf-dispatch-linear-workflow-"));
+    tempDirs.push(configDir);
+
+    makeProjectConfig(
+      configDir,
+      "project.yaml",
+      [
+        "project_id: linear-workflow",
+        "name: Linear Workflow",
+        "repo:",
+        "  url: git@github.com:acme/repo.git",
+        "  default_branch: main",
+        "api_keys:",
+        "  anthropic: test",
+        "branch_strategy:",
+        "  prefix: feat/",
+        "  include_ticket_id: true",
+        "  naming: kebab-case",
+        "integrations:",
+        "  ticket_source:",
+        "    type: linear",
+        "    config:",
+        "      api_key: linear-test",
+        "      team_key: LIN",
+        "ticket_workflow:",
+        "  enabled: true",
+        "  provider: linear_sdlc",
+        "  linear_states:",
+        "    todo: [Todo]",
+        "    review: [Review]",
+        "    done: [Done]",
+        "  agents:",
+        "    developer: developer",
+        "    qa: qa",
+        "    merge: merge-bot",
+        "autoexecute:",
+        "  enabled: true",
+        "  linear:",
+        "    enabled: true",
+        "    webhook_secret: linear-secret",
+        "rules: []",
+        "",
+      ].join("\n"),
+    );
+
+    const redis = new FakeRedisClient();
+    const app = new FakeExpressApp();
+    const executed: Array<Record<string, unknown>> = [];
+
+    const runtime = await registerDispatchRoutes(app, {
+      configDir,
+      redisClient: redis,
+      autoStartConsumer: false,
+      executeLocalRun: async (task) => {
+        executed.push(task as unknown as Record<string, unknown>);
+      },
+      idGenerator: () => "linwf001",
+      now: () => 1_750_000_000_000,
+    });
+
+    const payload = JSON.stringify({
+      type: "Issue",
+      action: "update",
+      webhookId: "linear-delivery-1",
+      webhookTimestamp: 1_750_000_000_000,
+      createdAt: "2026-03-18T00:00:00Z",
+      data: {
+        identifier: "LIN-42",
+        team: { key: "LIN" },
+        state: { name: "Review" },
+      },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      path: "/api/webhooks/linear",
+      rawBody: payload,
+      headers: {
+        "content-type": "application/json",
+        "linear-signature": linearSignature(payload, "linear-secret"),
+      },
+    });
+
+    expect(response.status).toBe(202);
+    expect(response.body).toMatchObject({ accepted: true, queued: true, ticket_id: "LIN-42" });
+    expect(await redis.lLen(queueKey("linear-workflow"))).toBe(1);
+
+    const processed = await runtime.processQueueOnce();
+    expect(processed).toBe(true);
+    expect(executed).toHaveLength(1);
+    expect(executed[0]).toMatchObject({
+      source: "linear",
+      ticket_id: "LIN-42",
+      workflow_stage: "qa",
+      agent: "qa",
+    });
+
+    await runtime.close();
+  });
+
+  it("queues merge workflow runs from GitHub pull request webhooks when scm integration is configured", async () => {
+    const configDir = mkdtempSync(path.join(os.tmpdir(), "sf-dispatch-github-workflow-"));
+    tempDirs.push(configDir);
+
+    makeProjectConfig(
+      configDir,
+      "project.yaml",
+      [
+        "project_id: github-workflow",
+        "name: GitHub Workflow",
+        "repo:",
+        "  url: git@github.com:acme/repo.git",
+        "  default_branch: main",
+        "api_keys:",
+        "  anthropic: test",
+        "integrations:",
+        "  ticket_source:",
+        "    type: linear",
+        "    config:",
+        "      api_key: linear-test",
+        "      team_key: LIN",
+        "  scm:",
+        "    type: github",
+        "    config:",
+        "      token: test",
+        "      owner: acme",
+        "      repo: repo",
+        "ticket_workflow:",
+        "  enabled: true",
+        "  provider: linear_sdlc",
+        "autoexecute:",
+        "  enabled: true",
+        "  github:",
+        "    enabled: true",
+        "    webhook_secret: github-secret",
+        "rules: []",
+        "",
+      ].join("\n"),
+    );
+
+    const redis = new FakeRedisClient();
+    const app = new FakeExpressApp();
+    const executed: Array<Record<string, unknown>> = [];
+
+    const runtime = await registerDispatchRoutes(app, {
+      configDir,
+      redisClient: redis,
+      autoStartConsumer: false,
+      executeLocalRun: async (task) => {
+        executed.push(task as unknown as Record<string, unknown>);
+      },
+      idGenerator: () => "ghwf001",
+      now: () => 1_750_000_000_000,
+    });
+
+    const payload = JSON.stringify({
+      action: "opened",
+      pull_request: {
+        html_url: "https://github.com/acme/repo/pull/7",
+        updated_at: "2026-03-18T00:00:00Z",
+        head: { ref: "feat/lin-42-fix-login" },
+      },
+      repository: { name: "repo", owner: { login: "acme" } },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      path: "/api/webhooks/github",
+      rawBody: payload,
+      headers: {
+        "content-type": "application/json",
+        "x-github-event": "pull_request",
+        "x-github-delivery": "delivery-pr-1",
+        "x-hub-signature-256": githubSignature(payload, "github-secret"),
+      },
+    });
+
+    expect(response.status).toBe(202);
+    expect(response.body).toMatchObject({
+      accepted: true,
+      queued: true,
+      ticket_id: "LIN-42",
+      workflow_stage: "merge",
+    });
+
+    const processed = await runtime.processQueueOnce();
+    expect(processed).toBe(true);
+    expect(executed).toHaveLength(1);
+    expect(executed[0]).toMatchObject({
+      source: "linear",
+      ticket_id: "LIN-42",
+      workflow_stage: "merge",
+      workflow_branch: "feat/lin-42-fix-login",
+      workflow_pr_url: "https://github.com/acme/repo/pull/7",
+      agent: "merge-bot",
+    });
+
+    await runtime.close();
+  });
+
   it("enforces per-project quota before dispatching", async () => {
     const configDir = mkdtempSync(path.join(os.tmpdir(), "sf-dispatch-config-"));
     tempDirs.push(configDir);
@@ -599,13 +804,22 @@ describe("dispatch-controller", () => {
       "--source",
       "github",
       "--config",
-      "/config",
+      "/opt/sprintfoundry/config",
       "--ticket",
       "55",
       "--project",
       "proj",
       "--agent",
       "qa",
+    ]);
+    expect(container.volumeMounts).toEqual([
+      {
+        name: "project-config",
+        mountPath: "/opt/sprintfoundry/config/project-proj.yaml",
+        subPath: "project.yaml",
+        readOnly: true,
+      },
+      { name: "workspace", mountPath: "/workspace" },
     ]);
     expect(container.envFrom).toEqual([{ secretRef: { name: "proj-secret" } }]);
     expect(container.resources.requests).toEqual({ cpu: "500m", memory: "1Gi" });
@@ -719,6 +933,26 @@ describe("dispatch-controller", () => {
         { name: "SPRINTFOUNDRY_HOSTING_MODE", value: "k8s-agent-sandbox" },
       ]),
     );
+    expect(manifest.spec.podTemplate.spec.containers[0]?.args).toEqual([
+      "run",
+      "--source",
+      "prompt",
+      "--config",
+      "/opt/sprintfoundry/config",
+      "--prompt",
+      "do the thing",
+      "--project",
+      "proj",
+    ]);
+    expect(manifest.spec.podTemplate.spec.containers[0]?.volumeMounts).toEqual([
+      {
+        name: "project-config",
+        mountPath: "/opt/sprintfoundry/config/project-proj.yaml",
+        subPath: "project.yaml",
+        readOnly: true,
+      },
+      { name: "workspace", mountPath: "/workspace" },
+    ]);
   });
 
   it("builds a sandbox claim manifest that targets the per-run template", () => {
@@ -952,6 +1186,7 @@ describe("dispatch-controller", () => {
     expect(processed).toBe(true);
     expect(createdJobs).toHaveLength(0);
     expect(createdHosts).toHaveLength(1);
+    expect(await redis.zCard(activeKey("sandbox-project"))).toBe(0);
     expect(createdHosts[0]?.claim.metadata.annotations?.["sprintfoundry.io/hosting-mode"]).toBe("k8s-agent-sandbox");
     expect(createdHosts[0]?.template.kind).toBe("SandboxTemplate");
     expect(createdHosts[0]?.workspacePvc.kind).toBe("PersistentVolumeClaim");

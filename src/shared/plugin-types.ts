@@ -6,6 +6,7 @@
 import type {
   AgentType,
   BranchStrategy,
+  TicketWorkflowStage,
   EventPriority,
   RepoConfig,
   TaskEvent,
@@ -37,6 +38,12 @@ export interface WorkspaceInfo {
   branch: string;
 }
 
+export interface WorkspaceCreateOptions {
+  branchName?: string;
+  branchMode?: "new" | "reuse-or-create" | "existing";
+  workflowStage?: TicketWorkflowStage | null;
+}
+
 export interface WorkspacePlugin {
   readonly name: string;
 
@@ -45,7 +52,8 @@ export interface WorkspacePlugin {
     runId: string,
     repoConfig: RepoConfig,
     branchStrategy: BranchStrategy,
-    ticket: TicketDetails
+    ticket: TicketDetails,
+    options?: WorkspaceCreateOptions
   ): Promise<WorkspaceInfo>;
 
   /** Remove a workspace directory. */

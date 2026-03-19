@@ -26,7 +26,13 @@ data:
         architect:
           provider: anthropic
           model: claude-sonnet-4-5-20250929
+        generic:
+          provider: anthropic
+          model: claude-sonnet-4-5-20250929
         developer:
+          provider: anthropic
+          model: claude-sonnet-4-5-20250929
+        merge-bot:
           provider: anthropic
           model: claude-sonnet-4-5-20250929
         qa:
@@ -76,7 +82,13 @@ data:
         orchestrator:
           provider: claude-code
           mode: local_process
+        generic:
+          provider: claude-code
+          mode: local_process
         developer:
+          provider: claude-code
+          mode: local_process
+        merge-bot:
           provider: claude-code
           mode: local_process
         qa:
@@ -129,6 +141,38 @@ data:
       default_secret_profile: default
       secret_profiles:
         default: []
+      default_isolation_level: hardened_isolated
+      runtime_class_per_isolation:
+        standard_isolated: ""
+        hardened_isolated: gvisor
+        strong_isolated: kata
+      network_policy_provider: cilium-fqdn
+      default_network_profile: github-plus-registries
+      network_profiles:
+        internal-only:
+          allow_internet: false
+          fqdn_allowlist: []
+          cidr_allowlist: []
+        github-only:
+          allow_internet: false
+          fqdn_allowlist:
+            - github.com
+            - api.github.com
+          cidr_allowlist: []
+        github-plus-registries:
+          allow_internet: false
+          fqdn_allowlist:
+            - github.com
+            - api.github.com
+            - api.linear.app
+            - linear.app
+            - registry.npmjs.org
+            - ghcr.io
+          cidr_allowlist: []
+        full-internet:
+          allow_internet: true
+          fqdn_allowlist: []
+          cidr_allowlist: []
       agent_sandbox:
         enabled: true
         whole_run_hosting_enabled: true
@@ -215,6 +259,20 @@ data:
         required_inputs:
           - ticket_details
 
+      - type: generic
+        name: Generic Agent
+        role: developer
+        description: "General-purpose direct-run agent for prompt, Linear, or GitHub issue execution."
+        container_image: sprintfoundry/agent-developer:latest
+        capabilities:
+          - Interpret issue or prompt content directly
+          - Work without role-specific handoffs
+          - Implement or explain changes without stack-specific assumptions
+        output_artifacts:
+          - artifacts/generic-output.md
+        required_inputs:
+          - ticket_details
+
       - type: developer
         name: Developer Agent
         role: developer
@@ -231,6 +289,22 @@ data:
           - artifacts/handoff/dev-to-qa.md
         required_inputs:
           - ticket_details
+          - relevant source files
+
+      - type: merge-bot
+        name: Merge Bot
+        role: developer
+        description: "Resolves merge blockers, validates the branch, and merges ready pull requests."
+        container_image: sprintfoundry/agent-developer:latest
+        capabilities:
+          - Resolve merge conflicts with minimal edits
+          - Run targeted smoke validation
+          - Merge a ready PR through the configured SCM integration
+        output_artifacts:
+          - artifacts/merge-report.md
+        required_inputs:
+          - ticket_details
+          - pull_request_context
           - relevant source files
 
       - type: qa

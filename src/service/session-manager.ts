@@ -54,6 +54,7 @@ export class SessionManager {
       ticket_id: run.ticket?.id ?? "unknown",
       ticket_source: run.ticket?.source ?? "prompt",
       ticket_title: run.ticket?.title ?? "Unknown",
+      workflow_stage: run.workflow_stage ?? null,
       status: run.status,
       hosting_mode: resolveHostingMode({
         explicitHostingMode: run.hosting_mode,
@@ -63,7 +64,7 @@ export class SessionManager {
       total_steps: totalSteps,
       plan_classification: run.plan?.classification ?? null,
       workspace_path: extra?.workspace_path ?? existing?.workspace_path ?? null,
-      branch: extra?.branch ?? existing?.branch ?? null,
+      branch: extra?.branch ?? run.branch ?? existing?.branch ?? null,
       pr_url: run.pr_url,
       total_tokens: run.total_tokens_used,
       total_cost_usd: run.total_cost_usd,

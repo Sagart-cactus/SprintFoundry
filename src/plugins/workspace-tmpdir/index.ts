@@ -8,6 +8,7 @@ import type {
   WorkspacePlugin,
   WorkspaceInfo,
   PluginModule,
+  WorkspaceCreateOptions,
 } from "../../shared/plugin-types.js";
 import type {
   AgentType,
@@ -33,11 +34,15 @@ class TmpdirWorkspacePlugin implements WorkspacePlugin {
     runId: string,
     repoConfig: RepoConfig,
     branchStrategy: BranchStrategy,
-    ticket: TicketDetails
+    ticket: TicketDetails,
+    options?: WorkspaceCreateOptions
   ): Promise<WorkspaceInfo> {
     const path = await this.manager.create(runId);
     this.gitManager = new GitManager(repoConfig, branchStrategy);
-    const branch = await this.gitManager.cloneAndBranch(path, ticket);
+    const branch = await this.gitManager.cloneAndBranch(path, ticket, {
+      branchName: options?.branchName,
+      branchMode: options?.branchMode,
+    });
     return { path, branch };
   }
 

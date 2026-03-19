@@ -36,6 +36,12 @@ function makeBranchStrategy(
 describe("GitManager", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    (mockSpawnSync as any).mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "git" && args[0] === "ls-remote") {
+        return { status: 0, stdout: "", stderr: "" };
+      }
+      return { status: 0, stdout: "", stderr: "" };
+    });
   });
 
   it("cloneAndBranch calls git clone + checkout", async () => {
@@ -43,17 +49,103 @@ describe("GitManager", () => {
 
     await git.cloneAndBranch("/workspace", makeTicket({ id: "TEST-1", title: "My Feature" }));
 
-    // 5 calls: git clone, git checkout, ensureGitIdentity (check email + set email + set name)
-    expect(mockSpawnSync).toHaveBeenCalledTimes(5);
+    // 6 calls: git clone, remote branch probe, git checkout, ensureGitIdentity (check email + set email + set name)
+    expect(mockSpawnSync).toHaveBeenCalledTimes(6);
 
     const cloneCall = (mockSpawnSync as any).mock.calls[0] as any[];
     expect(cloneCall[0]).toBe("git");
     expect(cloneCall[1]).toContain("clone");
 
-    const checkoutCall = (mockSpawnSync as any).mock.calls[1] as any[];
+    const branchProbeCall = (mockSpawnSync as any).mock.calls[1] as any[];
+    expect(branchProbeCall[0]).toBe("git");
+    expect(branchProbeCall[1]).toEqual(["ls-remote", "--heads", "origin", "feat/test-1-my-feature"]);
+
+    const checkoutCall = (mockSpawnSync as any).mock.calls[2] as any[];
     expect(checkoutCall[0]).toBe("git");
     expect(checkoutCall[1]).toContain("checkout");
     expect(checkoutCall[1]).toContain("origin/main");
+  });
+
+  it("cloneAndBranch reuses an existing remote branch when requested", async () => {
+    (mockSpawnSync as any).mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "git" && args[0] === "ls-remote") {
+        return { status: 0, stdout: "deadbeef\trefs/heads/feat/test-1-my-feature\n", stderr: "" };
+      }
+      return { status: 0, stdout: "", stderr: "" };
+    });
+
+    const git = new GitManager(makeRepoConfig(), makeBranchStrategy());
+
+    const branch = await git.cloneAndBranch(
+      "/workspace",
+      makeTicket({ id: "TEST-1", title: "My Feature" }),
+      { branchMode: "reuse-or-create" }
+    );
+
+    expect(branch).toBe("feat/test-1-my-feature");
+    const fetchCall = (mockSpawnSync as any).mock.calls[2] as any[];
+    expect(fetchCall[1]).toEqual([
+      "fetch",
+      "--depth",
+      "1",
+      "origin",
+      "refs/heads/feat/test-1-my-feature:refs/remotes/origin/feat/test-1-my-feature",
+    ]);
+
+    const checkoutCall = (mockSpawnSync as any).mock.calls[3] as any[];
+    expect(checkoutCall[1]).toEqual([
+      "checkout",
+      "-b",
+      "feat/test-1-my-feature",
+      "origin/feat/test-1-my-feature",
+    ]);
+  });
+
+  it("cloneAndBranch fetches the remote branch before checking out branchMode existing", async () => {
+    (mockSpawnSync as any).mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "git" && args[0] === "ls-remote") {
+        return { status: 0, stdout: "deadbeef\trefs/heads/feat/test-1-my-feature\n", stderr: "" };
+      }
+      return { status: 0, stdout: "", stderr: "" };
+    });
+
+    const git = new GitManager(makeRepoConfig(), makeBranchStrategy());
+
+    const branch = await git.cloneAndBranch(
+      "/workspace",
+      makeTicket({ id: "TEST-1", title: "My Feature" }),
+      { branchMode: "existing" }
+    );
+
+    expect(branch).toBe("feat/test-1-my-feature");
+    const fetchCall = (mockSpawnSync as any).mock.calls[2] as any[];
+    expect(fetchCall[1]).toEqual([
+      "fetch",
+      "--depth",
+      "1",
+      "origin",
+      "refs/heads/feat/test-1-my-feature:refs/remotes/origin/feat/test-1-my-feature",
+    ]);
+
+    const checkoutCall = (mockSpawnSync as any).mock.calls[3] as any[];
+    expect(checkoutCall[1]).toEqual([
+      "checkout",
+      "-b",
+      "feat/test-1-my-feature",
+      "origin/feat/test-1-my-feature",
+    ]);
+  });
+
+  it("cloneAndBranch fails when branchMode existing cannot find the remote branch", async () => {
+    const git = new GitManager(makeRepoConfig(), makeBranchStrategy());
+
+    await expect(
+      git.cloneAndBranch(
+        "/workspace",
+        makeTicket({ id: "TEST-1", title: "My Feature" }),
+        { branchMode: "existing" }
+      )
+    ).rejects.toThrow(/Expected existing remote branch 'feat\/test-1-my-feature'/);
   });
 
   it("cloneAndBranch injects token into HTTPS URL", async () => {
@@ -83,13 +175,13 @@ describe("GitManager", () => {
     expect(cloneArgs).toContain("https://mytoken@github.com/test/repo.git");
   });
 
-  it("buildBranchName uses kebab-case by default", () => {
+  it("buildTicketBranch uses kebab-case by default", () => {
     const git = new GitManager(
       makeRepoConfig(),
       makeBranchStrategy({ naming: "kebab-case", include_ticket_id: false })
     );
 
-    const name = (git as any).buildBranchName(
+    const name = git.buildTicketBranch(
       makeTicket({ title: "Add CSV Export Feature" })
     );
 
@@ -97,39 +189,39 @@ describe("GitManager", () => {
     expect(name).not.toContain("_");
   });
 
-  it("buildBranchName uses snake_case when configured", () => {
+  it("buildTicketBranch uses snake_case when configured", () => {
     const git = new GitManager(
       makeRepoConfig(),
       makeBranchStrategy({ naming: "snake_case", include_ticket_id: false })
     );
 
-    const name = (git as any).buildBranchName(
+    const name = git.buildTicketBranch(
       makeTicket({ title: "Add CSV Export" })
     );
 
     expect(name).toBe("feat/add_csv_export");
   });
 
-  it("buildBranchName includes ticket ID when configured", () => {
+  it("buildTicketBranch includes ticket ID when configured", () => {
     const git = new GitManager(
       makeRepoConfig(),
       makeBranchStrategy({ include_ticket_id: true })
     );
 
-    const name = (git as any).buildBranchName(
+    const name = git.buildTicketBranch(
       makeTicket({ id: "PROJ-42", title: "Some Feature" })
     );
 
     expect(name).toContain("proj-42");
   });
 
-  it("buildBranchName sanitizes ticket IDs with symbols like #", () => {
+  it("buildTicketBranch sanitizes ticket IDs with symbols like #", () => {
     const git = new GitManager(
       makeRepoConfig(),
       makeBranchStrategy({ include_ticket_id: true })
     );
 
-    const name = (git as any).buildBranchName(
+    const name = git.buildTicketBranch(
       makeTicket({ id: "#21", title: "Validate Runtime Resume" })
     );
 
@@ -137,14 +229,14 @@ describe("GitManager", () => {
     expect(name).not.toContain("#");
   });
 
-  it("buildBranchName truncates to 50 chars in slug", () => {
+  it("buildTicketBranch truncates to 50 chars in slug", () => {
     const git = new GitManager(
       makeRepoConfig(),
       makeBranchStrategy({ include_ticket_id: false })
     );
 
     const longTitle = "This is a very long title that should be truncated at exactly fifty characters";
-    const name = (git as any).buildBranchName(makeTicket({ title: longTitle }));
+    const name = git.buildTicketBranch(makeTicket({ title: longTitle }));
 
     // The slug part (after prefix) should be ≤ 50 chars
     const slug = name.replace("feat/", "");
@@ -538,10 +630,14 @@ describe("GitManager", () => {
   });
 
   it("commitStepCheckpoint: throws when git add fails", async () => {
-    (mockSpawnSync as any).mockReturnValueOnce({
-      status: 128,
-      stdout: "",
-      stderr: "fatal: not a git repository",
+    (mockSpawnSync as any).mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "config" && args[1] === "--local") {
+        return { status: 0, stdout: "", stderr: "" };
+      }
+      if (args[0] === "add") {
+        return { status: 128, stdout: "", stderr: "fatal: not a git repository" };
+      }
+      return { status: 0, stdout: "", stderr: "" };
     });
 
     const git = new GitManager(makeRepoConfig(), makeBranchStrategy());

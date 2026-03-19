@@ -29,6 +29,8 @@ import type {
   ProjectStack,
   TaskSource,
   RunSessionMetadata,
+  WorkflowStageContext,
+  TicketWorkflowStage,
 } from "../shared/types.js";
 import { parse as parseYaml } from "yaml";
 import { PlanValidator } from "./plan-validator.js";
@@ -63,6 +65,13 @@ import type {
   SandboxTeardownReason,
 } from "./execution/index.js";
 import { hasFailingChecks, runPreflight } from "./preflight.js";
+import {
+  buildWorkflowStageTask,
+  getTicketWorkflowConfig,
+  type NormalizedTicketWorkflowConfig,
+  resolveWorkflowBranchName,
+  resolveWorkflowStateTarget,
+} from "./ticket-workflow.js";
 
 const RUN_STATE_DIR = ".sprintfoundry";
 const RUN_STATE_FILE = "run-state.json";
@@ -92,6 +101,15 @@ interface ResumeTaskOptions {
   step?: number;
   prompt?: string;
   allowInProgressRecovery?: boolean;
+}
+
+interface HandleTaskOptions {
+  dryRun?: boolean;
+  agent?: string;
+  agentFile?: string;
+  workflowStage?: string;
+  workflowBranch?: string;
+  workflowPrUrl?: string;
 }
 
 type TaskRunWithEnvironment = TaskRun & {
@@ -212,8 +230,7 @@ export class OrchestrationService {
   private startLifecycleWatch(run: TaskRun, _workspacePath: string): void {
     if (!this.lifecycleManager || !run.pr_url) return;
 
-    // Use the ticket ID as a fallback branch identifier
-    const branch = run.ticket?.id ?? run.run_id;
+    const branch = run.branch ?? run.ticket?.id ?? run.run_id;
 
     this.lifecycleManager.watch(
       run.run_id,
@@ -277,6 +294,28 @@ export class OrchestrationService {
     }
   }
 
+  private resolveWorkflowContext(opts?: HandleTaskOptions): WorkflowStageContext | null {
+    const stage = String(opts?.workflowStage ?? "").trim() as TicketWorkflowStage;
+    if (!stage) return null;
+    if (stage !== "developer" && stage !== "qa" && stage !== "merge") {
+      throw new Error(`Unsupported workflow stage '${stage}'`);
+    }
+    return {
+      stage,
+      branch: opts?.workflowBranch?.trim() || null,
+      pr_url: opts?.workflowPrUrl?.trim() || null,
+    };
+  }
+
+  private resolveWorkflowAgent(opts: HandleTaskOptions | undefined): string | undefined {
+    const workflowContext = this.resolveWorkflowContext(opts);
+    const workflowConfig = getTicketWorkflowConfig(this.projectConfig);
+    if (!workflowContext || !workflowConfig) {
+      return opts?.agent;
+    }
+    return workflowConfig.agents[workflowContext.stage] || opts?.agent;
+  }
+
   private async updateTicketStatus(
     ticket: TicketDetails,
     status: string,
@@ -338,6 +377,12 @@ export class OrchestrationService {
       return;
     }
 
+    const workflowConfig = getTicketWorkflowConfig(this.projectConfig);
+    if (workflowConfig && run.workflow_stage) {
+      await this.finalizeWorkflowRun(run, workspacePath, workflowConfig);
+      return;
+    }
+
     if (!run.pr_url) {
       const gitStart = Date.now();
       try {
@@ -365,13 +410,74 @@ export class OrchestrationService {
     this.startLifecycleWatch(run, workspacePath);
   }
 
+  private async finalizeWorkflowRun(
+    run: TaskRun,
+    workspacePath: string,
+    workflowConfig: NormalizedTicketWorkflowConfig
+  ): Promise<void> {
+    const stage = run.workflow_stage;
+    if (!stage) return;
+
+    if (stage === "developer") {
+      const reviewState = resolveWorkflowStateTarget(workflowConfig, stage);
+      if (reviewState) {
+        await this.updateTicketStatus(run.ticket, reviewState);
+        await this.emitEvent(run.run_id, "ticket.updated", { status: reviewState });
+      }
+      this.persistSession(run, { workspace_path: workspacePath, branch: run.branch ?? undefined });
+      return;
+    }
+
+    if (stage === "qa") {
+      if (!run.pr_url) {
+        run.pr_url = await this.createPullRequest(workspacePath, run);
+        await this.emitEvent(run.run_id, "pr.created", { prUrl: run.pr_url });
+      }
+      const reviewState = resolveWorkflowStateTarget(workflowConfig, stage);
+      if (reviewState) {
+        await this.updateTicketStatus(run.ticket, reviewState, run.pr_url ?? undefined);
+        await this.emitEvent(run.run_id, "ticket.updated", { status: reviewState, pr_url: run.pr_url });
+      }
+      this.persistSession(run, {
+        workspace_path: workspacePath,
+        branch: run.branch ?? undefined,
+      });
+      return;
+    }
+
+    const scm = this.registry?.getFirst<SCMPlugin>("scm") ?? null;
+    if (!scm) {
+      throw new Error("Workflow merge stage requires an SCM plugin");
+    }
+
+    const branch = run.branch ?? this.git.buildTicketBranch(run.ticket);
+    const prInfo = await scm.detectPR(branch, this.projectConfig.repo);
+    if (!prInfo) {
+      throw new Error(`No open PR found for branch '${branch}'`);
+    }
+
+    const mergeability = await scm.getMergeability(prInfo);
+    if (!mergeability.mergeable) {
+      throw new Error(`PR ${prInfo.url} is not mergeable: ${mergeability.blockers.join(", ")}`);
+    }
+
+    await scm.mergePR(prInfo, workflowConfig.mergeMethod);
+    run.pr_url = prInfo.url;
+    const doneState = resolveWorkflowStateTarget(workflowConfig, stage);
+    if (doneState) {
+      await this.updateTicketStatus(run.ticket, doneState, prInfo.url);
+      await this.emitEvent(run.run_id, "ticket.updated", { status: doneState, pr_url: prInfo.url });
+    }
+    this.persistSession(run, { workspace_path: workspacePath, branch });
+  }
+
   // ---- Main entry point ----
 
   async handleTask(
     ticketId: string,
     source: "linear" | "github" | "jira" | "prompt",
     promptText?: string,
-    opts?: { dryRun?: boolean; agent?: string; agentFile?: string }
+    opts?: HandleTaskOptions
   ): Promise<TaskRun> {
     return this.tracer.startActiveSpan(
       "task.run",
@@ -502,12 +608,14 @@ export class OrchestrationService {
     ticketId: string,
     source: "linear" | "github" | "jira" | "prompt",
     promptText: string | undefined,
-    opts: { dryRun?: boolean; agent?: string; agentFile?: string } | undefined,
+    opts: HandleTaskOptions | undefined,
     span: Span
   ): Promise<TaskRun> {
     // 1. Create the run
     const run = this.createRun(ticketId);
     let workspacePath: string | null = null;
+    const workflowContext = this.resolveWorkflowContext(opts);
+    const directAgent = this.resolveWorkflowAgent(opts);
     const triggerSource = process.env.SPRINTFOUNDRY_TRIGGER_SOURCE ?? null;
     span.setAttribute("run_id", run.run_id);
     const runStartMs = Date.now();
@@ -516,8 +624,8 @@ export class OrchestrationService {
     try {
       if (!opts?.dryRun) {
         await this.runServicePreflight({
-          includePlanner: !opts?.agent,
-          agentIds: opts?.agent ? [opts.agent] : undefined,
+          includePlanner: !directAgent,
+          agentIds: directAgent ? [directAgent] : undefined,
         });
       }
 
@@ -527,6 +635,7 @@ export class OrchestrationService {
         : await this.fetchTicket(ticketId, source);
 
       run.ticket = ticket;
+      run.workflow_stage = workflowContext?.stage ?? null;
       await this.persistSessionBlocking(run);
       await this.emitEvent(run.run_id, "task.created", { ticketId, source, trigger_source: triggerSource });
       await this.emitEvent(run.run_id, "task.created", {
@@ -546,9 +655,21 @@ export class OrchestrationService {
           run.run_id,
           this.projectConfig.repo,
           this.projectConfig.branch_strategy,
-          ticket
+          ticket,
+          {
+            branchName: workflowContext
+              ? resolveWorkflowBranchName(ticket, this.projectConfig.branch_strategy, workflowContext)
+              : undefined,
+            branchMode: workflowContext
+              ? workflowContext.stage === "developer"
+                ? "reuse-or-create"
+                : "existing"
+              : undefined,
+            workflowStage: workflowContext?.stage ?? null,
+          }
         );
         workspacePath = workspace.path;
+        run.branch = workspace.branch;
         console.log(`[orchestrator] Workspace created: ${workspacePath} (branch: ${workspace.branch})`);
       } else {
         console.log(`[orchestrator] Creating workspace for run ${run.run_id}...`);
@@ -560,9 +681,22 @@ export class OrchestrationService {
           console.log(`[orchestrator] Dry-run mode — skipping git clone.`);
         } else {
           console.log(`[orchestrator] Cloning repo and creating branch...`);
-          await this.git.cloneAndBranch(workspacePath, ticket);
+          run.branch = await this.git.cloneAndBranch(workspacePath, ticket, {
+            branchName: workflowContext
+              ? resolveWorkflowBranchName(ticket, this.projectConfig.branch_strategy, workflowContext)
+              : undefined,
+            branchMode: workflowContext
+              ? workflowContext.stage === "developer"
+                ? "reuse-or-create"
+                : "existing"
+              : undefined,
+          });
           console.log(`[orchestrator] Repo cloned successfully.`);
         }
+      }
+
+      if (!opts?.dryRun && workspacePath) {
+        this.persistSession(run, { workspace_path: workspacePath, branch: run.branch ?? undefined });
       }
 
       if (!opts?.dryRun) {
@@ -584,14 +718,14 @@ export class OrchestrationService {
       }
 
       // 4a. Direct single-agent mode (bypasses orchestrator + plan validator)
-      if (opts?.agent) {
+      if (directAgent) {
         if (opts?.dryRun) {
-          await this.prepareDirectAgentPlan(run, opts.agent, ticket, opts.agentFile);
+          await this.prepareDirectAgentPlan(run, directAgent, ticket, workflowContext, opts.agentFile);
           run.status = "completed";
           console.log(`[orchestrator] Dry-run mode — skipping direct agent execution.`);
           return run;
         }
-        return await this.runDirectAgent(run, opts.agent, ticket, workspacePath, opts.agentFile);
+        return await this.runDirectAgent(run, directAgent, ticket, workspacePath, workflowContext, opts?.agentFile);
       }
 
       // 4. Get plan from orchestrator agent
@@ -629,7 +763,7 @@ export class OrchestrationService {
         return run;
       }
       run.status = "executing";
-      this.persistSession(run, { workspace_path: workspacePath });
+      this.persistSession(run, { workspace_path: workspacePath, branch: run.branch ?? undefined });
       console.log(`[orchestrator] Starting plan execution...`);
       await this.executePlan(run, validatedPlan, workspacePath);
 
@@ -666,7 +800,10 @@ export class OrchestrationService {
       await this.sendNotification(
         `Task ${run.ticket?.id ?? ticketId} failed: ${run.error}`
       );
-      this.persistSession(run, workspacePath ? { workspace_path: workspacePath } : undefined);
+      this.persistSession(
+        run,
+        workspacePath ? { workspace_path: workspacePath, branch: run.branch ?? undefined } : undefined
+      );
       return run;
     } finally {
       if (workspacePath) {
@@ -683,9 +820,10 @@ export class OrchestrationService {
     agentId: string,
     ticket: TicketDetails,
     workspacePath: string,
+    workflowContext?: WorkflowStageContext | null,
     agentFile?: string
   ): Promise<TaskRun> {
-    const plan = await this.prepareDirectAgentPlan(run, agentId, ticket, agentFile);
+    const plan = await this.prepareDirectAgentPlan(run, agentId, ticket, workflowContext, agentFile);
     run.status = "executing";
 
     await this.executePlan(run, plan, workspacePath);
@@ -701,6 +839,7 @@ export class OrchestrationService {
     run: TaskRun,
     agentId: string,
     ticket: TicketDetails,
+    workflowContext?: WorkflowStageContext | null,
     agentFile?: string
   ): Promise<ExecutionPlan> {
     if (agentFile) {
@@ -723,6 +862,10 @@ export class OrchestrationService {
     }
 
     console.log(`[orchestrator] Direct mode: running agent '${agentId}' (role: ${agentDef.role})`);
+    const branch = run.branch ?? resolveWorkflowBranchName(ticket, this.projectConfig.branch_strategy, workflowContext ?? undefined);
+    const task = workflowContext
+      ? buildWorkflowStageTask(ticket, workflowContext, branch)
+      : (ticket.description || ticket.title);
 
     const plan: ExecutionPlan = {
       plan_id: `direct-${Date.now()}`,
@@ -733,7 +876,7 @@ export class OrchestrationService {
         {
           step_number: 1,
           agent: agentId,
-          task: ticket.description || ticket.title,
+          task,
           context_inputs: [{ type: "ticket" }],
           depends_on: [],
           estimated_complexity: "medium",
@@ -2556,6 +2699,8 @@ export class OrchestrationService {
       run_id: presetRunId || `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       project_id: this.projectConfig.project_id,
       ticket: null as any, // will be set immediately after
+      branch: null,
+      workflow_stage: null,
       plan: null,
       validated_plan: null,
       status: "pending",
@@ -2643,11 +2788,17 @@ export class OrchestrationService {
   }
 
   private resolveApiKey(provider: string, runtime?: RuntimeConfig): string {
+    const resolvedProvider =
+      runtime?.provider === "codex"
+        ? "openai"
+        : runtime?.provider === "claude-code"
+          ? "anthropic"
+          : provider;
     const keys = this.projectConfig.api_keys;
-    const key = keys[provider as keyof typeof keys];
+    const key = keys[resolvedProvider as keyof typeof keys];
     const resolved = typeof key === "string" ? key : key?.[0]?.key ?? "";
     if (!resolved && runtime?.mode !== "local_process") {
-      throw new Error(`No API key configured for provider: ${provider}`);
+      throw new Error(`No API key configured for provider: ${resolvedProvider}`);
     }
     return resolved;
   }

@@ -34,7 +34,7 @@ export function normalizeGitHubAutoexecuteConfig(raw: AnyRecord): GitHubAutoexec
   const enabled = (github.enabled ?? topEnabled) === true;
   const allowedEvents = Array.isArray(github.allowed_events) && github.allowed_events.length
     ? github.allowed_events.map((v) => String(v))
-    : ["issue_comment.created"];
+    : ["issue_comment.created", "pull_request.opened", "pull_request.synchronize", "pull_request.reopened"];
   return {
     enabled,
     webhookSecret: String(github.webhook_secret ?? "").trim(),
@@ -52,7 +52,7 @@ export function normalizeLinearAutoexecuteConfig(raw: AnyRecord): LinearAutoexec
   const enabled = (linear.enabled ?? topEnabled) === true;
   const allowedEvents = Array.isArray(linear.allowed_events) && linear.allowed_events.length
     ? linear.allowed_events.map((v) => String(v))
-    : ["Issue.create"];
+    : ["Issue.create", "Issue.update"];
   return {
     enabled,
     webhookSecret: String(linear.webhook_secret ?? "").trim(),

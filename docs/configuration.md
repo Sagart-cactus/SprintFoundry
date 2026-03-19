@@ -84,6 +84,42 @@ agents:
   - security
 ```
 
+#### `integrations.scm`
+Optional SCM integration used for PR detection, mergeability checks, and automated merges. This is separate from `integrations.ticket_source`; for Linear-driven workflows you typically use `ticket_source: linear` plus `scm: github`.
+
+```yaml
+integrations:
+  ticket_source:
+    type: linear
+    config:
+      api_key: ${LINEAR_API_KEY}
+      team_key: APP
+  scm:
+    type: github
+    config:
+      token: ${GITHUB_TOKEN}
+      owner: myorg
+      repo: myapp
+```
+
+#### `ticket_workflow`
+Enables the built-in Linear SDLC workflow for single-step `developer`, `qa`, and `merge-bot` runs. When enabled, SprintFoundry interprets Linear state transitions, reuses the working branch across stages, opens the PR during QA, and merges through the SCM integration during the merge stage.
+
+```yaml
+ticket_workflow:
+  enabled: true
+  provider: linear_sdlc
+  linear_states:
+    todo: [Todo]
+    review: [Review]
+    done: [Done]
+  agents:
+    developer: developer
+    qa: qa
+    merge: merge-bot
+  merge_method: squash   # merge | squash | rebase
+```
+
 #### `model_overrides`
 Override the model used for specific agents.
 ```yaml
@@ -487,10 +523,29 @@ integrations:
       token: ${GITHUB_TOKEN}
       owner: myorg
       repo: my-app
+  scm:
+    type: github
+    config:
+      token: ${GITHUB_TOKEN}
+      owner: myorg
+      repo: my-app
   notifications:
     type: slack
     config:
       webhook_url: ${SLACK_WEBHOOK_URL}
+
+ticket_workflow:
+  enabled: true
+  provider: linear_sdlc
+  linear_states:
+    todo: [Todo]
+    review: [Review]
+    done: [Done]
+  agents:
+    developer: developer
+    qa: qa
+    merge: merge-bot
+  merge_method: squash
 
 rules:
   - id: security-on-payments

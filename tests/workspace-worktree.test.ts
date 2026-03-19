@@ -39,6 +39,10 @@ function setupSpawnDefaults() {
   mockedSpawn.mockImplementation(((cmd: string, args: string[]) => {
     const joined = args?.join(" ") ?? "";
 
+    // show-ref --verify --quiet should report missing branches by default
+    if (joined.includes("show-ref") && joined.includes("--verify") && joined.includes("--quiet")) {
+      return { status: 1, stdout: "", stderr: "", error: null };
+    }
     // rev-parse --abbrev-ref HEAD
     if (joined.includes("--abbrev-ref")) return spawnOk("feat/test-branch\n");
     // rev-parse --git-common-dir
@@ -191,6 +195,74 @@ describe("workspace-worktree plugin", () => {
     expect(result.branch).toContain("feat/");
   });
 
+  it("reuses an existing branch when branchMode is reuse-or-create", async () => {
+    mockedSpawn.mockImplementation(((cmd: string, args: string[]) => {
+      const joined = args?.join(" ") ?? "";
+      if (joined.includes("show-ref") && joined.includes("refs/heads/feat/test-1-test-ticket")) {
+        return spawnOk("");
+      }
+      if (joined.includes("show-ref") && joined.includes("refs/remotes/origin/feat/test-1-test-ticket")) {
+        return spawnOk("");
+      }
+      if (joined.includes("show-ref") && joined.includes("--verify") && joined.includes("--quiet")) {
+        return { status: 1, stdout: "", stderr: "", error: null };
+      }
+      if (joined.includes("--abbrev-ref")) return spawnOk("feat/test-branch\n");
+      if (joined.includes("--git-common-dir")) return spawnOk("../../_base\n");
+      if (joined.includes("config") && joined.includes("user.email") && !joined.includes("sprintfoundry")) {
+        return spawnOk("user@example.com\n");
+      }
+      return spawnOk("");
+    }) as any);
+
+    const plugin = worktreeWorkspaceModule.create({
+      project_id: "test-project",
+      base_repo_dir: "/tmp/repos",
+    });
+
+    const result = await plugin.create(
+      "run-abc",
+      makeRepoConfig(),
+      makeBranchStrategy(),
+      makeTicket(),
+      { branchName: "feat/test-1-test-ticket", branchMode: "reuse-or-create" }
+    );
+
+    expect(result.branch).toBe("feat/test-1-test-ticket");
+
+    const branchCreateCalls = mockedSpawn.mock.calls.filter(
+      ([cmd, args]) => cmd === "git" && args?.[0] === "branch" && args?.[1] === "feat/test-1-test-ticket"
+    );
+    expect(branchCreateCalls.length).toBe(0);
+
+    const worktreeCalls = mockedSpawn.mock.calls.filter(
+      ([cmd, args]) => cmd === "git" && args?.[0] === "worktree" && args?.[1] === "add"
+    );
+    expect(worktreeCalls[0]?.[1]).toEqual([
+      "worktree",
+      "add",
+      "/tmp/repos/test-project/run-run-abc",
+      "feat/test-1-test-ticket",
+    ]);
+  });
+
+  it("requires an existing branch when branchMode is existing", async () => {
+    const plugin = worktreeWorkspaceModule.create({
+      project_id: "test-project",
+      base_repo_dir: "/tmp/repos",
+    });
+
+    await expect(
+      plugin.create(
+        "run-abc",
+        makeRepoConfig(),
+        makeBranchStrategy(),
+        makeTicket(),
+        { branchName: "feat/missing", branchMode: "existing" }
+      )
+    ).rejects.toThrow(/Expected existing branch 'feat\/missing'/);
+  });
+
   it("injects token into clone URL when provided", async () => {
     const plugin = worktreeWorkspaceModule.create({
       project_id: "test-project",
@@ -256,6 +328,9 @@ describe("workspace-worktree plugin", () => {
     // Override diff --staged --quiet to return non-zero (has changes)
     mockedSpawn.mockImplementation(((cmd: string, args: string[]) => {
       const joined = args?.join(" ") ?? "";
+      if (joined.includes("show-ref") && joined.includes("--verify") && joined.includes("--quiet")) {
+        return { status: 1, stdout: "", stderr: "", error: null };
+      }
       if (joined.includes("diff") && joined.includes("--staged") && joined.includes("--quiet")) {
         return { status: 1, stdout: "", stderr: "", error: null };
       }
@@ -329,6 +404,9 @@ describe("workspace-worktree plugin", () => {
     // Override rev-list --count to return 0
     mockedSpawn.mockImplementation(((cmd: string, args: string[]) => {
       const joined = args?.join(" ") ?? "";
+      if (joined.includes("show-ref") && joined.includes("--verify") && joined.includes("--quiet")) {
+        return { status: 1, stdout: "", stderr: "", error: null };
+      }
       if (joined.includes("rev-list") && joined.includes("--count")) return spawnOk("0\n");
       if (joined.includes("--abbrev-ref")) return spawnOk("feat/test-branch\n");
       if (joined.includes("--git-common-dir")) return spawnOk("../../_base\n");
@@ -369,6 +447,9 @@ describe("workspace-worktree plugin", () => {
     // Mock rev-parse to return a step branch name
     mockedSpawn.mockImplementation(((cmd: string, args: string[]) => {
       const joined = args?.join(" ") ?? "";
+      if (joined.includes("show-ref") && joined.includes("--verify") && joined.includes("--quiet")) {
+        return { status: 1, stdout: "", stderr: "", error: null };
+      }
       if (joined.includes("--abbrev-ref")) return spawnOk("feat/test-branch-step2\n");
       if (joined.includes("--git-common-dir")) return spawnOk("../../_base\n");
       if (joined.includes("config") && joined.includes("user.email") && !joined.includes("sprintfoundry")) {

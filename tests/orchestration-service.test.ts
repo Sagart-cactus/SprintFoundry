@@ -7,6 +7,7 @@ import { makeTicket } from "./fixtures/tickets.js";
 import { makePlan, makeStep, makeDevQaPlan } from "./fixtures/plans.js";
 import { makeResult, makeFailedResult, makeReworkResult } from "./fixtures/results.js";
 import type { ExecutionBackend, RunEnvironmentHandle } from "../src/service/execution/index.js";
+import { getTicketWorkflowConfig } from "../src/service/ticket-workflow.js";
 
 const eventStoreCtor = vi.fn();
 const eventSinkCtor = vi.fn();
@@ -556,6 +557,207 @@ describe("OrchestrationService", () => {
     });
     expect(mockOrchestratorAgent.generatePlan).not.toHaveBeenCalled();
     expect(run.status).toBe("completed");
+  });
+
+  it("workflow developer runs reuse-or-create the branch and move the ticket to review without creating a PR", async () => {
+    service = new OrchestrationService(
+      makePlatformConfig(),
+      makeProjectConfig({
+        integrations: {
+          ticket_source: {
+            type: "linear",
+            config: { api_key: "lin_test" },
+          },
+        },
+        ticket_workflow: {
+          enabled: true,
+          provider: "linear_sdlc",
+          linear_states: {
+            todo: ["Todo"],
+            review: ["Review"],
+            done: ["Done"],
+          },
+          agents: {
+            developer: "developer",
+            qa: "qa",
+            merge: "merge-bot",
+          },
+        },
+      })
+    );
+    mockOrchestratorAgent = (service as any).plannerRuntime;
+    mockAgentRunner = (service as any).agentRunner;
+    mockTicketFetcher = (service as any).tickets;
+    mockGitManager = (service as any).git;
+
+    const ticket = makeTicket({
+      id: "LIN-42",
+      source: "linear",
+      title: "Fix login",
+      raw: { id: "issue-42" },
+    } as any);
+    mockTicketFetcher.fetch.mockResolvedValue(ticket);
+    mockGitManager.cloneAndBranch.mockResolvedValue("feat/lin-42-fix-login");
+    mockAgentRunner.run.mockResolvedValue({
+      agentResult: makeResult(),
+      tokens_used: 100,
+      cost_usd: 0.01,
+      duration_seconds: 5,
+      container_id: "local-1",
+    });
+
+    const run = await service.handleTask("LIN-42", "linear", undefined, {
+      workflowStage: "developer",
+    });
+
+    expect(mockGitManager.cloneAndBranch).toHaveBeenCalledWith(
+      "/tmp/workspace",
+      ticket,
+      expect.objectContaining({
+        branchName: "feat/lin-42-fix-login",
+        branchMode: "reuse-or-create",
+      })
+    );
+    expect(mockAgentRunner.run).toHaveBeenCalledWith(expect.objectContaining({ agent: "developer" }));
+    expect(mockGitManager.createPullRequest).not.toHaveBeenCalled();
+    expect(mockTicketFetcher.updateStatus).toHaveBeenCalledWith(ticket, "review", undefined);
+    expect(run.workflow_stage).toBe("developer");
+    expect(run.branch).toBe("feat/lin-42-fix-login");
+    expect(run.pr_url).toBeNull();
+  });
+
+  it("workflow qa runs require the existing branch and create a PR before updating Linear review state", async () => {
+    service = new OrchestrationService(
+      makePlatformConfig(),
+      makeProjectConfig({
+        integrations: {
+          ticket_source: {
+            type: "linear",
+            config: { api_key: "lin_test" },
+          },
+        },
+        ticket_workflow: {
+          enabled: true,
+          provider: "linear_sdlc",
+          linear_states: {
+            todo: ["Todo"],
+            review: ["Review"],
+            done: ["Done"],
+          },
+        },
+      })
+    );
+    mockOrchestratorAgent = (service as any).plannerRuntime;
+    mockAgentRunner = (service as any).agentRunner;
+    mockTicketFetcher = (service as any).tickets;
+    mockGitManager = (service as any).git;
+
+    const ticket = makeTicket({
+      id: "LIN-42",
+      source: "linear",
+      title: "Fix login",
+      raw: { id: "issue-42" },
+    } as any);
+    mockTicketFetcher.fetch.mockResolvedValue(ticket);
+    mockGitManager.cloneAndBranch.mockResolvedValue("feat/lin-42-fix-login");
+    mockGitManager.createPullRequest.mockResolvedValue("https://github.com/test/repo/pull/77");
+    mockAgentRunner.run.mockResolvedValue({
+      agentResult: makeResult(),
+      tokens_used: 100,
+      cost_usd: 0.01,
+      duration_seconds: 5,
+      container_id: "local-1",
+    });
+
+    const run = await service.handleTask("LIN-42", "linear", undefined, {
+      workflowStage: "qa",
+      workflowBranch: "feat/lin-42-fix-login",
+    });
+
+    expect(mockGitManager.cloneAndBranch).toHaveBeenCalledWith(
+      "/tmp/workspace",
+      ticket,
+      expect.objectContaining({
+        branchName: "feat/lin-42-fix-login",
+        branchMode: "existing",
+      })
+    );
+    expect(mockGitManager.createPullRequest).toHaveBeenCalledWith("/tmp/workspace", expect.any(Object));
+    expect(mockTicketFetcher.updateStatus).toHaveBeenCalledWith(
+      ticket,
+      "review",
+      "https://github.com/test/repo/pull/77"
+    );
+    expect(run.workflow_stage).toBe("qa");
+    expect(run.pr_url).toBe("https://github.com/test/repo/pull/77");
+  });
+
+  it("workflow merge finalization merges the detected PR and marks the ticket done", async () => {
+    const projectConfig = makeProjectConfig({
+      integrations: {
+        ticket_source: {
+          type: "linear",
+          config: { api_key: "lin_test" },
+        },
+      },
+      ticket_workflow: {
+        enabled: true,
+        provider: "linear_sdlc",
+        linear_states: {
+          todo: ["Todo"],
+          review: ["Review"],
+          done: ["Done"],
+        },
+      },
+    });
+    service = new OrchestrationService(makePlatformConfig(), projectConfig);
+    mockTicketFetcher = (service as any).tickets;
+
+    const scm = {
+      detectPR: vi.fn().mockResolvedValue({ number: 7, url: "https://github.com/test/repo/pull/7" }),
+      getMergeability: vi.fn().mockResolvedValue({ mergeable: true, blockers: [] }),
+      mergePR: vi.fn().mockResolvedValue(undefined),
+    };
+    (service as any).registry = {
+      getFirst: vi.fn((slot: string) => (slot === "scm" ? scm : null)),
+    };
+
+    const run = {
+      run_id: "run-merge-1",
+      project_id: "test-project",
+      workflow_stage: "merge",
+      branch: "feat/lin-42-fix-login",
+      pr_url: null,
+      ticket: makeTicket({
+        id: "LIN-42",
+        source: "linear",
+        title: "Fix login",
+        raw: { id: "issue-42" },
+      } as any),
+      steps: [],
+      total_tokens_used: 0,
+      total_cost_usd: 0,
+      status: "completed",
+    } as any;
+
+    await (service as any).finalizeWorkflowRun(
+      run,
+      "/tmp/workspace",
+      getTicketWorkflowConfig(projectConfig)!
+    );
+
+    expect(scm.detectPR).toHaveBeenCalledWith("feat/lin-42-fix-login", projectConfig.repo);
+    expect(scm.getMergeability).toHaveBeenCalled();
+    expect(scm.mergePR).toHaveBeenCalledWith(
+      { number: 7, url: "https://github.com/test/repo/pull/7" },
+      "squash"
+    );
+    expect(mockTicketFetcher.updateStatus).toHaveBeenCalledWith(
+      run.ticket,
+      "done",
+      "https://github.com/test/repo/pull/7"
+    );
+    expect(run.pr_url).toBe("https://github.com/test/repo/pull/7");
   });
 
   it("handleTask with source=prompt creates ticket from prompt text", async () => {
@@ -1518,6 +1720,61 @@ describe("OrchestrationService", () => {
     expect(run.status).toBe("completed");
     expect(mockRunner.run).toHaveBeenCalled();
     expect(mockRunner.run.mock.calls[0][0].apiKey).toBe("");
+  });
+
+  it("uses the runtime provider API key when model and runtime providers differ", async () => {
+    const serviceMixedProviders = new OrchestrationService(
+      makePlatformConfig({
+        defaults: {
+          model_per_agent: {
+            orchestrator: { provider: "anthropic", model: "claude-sonnet-4-5-20250929" },
+            developer: { provider: "anthropic", model: "claude-sonnet-4-5-20250929" },
+          },
+          budgets: {
+            per_agent_tokens: 500_000,
+            per_task_total_tokens: 3_000_000,
+            per_task_max_cost_usd: 25,
+          },
+          timeouts: {
+            agent_timeout_minutes: 30,
+            task_timeout_minutes: 180,
+            human_gate_timeout_hours: 48,
+          },
+          max_rework_cycles: 3,
+          runtime_per_agent: {
+            developer: { provider: "codex", mode: "local_process", model: "o4-mini" },
+          },
+        },
+        rules: [],
+      }),
+      makeProjectConfig({
+        api_keys: {
+          anthropic: "sk-ant-test-key",
+          openai: "sk-openai-test-key",
+        },
+        rules: [],
+      })
+    );
+
+    const mockPlanner = (serviceMixedProviders as any).plannerRuntime;
+    const mockRunner = (serviceMixedProviders as any).agentRunner;
+    mockPlanner.generatePlan.mockResolvedValue(
+      makePlan({
+        steps: [makeStep({ step_number: 1, agent: "developer", task: "Implement" })],
+      })
+    );
+    mockRunner.run.mockResolvedValue({
+      agentResult: makeResult(),
+      tokens_used: 50,
+      cost_usd: 0.01,
+      duration_seconds: 1,
+      container_id: "local-1",
+    });
+
+    const run = await serviceMixedProviders.handleTask("p2", "prompt", "Build thing");
+    expect(run.status).toBe("completed");
+    expect(mockRunner.run).toHaveBeenCalled();
+    expect(mockRunner.run.mock.calls[0][0].apiKey).toBe("sk-openai-test-key");
   });
 
   it("still requires API key for SDK runtimes", async () => {
