@@ -3,6 +3,9 @@ import { makePlatformConfig, makeProjectConfig } from "./fixtures/configs.js";
 import { makeStep } from "./fixtures/plans.js";
 import { makeResult } from "./fixtures/results.js";
 
+const runPreflightMock = vi.fn();
+const hasFailingChecksMock = vi.fn();
+
 // Mock all sub-services (must match orchestration-service.test.ts pattern)
 vi.mock("../src/service/runtime/planner-factory.js", () => ({
   PlannerFactory: class {
@@ -77,6 +80,11 @@ vi.mock("../src/service/runtime-session-store.js", () => ({
   },
 }));
 
+vi.mock("../src/service/preflight.js", () => ({
+  runPreflight: runPreflightMock,
+  hasFailingChecks: hasFailingChecksMock,
+}));
+
 const { OrchestrationService } = await import("../src/service/orchestration-service.js");
 const { PluginRegistry } = await import("../src/service/plugin-registry.js");
 
@@ -137,6 +145,8 @@ describe("Parallel execution with sub-worktree isolation", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    runPreflightMock.mockResolvedValue({ profile: "local", checks: [] });
+    hasFailingChecksMock.mockReturnValue(false);
 
     worktreePlugin = makeWorktreePlugin();
     const registry = new PluginRegistry();
