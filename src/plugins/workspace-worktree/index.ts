@@ -370,8 +370,20 @@ class WorktreeWorkspacePlugin implements WorkspacePlugin {
   }
 
   private ensureLocalBranch(branch: string): void {
-    if (this.branchExists(branch)) return;
-    if (!this.remoteBranchExists(branch)) {
+    const localExists = this.branchExists(branch);
+    const remoteExists = this.remoteBranchExists(branch);
+    if (localExists && remoteExists) {
+      git(
+        ["branch", "-f", branch, `refs/remotes/origin/${branch}`],
+        this.baseClonePath,
+        this.repoConfig ?? undefined
+      );
+      return;
+    }
+    if (localExists) {
+      return;
+    }
+    if (!remoteExists) {
       throw new Error(`Expected remote branch '${branch}', but none was found`);
     }
     git(

@@ -246,6 +246,50 @@ describe("workspace-worktree plugin", () => {
     ]);
   });
 
+  it("refreshes an existing local branch from origin before reusing it", async () => {
+    mockedSpawn.mockImplementation(((cmd: string, args: string[]) => {
+      const joined = args?.join(" ") ?? "";
+      if (joined.includes("show-ref") && joined.includes("refs/heads/feat/test-1-test-ticket")) {
+        return spawnOk("");
+      }
+      if (joined.includes("show-ref") && joined.includes("refs/remotes/origin/feat/test-1-test-ticket")) {
+        return spawnOk("");
+      }
+      if (joined.includes("show-ref") && joined.includes("--verify") && joined.includes("--quiet")) {
+        return { status: 1, stdout: "", stderr: "", error: null };
+      }
+      if (joined.includes("--abbrev-ref")) return spawnOk("feat/test-branch\n");
+      if (joined.includes("--git-common-dir")) return spawnOk("../../_base\n");
+      if (joined.includes("config") && joined.includes("user.email") && !joined.includes("sprintfoundry")) {
+        return spawnOk("user@example.com\n");
+      }
+      return spawnOk("");
+    }) as any);
+
+    const plugin = worktreeWorkspaceModule.create({
+      project_id: "test-project",
+      base_repo_dir: "/tmp/repos",
+    });
+
+    await plugin.create(
+      "run-abc",
+      makeRepoConfig(),
+      makeBranchStrategy(),
+      makeTicket(),
+      { branchName: "feat/test-1-test-ticket", branchMode: "reuse-or-create" }
+    );
+
+    const refreshCalls = mockedSpawn.mock.calls.filter(
+      ([cmd, args]) =>
+        cmd === "git" &&
+        args?.[0] === "branch" &&
+        args?.[1] === "-f" &&
+        args?.[2] === "feat/test-1-test-ticket" &&
+        args?.[3] === "refs/remotes/origin/feat/test-1-test-ticket"
+    );
+    expect(refreshCalls.length).toBe(1);
+  });
+
   it("requires an existing branch when branchMode is existing", async () => {
     const plugin = worktreeWorkspaceModule.create({
       project_id: "test-project",

@@ -311,7 +311,7 @@ export class TicketFetcher {
     const aliasMatchers: Record<string, (state: any) => boolean> = {
       in_review: (state) => {
         const name = String(state?.name ?? "").toLowerCase();
-        return name.includes("review") || String(state?.type ?? "").toLowerCase() === "started";
+        return name.includes("review");
       },
       done: (state) => {
         const name = String(state?.name ?? "").toLowerCase();
