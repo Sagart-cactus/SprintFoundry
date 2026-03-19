@@ -52,7 +52,7 @@ export function normalizeLinearAutoexecuteConfig(raw: AnyRecord): LinearAutoexec
   const enabled = (linear.enabled ?? topEnabled) === true;
   const allowedEvents = Array.isArray(linear.allowed_events) && linear.allowed_events.length
     ? linear.allowed_events.map((v) => String(v))
-    : ["Issue.create", "Issue.update"];
+    : ["Issue.create", "Comment.create"];
   return {
     enabled,
     webhookSecret: String(linear.webhook_secret ?? "").trim(),

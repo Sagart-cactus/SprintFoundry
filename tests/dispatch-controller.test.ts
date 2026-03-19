@@ -544,6 +544,8 @@ describe("dispatch-controller", () => {
         "  linear:",
         "    enabled: true",
         "    webhook_secret: linear-secret",
+        "    allowed_events:",
+        "      - Issue.update",
         "rules: []",
         "",
       ].join("\n"),
@@ -846,6 +848,45 @@ describe("dispatch-controller", () => {
       persistentVolumeClaim: { claimName: "sf-run-ws-run-xyz" },
     });
     expect(manifest.spec.backoffLimit).toBe(1);
+  });
+
+  it("builds a k8s job manifest using the default project config mount path when no project arg is set", () => {
+    const manifest = buildK8sJobManifest(
+      {
+        run_id: "run-default",
+        project_id: "proj-1",
+        project_arg: null,
+        source: "github",
+        ticket_id: "55",
+        created_at: "2026-03-04T00:00:00.000Z",
+      },
+      {
+        namespace: "proj-ns",
+        image: "ghcr.io/acme/sprintfoundry:latest",
+        projectSecretName: "proj-secret",
+        projectConfigMapName: "proj-config",
+      },
+    );
+
+    const container = manifest.spec.template.spec.containers[0];
+    expect(container.args).toEqual([
+      "run",
+      "--source",
+      "github",
+      "--config",
+      "/opt/sprintfoundry/config",
+      "--ticket",
+      "55",
+    ]);
+    expect(container.volumeMounts).toEqual([
+      {
+        name: "project-config",
+        mountPath: "/opt/sprintfoundry/config/project.yaml",
+        subPath: "project.yaml",
+        readOnly: true,
+      },
+      { name: "workspace", mountPath: "/workspace" },
+    ]);
   });
 
   it("builds a k8s job manifest with event sink env when provided", () => {
@@ -1186,7 +1227,7 @@ describe("dispatch-controller", () => {
     expect(processed).toBe(true);
     expect(createdJobs).toHaveLength(0);
     expect(createdHosts).toHaveLength(1);
-    expect(await redis.zCard(activeKey("sandbox-project"))).toBe(0);
+    expect(await redis.zCard(activeKey("sandbox-project"))).toBe(1);
     expect(createdHosts[0]?.claim.metadata.annotations?.["sprintfoundry.io/hosting-mode"]).toBe("k8s-agent-sandbox");
     expect(createdHosts[0]?.template.kind).toBe("SandboxTemplate");
     expect(createdHosts[0]?.workspacePvc.kind).toBe("PersistentVolumeClaim");

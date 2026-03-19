@@ -644,7 +644,10 @@ function buildWholeRunRunnerArgs(task: DispatchQueueItem): string[] {
 }
 
 function buildMountedProjectConfigPath(task: DispatchQueueItem): string {
-  const projectName = asString(task.project_arg) || task.project_id;
+  const projectName = asString(task.project_arg);
+  if (!projectName) {
+    return "/opt/sprintfoundry/config/project.yaml";
+  }
   return `/opt/sprintfoundry/config/project-${projectName}.yaml`;
 }
 
@@ -1679,10 +1682,6 @@ class DispatchController implements DispatchControllerRuntime {
         claimPlural: this.agentSandboxWholeRunConfig.claimPlural,
       });
       await this.createSandboxHost({ workspacePvc, template, claim }, task, namespace);
-      // Whole-run sandboxes continue independently of the controller process.
-      // Release the dispatch slot after host creation so queued work is not
-      // blocked until the active-run TTL expires.
-      await this.releaseProjectSlot(task.project_id, task.run_id);
       return;
     }
 

@@ -144,6 +144,49 @@ describe("TicketFetcher", () => {
     expect(commentBody.query).toContain("SprintFoundry PR: https://github.com/test/repo/pull/1");
   });
 
+  it("updateStatus prefers review-named Linear states over generic started states", async () => {
+    const fetcher = new TicketFetcher(
+      makeIntegration({
+        ticket_source: {
+          type: "linear",
+          config: { api_key: "lin_test_key" },
+        },
+      })
+    );
+
+    const ticket = {
+      id: "LIN-43",
+      identifier: "LIN-43",
+      source: "linear" as const,
+      title: "Review routing",
+      description: "Ensure in_review maps correctly",
+      labels: [],
+      priority: "p2" as const,
+      acceptance_criteria: [],
+      linked_tickets: [],
+      comments: [],
+      author: "Alice",
+      raw: {
+        id: "issue-456",
+        team: {
+          states: {
+            nodes: [
+              { id: "state-progress", name: "In Progress", type: "started" },
+              { id: "state-review", name: "In Review", type: "started" },
+            ],
+          },
+        },
+      },
+    };
+
+    (globalThis.fetch as any).mockResolvedValueOnce(mockFetchResponse({ data: { issueUpdate: { success: true } } }));
+
+    await fetcher.updateStatus(ticket, "in_review");
+
+    const stateUpdateBody = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
+    expect(stateUpdateBody.query).toContain('issueUpdate(id: "issue-456", input: { stateId: "state-review" })');
+  });
+
   it("fetchLinear throws on missing API key", async () => {
     const fetcher = new TicketFetcher(
       makeIntegration({
