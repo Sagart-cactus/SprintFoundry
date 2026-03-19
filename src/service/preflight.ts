@@ -63,7 +63,7 @@ export function resolvePreflightProfile(
 ): PreflightProfile {
   if (
     isTruthy(env.SPRINTFOUNDRY_K8S_MODE) ||
-    platform.k8s?.agent_sandbox?.whole_run_hosting_enabled === true ||
+    isHostedWholeRunSandbox(env) ||
     env.SPRINTFOUNDRY_RUN_SANDBOX_MODE === "k8s-whole-run"
   ) {
     return "k8s";

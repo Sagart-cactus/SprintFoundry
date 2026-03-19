@@ -544,8 +544,6 @@ describe("dispatch-controller", () => {
         "  linear:",
         "    enabled: true",
         "    webhook_secret: linear-secret",
-        "    allowed_events:",
-        "      - Issue.update",
         "rules: []",
         "",
       ].join("\n"),
@@ -577,6 +575,9 @@ describe("dispatch-controller", () => {
         team: { key: "LIN" },
         state: { name: "Review" },
       },
+      updatedFrom: {
+        state: { name: "Todo" },
+      },
     });
 
     const response = await app.inject({
@@ -602,6 +603,98 @@ describe("dispatch-controller", () => {
       workflow_stage: "qa",
       agent: "qa",
     });
+
+    await runtime.close();
+  });
+
+  it("ignores Linear issue updates that do not include a workflow state transition", async () => {
+    const configDir = mkdtempSync(path.join(os.tmpdir(), "sf-dispatch-linear-workflow-no-state-change-"));
+    tempDirs.push(configDir);
+
+    makeProjectConfig(
+      configDir,
+      "project.yaml",
+      [
+        "project_id: linear-workflow-no-state-change",
+        "name: Linear Workflow",
+        "repo:",
+        "  url: git@github.com:acme/repo.git",
+        "  default_branch: main",
+        "api_keys:",
+        "  anthropic: test",
+        "branch_strategy:",
+        "  prefix: feat/",
+        "  include_ticket_id: true",
+        "  naming: kebab-case",
+        "integrations:",
+        "  ticket_source:",
+        "    type: linear",
+        "    config:",
+        "      api_key: linear-test",
+        "      team_key: LIN",
+        "ticket_workflow:",
+        "  enabled: true",
+        "  provider: linear_sdlc",
+        "  linear_states:",
+        "    todo: [Todo]",
+        "    review: [Review]",
+        "    done: [Done]",
+        "autoexecute:",
+        "  enabled: true",
+        "  linear:",
+        "    enabled: true",
+        "    webhook_secret: linear-secret",
+        "rules: []",
+        "",
+      ].join("\n"),
+    );
+
+    const redis = new FakeRedisClient();
+    const app = new FakeExpressApp();
+
+    const runtime = await registerDispatchRoutes(app, {
+      configDir,
+      redisClient: redis,
+      autoStartConsumer: false,
+      idGenerator: () => "linwf002",
+      now: () => 1_750_000_000_000,
+    });
+
+    const payload = JSON.stringify({
+      type: "Issue",
+      action: "update",
+      webhookId: "linear-delivery-2",
+      webhookTimestamp: 1_750_000_000_000,
+      createdAt: "2026-03-18T00:01:00Z",
+      data: {
+        identifier: "LIN-43",
+        team: { key: "LIN" },
+        state: { name: "Review" },
+        title: "Edited title only",
+      },
+      updatedFrom: {
+        title: "Previous title",
+      },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      path: "/api/webhooks/linear",
+      rawBody: payload,
+      headers: {
+        "content-type": "application/json",
+        "linear-signature": linearSignature(payload, "linear-secret"),
+      },
+    });
+
+    expect(response.status).toBe(202);
+    expect(response.body).toMatchObject({
+      accepted: false,
+      ignored: true,
+      reason: "workflow_task_not_resolved",
+      ticket_id: "LIN-43",
+    });
+    expect(await redis.lLen(queueKey("linear-workflow-no-state-change"))).toBe(0);
 
     await runtime.close();
   });

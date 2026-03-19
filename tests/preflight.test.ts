@@ -20,7 +20,7 @@ vi.mock("../src/service/agent-sandbox-platform.js", async () => {
   };
 });
 
-import { runPreflight } from "../src/service/preflight.js";
+import { resolvePreflightProfile, runPreflight } from "../src/service/preflight.js";
 
 describe("runPreflight", () => {
   const originalEnv = { ...process.env };
@@ -56,6 +56,24 @@ describe("runPreflight", () => {
 
   afterEach(() => {
     process.env = { ...originalEnv };
+  });
+
+  it("keeps local profile when k8s hosting is merely configured but not selected", () => {
+    delete process.env.SPRINTFOUNDRY_HOSTING_MODE;
+    delete process.env.SPRINTFOUNDRY_RUN_SANDBOX_MODE;
+    delete process.env.SPRINTFOUNDRY_K8S_MODE;
+
+    const platform = makePlatformConfig({
+      k8s: {
+        agent_sandbox: {
+          enabled: true,
+          whole_run_hosting_enabled: true,
+        },
+      },
+    });
+    const project = makeProjectConfig();
+
+    expect(resolvePreflightProfile(platform, project, process.env)).toBe("local");
   });
 
   it("skips host-only kubernetes checks inside a hosted whole-run sandbox", async () => {
