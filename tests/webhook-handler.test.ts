@@ -159,7 +159,7 @@ describe("webhook-handler config normalization", () => {
     expect(cfg.webhookSecret).toBe("xyz");
     expect(cfg.allowedEvents.has("Issue.create")).toBe(true);
     expect(cfg.allowedEvents.has("Comment.create")).toBe(true);
-    expect(cfg.allowedEvents.has("Issue.update")).toBe(false);
+    expect(cfg.allowedEvents.has("Issue.update")).toBe(true);
     expect(cfg.commandTrigger).toBe("/sf-run");
     expect(cfg.maxTimestampAgeSeconds).toBe(120);
   });

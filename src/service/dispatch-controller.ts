@@ -480,6 +480,25 @@ function resolveLinearPayloadStateName(payload: Record<string, unknown>): string
   );
 }
 
+function resolveLinearUpdatedFromStateName(payload: Record<string, unknown>): string {
+  const updatedFrom = isRecord(payload.updatedFrom) ? payload.updatedFrom : {};
+  const state = isRecord(updatedFrom.state) ? updatedFrom.state : {};
+  return asString(
+    updatedFrom.stateName ||
+    state.name ||
+    updatedFrom.state ||
+    updatedFrom.stateId ||
+    "",
+  );
+}
+
+function hasLinearWorkflowStateTransition(payload: Record<string, unknown>): boolean {
+  if (asString(payload.type) !== "Issue" || asString(payload.action) !== "update") {
+    return true;
+  }
+  return resolveLinearUpdatedFromStateName(payload).length > 0;
+}
+
 function generateRunId(idGenerator: () => string): string {
   return `run-${Date.now()}-${idGenerator()}`;
 }
@@ -1548,8 +1567,10 @@ class DispatchController implements DispatchControllerRuntime {
     ticketId: string
   ): DispatchQueueItem | null {
     if (!project.workflow) return null;
+    if (!hasLinearWorkflowStateTransition(payload)) return null;
 
     const stateName = resolveLinearPayloadStateName(payload);
+    const previousStateName = resolveLinearUpdatedFromStateName(payload);
     const stage = resolveWorkflowStageForLinearTicket(
       {
         id: ticketId,
@@ -1582,6 +1603,7 @@ class DispatchController implements DispatchControllerRuntime {
         type: asString(payload.type),
         action: asString(payload.action),
         state: stateName,
+        previous_state: previousStateName,
       },
       created_at: new Date(this.now()).toISOString(),
     };
