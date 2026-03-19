@@ -20,7 +20,13 @@ data:
         architect:
           provider: anthropic
           model: claude-sonnet-4-5-20250929
+        generic:
+          provider: anthropic
+          model: claude-sonnet-4-5-20250929
         developer:
+          provider: anthropic
+          model: claude-sonnet-4-5-20250929
+        merge-bot:
           provider: anthropic
           model: claude-sonnet-4-5-20250929
         qa:
@@ -77,7 +83,13 @@ data:
         orchestrator:
           provider: claude-code
           mode: local_process
+        generic:
+          provider: claude-code
+          mode: local_process
         developer:
+          provider: claude-code
+          mode: local_process
+        merge-bot:
           provider: claude-code
           mode: local_process
         qa:
@@ -124,6 +136,71 @@ data:
           path: plugins/code-review/skills/architecture-alignment
       codex_skills_per_agent:
         code-review: [code-quality, error-handling, performance-review, testing-standards, architecture-alignment]
+        developer: [detect-project-type, code-quality, error-handling, performance-review]
+        go-developer: [code-quality, error-handling, performance-review]
+        qa: [detect-project-type, testing-standards]
+        security: [detect-project-type]
+        devops: [detect-project-type]
+
+    k8s:
+      namespace: default
+      workspace_storage_class: ""
+      workspace_size: 10Gi
+      service_account_mode: per_run
+      automount_service_account_token: false
+      default_secret_profile: default
+      secret_profiles:
+        default: []
+      default_isolation_level: hardened_isolated
+      runtime_class_per_isolation:
+        standard_isolated: ""
+        hardened_isolated: gvisor
+        strong_isolated: kata
+      network_policy_provider: cilium-fqdn
+      default_network_profile: github-plus-registries
+      network_profiles:
+        internal-only:
+          allow_internet: false
+          fqdn_allowlist: []
+          cidr_allowlist: []
+        github-only:
+          allow_internet: false
+          fqdn_allowlist:
+            - github.com
+            - api.github.com
+          cidr_allowlist: []
+        github-plus-registries:
+          allow_internet: false
+          fqdn_allowlist:
+            - github.com
+            - api.github.com
+            - api.linear.app
+            - linear.app
+            - registry.npmjs.org
+            - ghcr.io
+          cidr_allowlist: []
+        full-internet:
+          allow_internet: true
+          fqdn_allowlist: []
+          cidr_allowlist: []
+      policy_prerequisites:
+        - Cilium CNI with CiliumNetworkPolicy FQDN enforcement enabled
+      pod_resources:
+        requests:
+          cpu: 500m
+          memory: 1Gi
+        limits:
+          cpu: "2"
+          memory: 4Gi
+      quota_scope: shared-namespace-admin-managed
+      agent_sandbox:
+        enabled: true
+        whole_run_hosting_enabled: true
+        template_name: default
+        warm_pool_name: ""
+        api_group: extensions.agents.x-k8s.io
+        api_version: v1alpha1
+        claim_plural: sandboxclaims
         developer: [detect-project-type, code-quality, error-handling, performance-review]
         go-developer: [code-quality, error-handling, performance-review]
         qa: [detect-project-type, testing-standards]
@@ -319,7 +396,24 @@ data:
           - ticket_details
           - product-spec (if available)
           - existing codebase structure
-    
+
+      - type: generic
+        name: Generic Agent
+        role: developer
+        description: >
+          General-purpose coding agent for direct runs. Starts only from the prompt,
+          Linear ticket, or GitHub issue content and does not assume role-specific
+          handoffs or stack plugins.
+        container_image: sprintfoundry/agent-developer:latest
+        capabilities:
+          - Interpret issue or prompt content directly
+          - Explore the repo only when needed
+          - Implement or explain changes without role-specific assumptions
+        output_artifacts:
+          - artifacts/generic-output.md
+        required_inputs:
+          - ticket_details
+
       - type: developer
         name: Developer Agent
         role: developer
@@ -347,7 +441,27 @@ data:
           - ticket_details
           - relevant source files
           - architecture docs (if available)
-    
+
+      - type: merge-bot
+        name: Merge Bot
+        role: developer
+        description: >
+          Resolves merge blockers on an existing branch or pull request,
+          runs a basic smoke test, and completes the merge when the PR is ready.
+          Use for workflow-driven merge stages after QA has opened the PR.
+        container_image: sprintfoundry/agent-developer:latest
+        capabilities:
+          - Resolve merge conflicts with minimal edits
+          - Update the branch with the latest default-branch changes
+          - Run targeted smoke validation before merge
+          - Merge a ready PR through the configured SCM integration
+        output_artifacts:
+          - artifacts/merge-report.md
+        required_inputs:
+          - ticket_details
+          - pull_request_context
+          - relevant source files
+
       - type: go-developer
         name: Go Developer Agent
         role: developer

@@ -79,7 +79,7 @@ export class CodexRuntime implements AgentRuntime {
   private async runLocalProcess(config: RuntimeStepContext): Promise<RuntimeStepResult> {
     await fs.mkdir(config.workspacePath, { recursive: true });
 
-    const prompt = this.buildSynthesizedPrompt(config);
+    const prompt = await this.buildLocalProcessPrompt(config);
     const runtimeArgs = config.runtime.args ?? [];
     const hasSandboxFlag = runtimeArgs.includes("--sandbox") || runtimeArgs.includes("-s");
     const hasBypassFlag = runtimeArgs.includes("--dangerously-bypass-approvals-and-sandbox");
@@ -736,7 +736,7 @@ export class CodexRuntime implements AgentRuntime {
     if (config.apiKey) {
       env.OPENAI_API_KEY = config.apiKey;
     }
-    env.OPENAI_MODEL = config.modelConfig.model;
+    env.OPENAI_MODEL = config.runtime.model || config.modelConfig.model;
     if (config.codexHomeDir) {
       env.CODEX_HOME = config.codexHomeDir;
     }
@@ -807,25 +807,54 @@ export class CodexRuntime implements AgentRuntime {
     return hasExitCodeSignal && trustedAuthSignal;
   }
 
-  private buildSynthesizedPrompt(config: RuntimeStepContext): string {
+  private buildDirectExecutionInstructions(): string[] {
+    return [
+      "You are running non-interactively inside the target repository as the current working directory.",
+      "Perform the requested edits directly in the workspace using the available local tools.",
+      "Do not return an apply_patch block, unified diff, or instructions for another person or agent to apply.",
+      "Do not use web search to inspect or search for local workspace files.",
+      "Create/modify the required project artifacts and code files first.",
+      "Do not stop after only updating .agent-result.json.",
+      "Before finishing, ensure .agent-result.json exists in the workspace root and accurately reports the completed work.",
+      "If truly blocked, still write .agent-result.json with status=blocked or needs_rework and concrete issues.",
+      "Your final conversational response can be minimal because SprintFoundry reads the workspace files, not chat text.",
+    ];
+  }
+
+  private async buildLocalProcessPrompt(config: RuntimeStepContext): Promise<string> {
+    const taskPrompt = await this.readWorkspaceTaskPrompt(config.workspacePath);
     return [
       "You are executing one agent step in SprintFoundry.",
       `Primary task: ${config.task}`,
-      "Read .agent-task.md and AGENTS.md, then complete the actual work requested there.",
+      "Read AGENTS.md and .agent-context/stack.json from disk when they exist.",
+      taskPrompt
+        ? [
+            "Follow the workspace task file contents below as the primary step instructions.",
+            "",
+            "# .agent-task.md",
+            taskPrompt,
+          ].join("\n")
+        : "Read .agent-task.md from disk and follow it as the primary step instructions.",
       config.codexSkillNames && config.codexSkillNames.length > 0
         ? `Skills available in CODEX_HOME: ${config.codexSkillNames.join(", ")}. Use them when relevant.`
         : "No additional runtime skills were provided for this step.",
-      "Create/modify the required project artifacts and code files first.",
-      "Do not stop after only updating .agent-result.json.",
-      "Only after doing the real work, write .agent-result.json with accurate status and artifact lists.",
-      "If truly blocked, set status=blocked or needs_rework with concrete issues.",
+      ...this.buildDirectExecutionInstructions(),
     ].join("\n");
   }
 
   private async buildSdkPrompt(config: RuntimeStepContext): Promise<string> {
     const taskPrompt = await this.readWorkspaceTaskPrompt(config.workspacePath);
     if (!taskPrompt) {
-      return this.buildSynthesizedPrompt(config);
+      return [
+        "You are executing one agent step in SprintFoundry.",
+        `Primary task: ${config.task}`,
+        "Read AGENTS.md and .agent-context/stack.json from disk when they exist.",
+        "Read .agent-task.md from disk and follow it as the primary step instructions.",
+        config.codexSkillNames && config.codexSkillNames.length > 0
+          ? `Skills available in CODEX_HOME: ${config.codexSkillNames.join(", ")}. Use them when relevant.`
+          : "No additional runtime skills were provided for this step.",
+        ...this.buildDirectExecutionInstructions(),
+      ].join("\n");
     }
     return [
       "You are executing one agent step in SprintFoundry.",
@@ -838,10 +867,7 @@ export class CodexRuntime implements AgentRuntime {
       config.codexSkillNames && config.codexSkillNames.length > 0
         ? `Skills available in CODEX_HOME: ${config.codexSkillNames.join(", ")}. Use them when relevant.`
         : "No additional runtime skills were provided for this step.",
-      "Create/modify the required project artifacts and code files first.",
-      "Do not stop after only updating .agent-result.json.",
-      "Only after doing the real work, write .agent-result.json with accurate status and artifact lists.",
-      "If truly blocked, set status=blocked or needs_rework with concrete issues.",
+      ...this.buildDirectExecutionInstructions(),
     ].join("\n");
   }
 

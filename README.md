@@ -211,6 +211,24 @@ integrations:
       token: ${GITHUB_TOKEN}
       owner: org
       repo: repo
+  scm:
+    type: github
+    config:
+      token: ${GITHUB_TOKEN}
+      owner: org
+      repo: repo
+
+ticket_workflow:
+  enabled: true
+  provider: linear_sdlc
+  linear_states:
+    todo: [Todo]
+    review: [Review]
+    done: [Done]
+  agents:
+    developer: developer
+    qa: qa
+    merge: merge-bot
 ```
 
 See [docs/configuration.md](docs/configuration.md) for the full reference.
@@ -250,6 +268,7 @@ runtime_overrides:
 | `go-developer` | Go-specific implementation |
 | `qa` | Writes and runs tests, validates quality |
 | `go-qa` | Go-specific QA |
+| `merge-bot` | Resolves merge blockers, smoke-tests the branch, and merges ready PRs |
 | `security` | Vulnerability scanning, auth review |
 | `ui-ux` | Component specs, wireframes, design tokens |
 | `devops` | CI/CD, Dockerfiles, infrastructure |

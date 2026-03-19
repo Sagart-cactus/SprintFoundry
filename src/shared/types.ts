@@ -43,6 +43,13 @@ export interface TicketDetails {
   source: TaskSource;
   title: string;
   description: string;
+  identifier?: string;
+  url?: string;
+  state?: string;
+  state_id?: string;
+  state_type?: string;
+  team_id?: string;
+  team_key?: string;
   labels: string[];
   priority: "p0" | "p1" | "p2" | "p3";
   acceptance_criteria: string[];
@@ -299,6 +306,7 @@ export interface ProjectConfig {
   codex_skills_overrides?: Record<string, string[]>;
   guardrails?: GuardrailConfig;
   autoexecute?: AutoexecuteConfig;
+  ticket_workflow?: TicketWorkflowConfig;
 }
 
 export interface ModelConfig {
@@ -346,6 +354,10 @@ export interface IntegrationConfig {
     type: TaskSource;
     config: Record<string, string>; // API tokens, workspace IDs etc.
   };
+  scm?: {
+    type: "github";
+    config: Record<string, string>;
+  };
   notifications?: {
     type: "slack" | "email" | "webhook";
     config: Record<string, string>;
@@ -381,6 +393,27 @@ export interface AutoexecuteConfig {
   enabled?: boolean;
   github?: GitHubAutoexecuteConfig;
   linear?: LinearAutoexecuteConfig;
+}
+
+export type TicketWorkflowProvider = "linear_sdlc";
+export type TicketWorkflowStage = "developer" | "qa" | "merge";
+
+export interface TicketWorkflowConfig {
+  enabled?: boolean;
+  provider?: TicketWorkflowProvider;
+  linear_states?: {
+    todo?: string[];
+    review?: string[];
+    done?: string[];
+  };
+  agents?: Partial<Record<TicketWorkflowStage, string>>;
+  merge_method?: "merge" | "squash" | "rebase";
+}
+
+export interface WorkflowStageContext {
+  stage: TicketWorkflowStage;
+  branch?: string | null;
+  pr_url?: string | null;
 }
 
 // ----- Rules -----
@@ -476,6 +509,8 @@ export interface TaskRun {
   project_id: string;
   tenant_id?: string;
   ticket: TicketDetails;
+  branch?: string | null;
+  workflow_stage?: TicketWorkflowStage | null;
   plan: ExecutionPlan | null;
   validated_plan: ExecutionPlan | null; // plan after service validation
   status: RunStatus;
@@ -641,6 +676,7 @@ export interface RunSessionMetadata {
   ticket_id: string;
   ticket_source: TaskSource;
   ticket_title: string;
+  workflow_stage?: TicketWorkflowStage | null;
   status: RunStatus;
   hosting_mode?: HostingMode | string;
   current_step: number;

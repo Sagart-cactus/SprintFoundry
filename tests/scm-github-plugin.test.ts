@@ -94,7 +94,9 @@ describe("scm-github plugin", () => {
       mockJsonResponse(200, { number: 9, head: { sha: "abc" }, mergeable: false, requested_reviewers: [] })
     );
     // commit status
-    fetchMock.mockResolvedValueOnce(mockJsonResponse(200, { state: "failure" }));
+    fetchMock.mockResolvedValueOnce(mockJsonResponse(200, { state: "failure", total_count: 1 }));
+    // check runs
+    fetchMock.mockResolvedValueOnce(mockJsonResponse(200, { total_count: 0, check_runs: [] }));
     // reviews
     fetchMock.mockResolvedValueOnce(
       mockJsonResponse(200, [{ state: "CHANGES_REQUESTED", submitted_at: "2026-02-28T00:00:00Z" }])
@@ -112,5 +114,74 @@ describe("scm-github plugin", () => {
     expect(readiness.review).toBe("changes_requested");
     expect(readiness.blockers.length).toBeGreaterThan(0);
   });
-});
 
+  it("treats a zero-status combined result with no checks as no CI configured", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    fetchMock.mockResolvedValueOnce(
+      mockJsonResponse(200, { number: 10, head: { sha: "def" }, requested_reviewers: [] })
+    );
+    fetchMock.mockResolvedValueOnce(
+      mockJsonResponse(200, { state: "pending", total_count: 0, statuses: [] })
+    );
+    fetchMock.mockResolvedValueOnce(mockJsonResponse(200, { total_count: 0, check_runs: [] }));
+
+    const ci = await plugin.getCISummary({
+      number: 10,
+      url: "https://github.com/acme/example/pull/10",
+      branch: "feat/no-ci",
+      repo: "acme/example",
+    });
+
+    expect(ci).toBe("none");
+  });
+
+  it("treats in-progress check runs as pending CI", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    fetchMock.mockResolvedValueOnce(
+      mockJsonResponse(200, { number: 11, head: { sha: "ghi" }, requested_reviewers: [] })
+    );
+    fetchMock.mockResolvedValueOnce(
+      mockJsonResponse(200, { state: "pending", total_count: 0, statuses: [] })
+    );
+    fetchMock.mockResolvedValueOnce(
+      mockJsonResponse(200, {
+        total_count: 1,
+        check_runs: [{ name: "ci", status: "in_progress", conclusion: null }],
+      })
+    );
+
+    const ci = await plugin.getCISummary({
+      number: 11,
+      url: "https://github.com/acme/example/pull/11",
+      branch: "feat/checks-pending",
+      repo: "acme/example",
+    });
+
+    expect(ci).toBe("pending");
+  });
+
+  it("treats failed check runs as failing CI", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    fetchMock.mockResolvedValueOnce(
+      mockJsonResponse(200, { number: 12, head: { sha: "jkl" }, requested_reviewers: [] })
+    );
+    fetchMock.mockResolvedValueOnce(
+      mockJsonResponse(200, { state: "pending", total_count: 0, statuses: [] })
+    );
+    fetchMock.mockResolvedValueOnce(
+      mockJsonResponse(200, {
+        total_count: 1,
+        check_runs: [{ name: "ci", status: "completed", conclusion: "failure" }],
+      })
+    );
+
+    const ci = await plugin.getCISummary({
+      number: 12,
+      url: "https://github.com/acme/example/pull/12",
+      branch: "feat/checks-failing",
+      repo: "acme/example",
+    });
+
+    expect(ci).toBe("failing");
+  });
+});

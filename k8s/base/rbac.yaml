@@ -3,6 +3,9 @@ kind: ClusterRole
 metadata:
   name: sprintfoundry-dispatch-job-creator
 rules:
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: ["batch"]
     resources: ["jobs"]
     verbs: ["create", "get", "list", "watch", "delete"]
@@ -40,6 +43,9 @@ kind: ClusterRole
 metadata:
   name: sprintfoundry-monitor-reader
 rules:
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: [""]
     resources: ["persistentvolumeclaims", "pods"]
     verbs: ["get", "list", "watch"]

@@ -24,6 +24,7 @@ import { CodexSkillManager } from "./runtime/codex-skill-manager.js";
 import type { RuntimeActivityEvent } from "./runtime/types.js";
 import type { EventSinkClient } from "./event-sink-client.js";
 import { resolveHostingMode } from "./hosting-mode.js";
+import { recoverAgentResultFromCodexOutput } from "./codex-result-recovery.js";
 import {
   LocalExecutionBackend,
   type ExecutionBackend,
@@ -489,11 +490,10 @@ export class AgentRunner {
   private async readAgentResult(workspacePath: string): Promise<AgentResult> {
     const resultPath = path.join(workspacePath, ".agent-result.json");
 
-    try {
+    const tryReadResultFile = async (): Promise<AgentResult> => {
       const content = await fs.readFile(resultPath, "utf-8");
       const parsed = JSON.parse(content);
 
-      // Validate required fields
       if (!parsed.status || !parsed.summary) {
         return {
           status: "failed",
@@ -506,7 +506,25 @@ export class AgentRunner {
       }
 
       return parsed as AgentResult;
+    };
+
+    try {
+      return await tryReadResultFile();
     } catch (error) {
+      const recovered = await recoverAgentResultFromCodexOutput(workspacePath);
+      if (recovered) {
+        try {
+          const parsed = await tryReadResultFile();
+          parsed.metadata = {
+            ...(parsed.metadata ?? {}),
+            recovered_from_codex_output: true,
+          };
+          return parsed;
+        } catch (recoveryError) {
+          error = recoveryError;
+        }
+      }
+
       return {
         status: "failed",
         summary: "Agent did not produce a result file",

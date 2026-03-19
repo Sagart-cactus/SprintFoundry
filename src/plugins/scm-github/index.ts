@@ -53,11 +53,17 @@ class GitHubSCMPlugin implements SCMPlugin {
     const sha = data.head?.sha;
     if (!sha) return "none";
     const [owner, repo] = this.splitRepo(pr.repo);
-    const status = await this.request<any>(`/repos/${owner}/${repo}/commits/${sha}/status`);
-    const state = String(status.state ?? "").toLowerCase();
-    if (state === "success") return "passing";
-    if (state === "failure" || state === "error") return "failing";
-    if (state === "pending") return "pending";
+    const [status, checkRuns] = await Promise.all([
+      this.request<any>(`/repos/${owner}/${repo}/commits/${sha}/status`),
+      this.request<any>(`/repos/${owner}/${repo}/commits/${sha}/check-runs`),
+    ]);
+
+    const combinedStatus = this.resolveCombinedStatus(status);
+    const checksStatus = this.resolveCheckRunsStatus(checkRuns);
+
+    if (combinedStatus === "failing" || checksStatus === "failing") return "failing";
+    if (combinedStatus === "pending" || checksStatus === "pending") return "pending";
+    if (combinedStatus === "passing" || checksStatus === "passing") return "passing";
     return "none";
   }
 
@@ -124,6 +130,40 @@ class GitHubSCMPlugin implements SCMPlugin {
     return this.request(`/repos/${owner}/${repo}/pulls/${pr.number}`);
   }
 
+  private resolveCombinedStatus(status: any): CIStatus {
+    const totalCount = Number(status?.total_count ?? 0);
+    if (totalCount === 0) return "none";
+
+    const state = String(status?.state ?? "").toLowerCase();
+    if (state === "success") return "passing";
+    if (state === "failure" || state === "error") return "failing";
+    if (state === "pending") return "pending";
+    return "none";
+  }
+
+  private resolveCheckRunsStatus(payload: any): CIStatus {
+    const checkRuns = Array.isArray(payload?.check_runs) ? payload.check_runs : [];
+    if (checkRuns.length === 0) return "none";
+
+    const failingConclusions = new Set([
+      "action_required",
+      "cancelled",
+      "failure",
+      "startup_failure",
+      "stale",
+      "timed_out",
+    ]);
+
+    for (const run of checkRuns) {
+      const status = String(run?.status ?? "").toLowerCase();
+      const conclusion = String(run?.conclusion ?? "").toLowerCase();
+      if (status !== "completed" || !conclusion) return "pending";
+      if (failingConclusions.has(conclusion)) return "failing";
+    }
+
+    return "passing";
+  }
+
   private async request<T = unknown>(endpoint: string, method = "GET", body?: unknown): Promise<T> {
     const response = await fetch(`https://api.github.com${endpoint}`, {
       method,
@@ -181,4 +221,3 @@ export const githubSCMModule: PluginModule<SCMPlugin> = {
     return new GitHubSCMPlugin({ token, owner, repo });
   },
 };
-
