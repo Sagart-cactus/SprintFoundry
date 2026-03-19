@@ -15,6 +15,8 @@ const eventSinkUpsertRun = vi.fn();
 const eventSinkPostLog = vi.fn();
 const eventSinkUpsertStepResult = vi.fn();
 const agentRunnerCtor = vi.fn();
+const runPreflightMock = vi.fn();
+const hasFailingChecksMock = vi.fn();
 
 // Mock all sub-services using class syntax so they work with `new`
 // Mock PlannerFactory — returns a mock planner with generatePlan/planRework
@@ -109,6 +111,11 @@ vi.mock("../src/service/runtime-session-store.js", () => ({
   },
 }));
 
+vi.mock("../src/service/preflight.js", () => ({
+  runPreflight: runPreflightMock,
+  hasFailingChecks: hasFailingChecksMock,
+}));
+
 vi.mock("../src/service/session-manager.js", () => ({
   SessionManager: class {
     private sinkClient?: { upsertRun?: (session: unknown) => Promise<void> | void };
@@ -147,6 +154,8 @@ describe("OrchestrationService", () => {
     vi.clearAllMocks();
     delete process.env.SPRINTFOUNDRY_EVENT_SINK_URL;
     delete process.env.SPRINTFOUNDRY_INTERNAL_API_TOKEN;
+    runPreflightMock.mockResolvedValue({ profile: "local", checks: [] });
+    hasFailingChecksMock.mockReturnValue(false);
 
     service = new OrchestrationService(
       makePlatformConfig(),
