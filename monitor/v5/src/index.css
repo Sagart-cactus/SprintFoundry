@@ -1,0 +1,130 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* ── Light theme (FoundryObsidianLight) ── */
+  :root {
+    --sf-surface: #f7f9fb;
+    --sf-surface-dim: #ebedf0;
+    --sf-surface-container-lowest: #ffffff;
+    --sf-surface-container-low: #f2f4f6;
+    --sf-surface-container: #eceef0;
+    --sf-surface-container-high: #e6e8ea;
+    --sf-surface-container-highest: #dfe1e3;
+
+    --sf-on-surface: #191c1e;
+    --sf-on-surface-variant: #6b7280;
+
+    --sf-primary: #0058be;
+    --sf-primary-container: #2170e4;
+    --sf-primary-fixed: #d8e2ff;
+    --sf-on-primary: #ffffff;
+    --sf-primary-glow: rgba(33, 112, 228, 0.12);
+
+    --sf-outline-variant: rgba(194, 198, 214, 0.2);
+
+    --sf-shadow-color: rgba(15, 23, 42, 0.06);
+
+    --sf-status-executing: #2563eb;
+    --sf-status-planning: #7c3aed;
+    --sf-status-completed: #059669;
+    --sf-status-failed: #dc2626;
+    --sf-status-warning: #d97706;
+    --sf-status-rework: #ea580c;
+    --sf-status-pending: #94a3b8;
+  }
+
+  /* ── Dark theme (FoundryObsidian) ── */
+  .dark {
+    --sf-surface: #0b1326;
+    --sf-surface-dim: #080d1a;
+    --sf-surface-container-lowest: #060e20;
+    --sf-surface-container-low: #111a2e;
+    --sf-surface-container: #171f33;
+    --sf-surface-container-high: #222b3f;
+    --sf-surface-container-highest: #2d3449;
+
+    --sf-on-surface: #e0e4eb;
+    --sf-on-surface-variant: #8a90a0;
+
+    --sf-primary: #adc6ff;
+    --sf-primary-container: #4d8eff;
+    --sf-primary-fixed: #1a3a6b;
+    --sf-on-primary: #0b1326;
+    --sf-primary-glow: rgba(77, 142, 255, 0.2);
+
+    --sf-outline-variant: rgba(66, 71, 84, 0.15);
+
+    --sf-shadow-color: rgba(0, 8, 20, 0.3);
+
+    --sf-status-executing: #4d8eff;
+    --sf-status-planning: #a78bfa;
+    --sf-status-completed: #34d399;
+    --sf-status-failed: #f87171;
+    --sf-status-warning: #fbbf24;
+    --sf-status-rework: #fb923c;
+    --sf-status-pending: #64748b;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html {
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    overflow: hidden;
+    background: var(--sf-surface);
+    color: var(--sf-on-surface);
+  }
+
+  /* Scrollbar — minimal, themed */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--sf-outline-variant);
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--sf-on-surface-variant);
+  }
+}
+
+/* ── Utility classes ── */
+@layer utilities {
+  .label-technical {
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .headline {
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    letter-spacing: -0.02em;
+  }
+
+  .ghost-border {
+    border: 1px solid var(--sf-outline-variant);
+  }
+
+  .glass {
+    background: var(--sf-surface-container-high);
+    opacity: 0.8;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
+
+  .gradient-primary {
+    background: linear-gradient(135deg, var(--sf-primary), var(--sf-primary-container));
+  }
+}

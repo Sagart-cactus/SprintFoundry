@@ -1,0 +1,326 @@
+import { useState, useEffect, useRef } from 'react'
+import { fetchStepLog } from '../hooks/useMonitor'
+
+/* ── JSONL parsing (ported from v4) ── */
+
+function parseJsonSafe(raw) {
+  try { return JSON.parse(raw) } catch { return null }
+}
+
+function parseAgentItems(raw) {
+  const lines = String(raw || '').split('\n').map(l => l.trim()).filter(Boolean)
+  if (!lines.length) return []
+  const items = []
+  let buffer = ''
+  for (const line of lines) {
+    const candidate = buffer ? `${buffer}\n${line}` : line
+    const parsed = parseJsonSafe(candidate)
+    if (parsed && typeof parsed === 'object') { items.push(parsed); buffer = '' }
+    else buffer = candidate
+  }
+  if (buffer) {
+    const parsed = parseJsonSafe(buffer)
+    if (parsed && typeof parsed === 'object') items.push(parsed)
+  }
+  return items
+}
+
+function pickStr(obj, keys) {
+  for (const k of keys) {
+    const v = obj?.[k]
+    if (typeof v === 'string' && v.trim()) return v.trim()
+  }
+  return ''
+}
+
+function textFromContent(value) {
+  if (!value) return ''
+  if (typeof value === 'string') return value
+  if (Array.isArray(value)) {
+    return value.map(i => typeof i === 'string' ? i : pickStr(i, ['text', 'output_text', 'message'])).filter(Boolean).join('\n')
+  }
+  if (typeof value === 'object') return pickStr(value, ['text', 'output_text', 'message'])
+  return ''
+}
+
+function shortText(value, max = 200) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim()
+  return text.length <= max ? text : text.slice(0, max) + '...'
+}
+
+function getStepNumber(item) {
+  return item?.step ?? item?.step_number ?? item?.data?.step ?? item?.data?.step_number ?? null
+}
+
+/* ── Classification ── */
+
+function extractTimestamp(item) {
+  const nested = item?.item ?? {}
+  const ts = item?.timestamp || item?.ts || item?.time || item?.created_at ||
+    nested?.timestamp || nested?.ts || nested?.time || nested?.created_at ||
+    item?.data?.timestamp || item?.data?.ts
+  if (!ts) return null
+  const d = new Date(typeof ts === 'number' && ts < 1e12 ? ts * 1000 : ts)
+  if (isNaN(d.getTime())) return null
+  return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`
+}
+
+function classifyItem(item) {
+  const nested = item?.item ?? {}
+  const kind = pickStr(nested, ['type']) || pickStr(item, ['type', 'event_type'])
+  const command = pickStr(nested, ['command', 'cmd']) || pickStr(item, ['command', 'cmd'])
+  const normCmd = pickStr(item?.data, ['command', 'cmd'])
+  const normPath = pickStr(item?.data, ['path', 'file_path', 'target_path'])
+  const normTool = pickStr(item?.data, ['tool_name', 'name'])
+  const normThought = pickStr(item?.data, ['text', 'message', 'reason'])
+  const thought = pickStr(nested, ['prompt', 'instructions', 'input']) || pickStr(item, ['prompt', 'instructions', 'input']) || normThought || textFromContent(nested.input) || textFromContent(item.input)
+  const message = pickStr(nested, ['text', 'message', 'assistant_message', 'output_text']) || pickStr(item, ['message', 'assistant_message', 'output_text']) || textFromContent(nested.output) || textFromContent(item.output)
+
+  const lower = String(kind).toLowerCase()
+
+  if (lower === 'agent_command_run') return { kind: 'Shell', preview: shortText(normCmd || normTool || 'command'), isCode: true, isError: false }
+  if (lower === 'agent_file_edit') return { kind: 'File Edit', preview: shortText(normPath || normTool || 'file'), isCode: true, isError: false }
+  if (lower === 'agent_tool_call') return { kind: 'Tool', preview: shortText(normTool || 'tool call'), isCode: false, isError: false }
+  if (lower === 'agent_thinking') return { kind: 'Reasoning', preview: shortText(normThought || 'thinking'), isCode: false, isError: false }
+  if (lower === 'agent_guardrail_block') return { kind: 'Guardrail', preview: shortText(normThought || normCmd || normPath || 'blocked'), isCode: false, isError: true }
+  if (lower === 'command_execution' || command) return { kind: 'Shell', preview: shortText(command || message || thought), isCode: true, isError: false }
+  if (lower === 'agent_message' || lower === 'message') return { kind: 'Message', preview: shortText(message || thought), isCode: false, isError: false }
+  if (lower === 'thought' || lower === 'reasoning') return { kind: 'Reasoning', preview: shortText(thought || message), isCode: false, isError: false }
+  if (lower.includes('thread.started') || lower.includes('turn.started')) return { kind: 'Session', preview: '', isCode: false, isError: false }
+
+  if (lower === 'assistant') {
+    const content = (Array.isArray(item?.message?.content) && item.message.content) || (Array.isArray(item?.content) && item.content) || []
+    const thinking = content.find(c => c?.type === 'thinking')
+    if (thinking?.thinking) return { kind: 'Reasoning', preview: shortText(thinking.thinking), isCode: false, isError: false }
+    const toolUse = content.find(c => c?.type === 'tool_use')
+    if (toolUse) {
+      const toolName = String(toolUse?.name || '')
+      const input = toolUse?.input && typeof toolUse.input === 'object' ? toolUse.input : {}
+      const toolCmd = pickStr(input, ['command', 'cmd'])
+      const toolPath = pickStr(input, ['file_path', 'path'])
+      const toolPreview = toolCmd || toolPath || toolName || 'tool call'
+      const isCmdTool = /^(bash|task|taskoutput)$/i.test(toolName) || Boolean(toolCmd)
+      return { kind: isCmdTool ? 'Shell' : 'Tool', preview: shortText(toolPreview), isCode: isCmdTool, isError: false }
+    }
+    const textBlock = content.find(c => c?.type === 'text' && typeof c?.text === 'string')
+    if (textBlock?.text) return { kind: 'Message', preview: shortText(textBlock.text), isCode: false, isError: false }
+  }
+
+  if (lower === 'result') return { kind: 'Result', preview: shortText(pickStr(item, ['result']) || 'completed'), isCode: false, isError: false }
+
+  const isErr = isErrorLike(item)
+  return { kind: 'Event', preview: shortText(message || command || thought), isCode: false, isError: isErr }
+}
+
+function isErrorLike(item) {
+  if (pickStr(item, ['error', 'reason']) || pickStr(item?.data, ['error', 'reason'])) return true
+  const topType = pickStr(item, ['type', 'event_type']).toLowerCase()
+  if (/(error|failed|exception|denied|blocked)/i.test(topType)) return true
+  const nested = item?.item ?? {}
+  const nestedExit = nested?.exit_code
+  if (typeof nestedExit === 'number' && nestedExit !== 0) {
+    const cmd = pickStr(nested, ['command', 'cmd']).toLowerCase()
+    if (nestedExit === 1 && !String(nested?.aggregated_output || '').trim() && (/\brg\b/.test(cmd) || /\bgrep\b/.test(cmd))) return false
+    return true
+  }
+  return false
+}
+
+/* ── Kind styling for v5 ── */
+
+const KIND_STYLES = {
+  'Reasoning': { color: '#8b5cf6', icon: 'brain' },
+  'Tool':      { color: '#3b82f6', icon: 'tool' },
+  'File Edit': { color: '#f59e0b', icon: 'file' },
+  'Shell':     { color: '#f59e0b', icon: 'terminal' },
+  'Message':   { color: '#10b981', icon: 'message' },
+  'Guardrail': { color: '#ef4444', icon: 'shield' },
+  'Result':    { color: '#059669', icon: 'check' },
+  'Session':   { color: '#64748b', icon: 'dot' },
+  'Event':     { color: '#64748b', icon: 'dot' },
+}
+
+function KindIcon({ kind, size = 16 }) {
+  const style = KIND_STYLES[kind] || KIND_STYLES.Event
+  const color = style.color
+
+  switch (style.icon) {
+    case 'brain':
+      return (
+        <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke={color} strokeWidth="1.2">
+          <circle cx="8" cy="8" r="5.5" />
+          <path d="M8 4v4l2.5 2.5" strokeLinecap="round" />
+        </svg>
+      )
+    case 'terminal':
+      return (
+        <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke={color} strokeWidth="1.2">
+          <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
+          <path d="M4.5 6l2 2-2 2M8.5 10h3" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      )
+    case 'tool':
+      return (
+        <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke={color} strokeWidth="1.2">
+          <rect x="2" y="3" width="12" height="10" rx="1.5" />
+          <path d="M2 6h12" />
+          <circle cx="4.5" cy="4.5" r="0.5" fill={color} />
+        </svg>
+      )
+    case 'file':
+      return (
+        <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke={color} strokeWidth="1.2">
+          <path d="M4 2h5.5L13 5.5V13a1 1 0 01-1 1H4a1 1 0 01-1-1V3a1 1 0 011-1z" />
+          <path d="M9.5 2v4H13" />
+        </svg>
+      )
+    case 'message':
+      return (
+        <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke={color} strokeWidth="1.2">
+          <path d="M2.5 2.5h11a1 1 0 011 1v7a1 1 0 01-1 1h-3l-2.5 2.5v-2.5h-5.5a1 1 0 01-1-1v-7a1 1 0 011-1z" />
+        </svg>
+      )
+    case 'shield':
+      return (
+        <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke={color} strokeWidth="1.2">
+          <path d="M8 1.5L2.5 4v4c0 3.5 2.5 5.5 5.5 6.5 3-1 5.5-3 5.5-6.5V4L8 1.5z" />
+          <path d="M6 8l1.5 1.5L10 6" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      )
+    case 'check':
+      return (
+        <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke={color} strokeWidth="1.5">
+          <circle cx="8" cy="8" r="5.5" />
+          <path d="M5.5 8l2 2 3-3.5" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      )
+    default:
+      return (
+        <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
+      )
+  }
+}
+
+/* ── Component ── */
+
+export default function AgentActivity({ projectId, runId, stepNumber }) {
+  const [items, setItems] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [expandedIds, setExpandedIds] = useState(new Set())
+  const listRef = useRef(null)
+
+  useEffect(() => {
+    if (stepNumber == null) return
+    setLoading(true)
+    setItems([])
+    fetchStepLog(projectId, runId, stepNumber, 'agent_stdout')
+      .then(raw => {
+        // Fallback: if step-specific log is empty, try without step filter
+        if (!raw || !raw.trim()) return fetchStepLog(projectId, runId, null, 'agent_stdout')
+        return raw
+      })
+      .then(raw => {
+        const parsed = parseAgentItems(raw)
+        const filtered = parsed.filter(item => {
+          const step = getStepNumber(item)
+          return step === null || step === stepNumber
+        })
+        const target = filtered.length ? filtered : parsed
+        const classified = target
+          .map((item, i) => ({ item, cls: classifyItem(item), ts: extractTimestamp(item), index: i }))
+          .filter(row => row.cls.kind !== 'Event' || row.cls.isError)
+        setItems(classified.slice(-200))
+        setLoading(false)
+      })
+      .catch(() => { setItems([]); setLoading(false) })
+  }, [projectId, runId, stepNumber])
+
+  useEffect(() => {
+    if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight
+  }, [items])
+
+  function toggleExpand(index) {
+    setExpandedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(index)) next.delete(index)
+      else next.add(index)
+      return next
+    })
+  }
+
+  if (loading) {
+    return (
+      <div className="py-8 text-center">
+        <p className="text-sm text-on-surface-variant animate-pulse">Loading agent activity...</p>
+      </div>
+    )
+  }
+
+  if (items.length === 0) {
+    return (
+      <div className="py-10 text-center">
+        <p className="text-sm text-on-surface-variant italic">No structured activity captured for this step.</p>
+      </div>
+    )
+  }
+
+  return (
+    <div ref={listRef} className="space-y-2 overflow-y-auto">
+      {items.map(({ item, cls, ts, index }, visibleIdx) => {
+        const style = KIND_STYLES[cls.kind] || KIND_STYLES.Event
+        const expanded = expandedIds.has(index)
+
+        return (
+          <div
+            key={index}
+            className={`rounded overflow-hidden transition-all ${
+              cls.isError
+                ? 'bg-status-failed/10'
+                : 'bg-surface-container-lowest'
+            }`}
+          >
+            <button
+              onClick={() => toggleExpand(index)}
+              className="w-full text-left flex items-start gap-3 px-3.5 py-2.5 hover:bg-surface-container-high/50 transition-colors"
+            >
+              <div className="mt-0.5 flex-shrink-0">
+                <KindIcon kind={cls.kind} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-0.5">
+                  <span
+                    className="label-technical text-2xs font-bold"
+                    style={{ color: style.color }}
+                  >
+                    {cls.kind === 'Tool' ? `TOOL: ${cls.preview.split('/').pop()?.split(' ')[0] || 'CALL'}`.toUpperCase().slice(0, 20) : cls.kind.toUpperCase()}
+                  </span>
+                  {ts && (
+                    <span className="text-2xs font-mono text-on-surface-variant tabular-nums">{ts}</span>
+                  )}
+                </div>
+                <span className={`text-xs leading-snug ${cls.isCode ? 'font-mono text-on-surface' : 'text-on-surface-variant'} ${cls.preview ? '' : 'italic'}`}>
+                  {cls.isCode && cls.kind === 'Shell' ? (
+                    <span className="text-on-surface">$ {cls.preview}</span>
+                  ) : (
+                    cls.preview || '(empty)'
+                  )}
+                </span>
+              </div>
+              <span className="text-2xs font-mono text-on-surface-variant flex-shrink-0 mt-0.5 tabular-nums">
+                #{visibleIdx + 1}
+              </span>
+            </button>
+
+            {expanded && (
+              <div className="border-t border-outline-variant">
+                <pre className="px-4 py-3 text-[11px] font-mono text-on-surface-variant leading-relaxed whitespace-pre-wrap break-words max-h-64 overflow-y-auto bg-surface-container-lowest">
+                  {JSON.stringify(item, null, 2)}
+                </pre>
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
