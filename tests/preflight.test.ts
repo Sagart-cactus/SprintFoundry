@@ -79,6 +79,7 @@ describe("runPreflight", () => {
   it("skips host-only kubernetes checks inside a hosted whole-run sandbox", async () => {
     const platform = makePlatformConfig({
       defaults: {
+        ...makePlatformConfig().defaults,
         runtime_per_agent: {
           developer: { provider: "codex", mode: "local_sdk" },
         },

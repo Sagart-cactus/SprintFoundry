@@ -105,6 +105,26 @@ api_keys:
 # #     path: vendor/codex-skills/web-design-guidelines
 # # codex_skills_overrides:
 # #   ui-ux: [web-design-guidelines]
+#
+# # Explicit ticket-label skill injection (additive only)
+# # Use labels like:
+# #   sf:skill:develop-web-game
+# #   sf:skill:phaser-arcade-platformer
+# # dynamic_skills:
+# #   enabled: true
+# #   label_source: linear
+# #   label_prefix: "sf:skill:"
+# #   allow_ticket_labels: true
+# #   allowlist:
+# #     - develop-web-game
+# #     - playwright
+# #     - phaser-arcade-platformer
+# #   agent_allowlist:
+# #     developer:
+# #       - develop-web-game
+# #       - phaser-arcade-platformer
+# #     qa:
+# #       - playwright
 
 # ----- Workspace Strategy (optional) -----
 # Override the platform default workspace strategy.
