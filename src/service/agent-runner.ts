@@ -18,9 +18,11 @@ import type {
   ProjectConfig,
   RuntimeConfig,
   RuntimeMetadataEnvelope,
+  TicketDetails,
 } from "../shared/types.js";
 import { RuntimeFactory } from "./runtime/runtime-factory.js";
 import { CodexSkillManager } from "./runtime/codex-skill-manager.js";
+import { DynamicSkillResolver } from "./runtime/dynamic-skill-resolver.js";
 import type { RuntimeActivityEvent } from "./runtime/types.js";
 import type { EventSinkClient } from "./event-sink-client.js";
 import { resolveHostingMode } from "./hosting-mode.js";
@@ -37,6 +39,7 @@ export interface AgentRunConfig {
   stepAttempt: number;
   agent: AgentType;
   task: string;
+  ticket?: TicketDetails;
   context_inputs: ContextInput[];
   workspacePath: string;
   modelConfig: ModelConfig;
@@ -71,6 +74,11 @@ interface WorkspacePrepResult {
   runtimeSkillsDir?: string;
   skillWarnings?: string[];
   skillHashes?: Record<string, string>;
+  baseSkillNames?: string[];
+  labelSkillNames?: string[];
+  ignoredDynamicSkillLabels?: string[];
+  rejectedDynamicSkills?: Array<{ skill: string; reason: string }>;
+  skillResolutionMode?: "static" | "dynamic_label_merge";
 }
 
 export interface AgentRunResult {
@@ -92,6 +100,7 @@ export class AgentRunner {
   private codexAgentDir: string;
   private projectRoot: string;
   private codexSkillManager: CodexSkillManager;
+  private dynamicSkillResolver: DynamicSkillResolver;
   private executionBackend: ExecutionBackend;
 
   constructor(
@@ -108,6 +117,11 @@ export class AgentRunner {
       platformConfig,
       projectConfig,
       this.projectRoot
+    );
+    this.dynamicSkillResolver = new DynamicSkillResolver(
+      platformConfig,
+      projectConfig,
+      this.codexSkillManager
     );
     this.executionBackend = executionBackend ?? new LocalExecutionBackend();
   }
@@ -263,20 +277,34 @@ export class AgentRunner {
     await fs.mkdir(path.join(workspacePath, "artifacts"), { recursive: true });
     await fs.mkdir(path.join(workspacePath, "artifacts", "handoff"), { recursive: true });
 
-    const resolved = this.codexSkillManager.resolveForAgent(
-      config.agent,
-      runtime.provider
-    );
-    if (!resolved.enabled) {
+    const resolved = await this.dynamicSkillResolver.resolveForRun({
+      agent: config.agent,
+      runtimeProvider: runtime.provider,
+      ticket: config.ticket,
+      workspacePath,
+    });
+    if (!resolved.enabled && resolved.warnings.length === 0) {
       return {};
     }
     for (const warning of resolved.warnings) {
       console.warn(`[agent-runner] Skill guardrail warning: ${warning}`);
     }
 
+    if (resolved.finalSkillNames.length === 0) {
+      return {
+        runtimeSkillProvider: runtime.provider,
+        skillWarnings: [...resolved.warnings],
+        baseSkillNames: resolved.baseSkillNames,
+        labelSkillNames: resolved.labelSkillNames,
+        ignoredDynamicSkillLabels: resolved.ignoredLabels,
+        rejectedDynamicSkills: resolved.rejectedSkills,
+        skillResolutionMode: resolved.resolutionMode,
+      };
+    }
+
     const staged = await this.codexSkillManager.stageSkills(
       workspacePath,
-      resolved.skillNames,
+      resolved.finalSkillNames,
       runtime.provider
     );
     for (const warning of staged.warnings) {
@@ -294,6 +322,11 @@ export class AgentRunner {
       runtimeSkillsDir: staged.skillsDir,
       skillWarnings: [...resolved.warnings, ...staged.warnings],
       skillHashes: staged.skillHashes,
+      baseSkillNames: resolved.baseSkillNames,
+      labelSkillNames: resolved.labelSkillNames,
+      ignoredDynamicSkillLabels: resolved.ignoredLabels,
+      rejectedDynamicSkills: resolved.rejectedSkills,
+      skillResolutionMode: resolved.resolutionMode,
     };
   }
 
@@ -334,6 +367,11 @@ export class AgentRunner {
         ...(base.provider_metadata ?? {}),
         skills: {
           names: prep.codexSkillNames ?? [],
+          base_skills: prep.baseSkillNames ?? [],
+          label_skills: prep.labelSkillNames ?? [],
+          ignored_labels: prep.ignoredDynamicSkillLabels ?? [],
+          rejected_skills: prep.rejectedDynamicSkills ?? [],
+          resolution_mode: prep.skillResolutionMode ?? "static",
           provider: prep.runtimeSkillProvider ?? "codex",
           skills_dir: prep.runtimeSkillsDir,
           warnings: prep.skillWarnings ?? [],

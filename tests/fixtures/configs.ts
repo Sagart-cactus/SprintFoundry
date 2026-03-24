@@ -98,6 +98,16 @@ export function makeProjectConfig(
     execution_backend_override: overrides?.execution_backend_override,
     runtime_overrides: overrides?.runtime_overrides,
     planner_runtime_override: overrides?.planner_runtime_override,
+    skills_v2_enabled: overrides?.skills_v2_enabled,
+    skills_enabled: overrides?.skills_enabled,
+    skill_catalog_overrides: overrides?.skill_catalog_overrides,
+    skill_assignments: overrides?.skill_assignments,
+    skill_sources: overrides?.skill_sources,
+    skill_guardrails: overrides?.skill_guardrails,
+    dynamic_skills: overrides?.dynamic_skills,
+    codex_skills_enabled: overrides?.codex_skills_enabled,
+    codex_skill_catalog_overrides: overrides?.codex_skill_catalog_overrides,
+    codex_skills_overrides: overrides?.codex_skills_overrides,
   };
 }
 

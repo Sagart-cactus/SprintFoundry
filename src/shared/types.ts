@@ -210,6 +210,16 @@ export interface SkillGuardrails {
   mode?: "warn" | "error";
 }
 
+export interface DynamicSkillsConfig {
+  enabled?: boolean;
+  label_source?: "linear" | "all";
+  label_prefix?: string;
+  allow_ticket_labels?: boolean;
+  allowlist?: string[];
+  denylist?: string[];
+  agent_allowlist?: Record<string, string[]>;
+}
+
 export interface PlatformConfig {
   execution_backend?: ExecutionBackendName;
   defaults: {
@@ -301,6 +311,7 @@ export interface ProjectConfig {
   skill_assignments?: Record<string, string[]>;
   skill_sources?: SkillSource[];
   skill_guardrails?: SkillGuardrails;
+  dynamic_skills?: DynamicSkillsConfig;
   codex_skills_enabled?: boolean;
   codex_skill_catalog_overrides?: Record<string, CodexSkillDefinition>;
   codex_skills_overrides?: Record<string, string[]>;

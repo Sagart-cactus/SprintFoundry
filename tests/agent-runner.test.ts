@@ -24,6 +24,7 @@ function makeRunConfig(overrides?: Partial<AgentRunConfig>): AgentRunConfig {
     stepAttempt: overrides?.stepAttempt ?? 1,
     agent: overrides?.agent ?? "developer",
     task: overrides?.task ?? "Implement the feature",
+    ticket: overrides?.ticket,
     context_inputs: overrides?.context_inputs ?? [{ type: "ticket" }],
     workspacePath: overrides?.workspacePath ?? "/tmp/test-workspace",
     modelConfig: overrides?.modelConfig ?? makeModelConfig(),
@@ -610,6 +611,167 @@ describe("AgentRunner", () => {
     const agentsMd = await fs.readFile(path.join(workspacePath, "AGENTS.md"), "utf-8");
     expect(agentsMd).toContain("## Runtime Skills");
     expect(agentsMd).toContain("web-design-guidelines");
+  });
+
+  it("prepareWorkspace merges base and label-derived skills into runtime metadata", async () => {
+    const workspacePath = path.join(tmpDir, "workspace-dynamic-codex-skill");
+    await fs.mkdir(workspacePath, { recursive: true });
+
+    const skillRoot = path.join(tmpDir, "skills-dynamic");
+    const baseSkill = path.join(skillRoot, "develop-web-game");
+    const labelSkill = path.join(skillRoot, "phaser-arcade-platformer");
+    await fs.mkdir(baseSkill, { recursive: true });
+    await fs.mkdir(labelSkill, { recursive: true });
+    await fs.writeFile(path.join(baseSkill, "SKILL.md"), "# develop-web-game", "utf-8");
+    await fs.writeFile(path.join(labelSkill, "SKILL.md"), "# phaser-arcade-platformer", "utf-8");
+
+    const runner = new AgentRunner(
+      makePlatformConfig({
+        defaults: {
+          ...makePlatformConfig().defaults,
+          skills_v2_enabled: true,
+          skills_enabled: true,
+          skill_catalog: {
+            "develop-web-game": { path: baseSkill },
+            "phaser-arcade-platformer": { path: labelSkill },
+          },
+          skill_assignments_per_agent: {
+            developer: ["develop-web-game"],
+          },
+        },
+      }),
+      makeProjectConfig({
+        skills_v2_enabled: true,
+        skills_enabled: true,
+        dynamic_skills: {
+          enabled: true,
+          allowlist: ["develop-web-game", "phaser-arcade-platformer"],
+          agent_allowlist: {
+            developer: ["develop-web-game", "phaser-arcade-platformer"],
+          },
+        },
+      })
+    );
+
+    const prep = await (runner as any).prepareWorkspace(
+      makeRunConfig({
+        agent: "developer",
+        workspacePath,
+        ticket: {
+          id: "SPR-42",
+          source: "linear",
+          title: "Tune movement",
+          description: "Apply game feel polish",
+          labels: ["sf:skill:phaser-arcade-platformer"],
+          priority: "p2",
+          acceptance_criteria: [],
+          linked_tickets: [],
+          comments: [],
+          author: "test-user",
+          raw: {},
+        },
+      }),
+      { provider: "codex", mode: "local_process" }
+    );
+
+    expect(prep.codexSkillNames).toEqual([
+      "develop-web-game",
+      "phaser-arcade-platformer",
+    ]);
+    expect(prep.baseSkillNames).toEqual(["develop-web-game"]);
+    expect(prep.labelSkillNames).toEqual(["phaser-arcade-platformer"]);
+    expect(prep.skillResolutionMode).toBe("dynamic_label_merge");
+  });
+
+  it("run preserves rejected label-skill warnings in runtime metadata even when nothing is staged", async () => {
+    delete process.env.SPRINTFOUNDRY_USE_CONTAINERS;
+    const runStepSpy = vi.spyOn(CodexRuntime.prototype, "runStep").mockResolvedValue({
+      tokens_used: 111,
+      runtime_id: "codex-runtime-warn-only",
+      usage: { total_tokens: 111 },
+      runtime_metadata: {
+        schema_version: 1,
+        runtime: {
+          provider: "codex",
+          mode: "local_process",
+          runtime_id: "codex-runtime-warn-only",
+          step_attempt: 1,
+        },
+      },
+    } as any);
+
+    const skillRoot = path.join(tmpDir, "skills-dynamic-warn-only");
+    const qaSkill = path.join(skillRoot, "playwright");
+    await fs.mkdir(qaSkill, { recursive: true });
+    await fs.writeFile(path.join(qaSkill, "SKILL.md"), "# playwright", "utf-8");
+
+    const runner = new AgentRunner(
+      makePlatformConfig({
+        defaults: {
+          ...makePlatformConfig().defaults,
+          skills_v2_enabled: true,
+          skills_enabled: true,
+          skill_catalog: {
+            playwright: { path: qaSkill },
+          },
+        },
+      }),
+      makeProjectConfig({
+        runtime_overrides: {
+          developer: { provider: "codex", mode: "local_process" },
+        },
+        skills_v2_enabled: true,
+        skills_enabled: true,
+        dynamic_skills: {
+          enabled: true,
+          allowlist: ["playwright"],
+          agent_allowlist: {
+            qa: ["playwright"],
+          },
+        },
+      })
+    );
+    (runner as any).readAgentResult = vi.fn().mockResolvedValue(makeResult());
+    const workspacePath = path.join(tmpDir, "workspace-dynamic-warn-only");
+    await fs.mkdir(workspacePath, { recursive: true });
+
+    const result = await runner.run(
+      makeRunConfig({
+        agent: "developer",
+        workspacePath,
+        ticket: {
+          id: "SPR-77",
+          source: "linear",
+          title: "Request unsupported skill",
+          description: "Skill label should be rejected for developer",
+          labels: ["sf:skill:playwright"],
+          priority: "p2",
+          acceptance_criteria: [],
+          linked_tickets: [],
+          comments: [],
+          author: "test-user",
+          raw: {},
+        },
+      })
+    );
+
+    expect(runStepSpy).toHaveBeenCalledTimes(1);
+    expect(runStepSpy.mock.calls[0][0].codexSkillNames).toBeUndefined();
+    expect((result.runtime_metadata as any)?.provider_metadata?.skills).toMatchObject({
+      names: [],
+      base_skills: [],
+      label_skills: [],
+      resolution_mode: "dynamic_label_merge",
+      provider: "codex",
+      rejected_skills: [
+        { skill: "playwright", reason: "not_allowed_for_agent:developer" },
+      ],
+    });
+    expect(
+      ((result.runtime_metadata as any)?.provider_metadata?.skills?.warnings ?? []).some(
+        (warning: string) => warning.includes("playwright")
+      )
+    ).toBe(true);
   });
 
   it("project runtime override takes precedence over platform runtime defaults", async () => {

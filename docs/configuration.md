@@ -225,6 +225,47 @@ codex_skills_overrides:
     - error-handling
 ```
 
+#### `dynamic_skills`
+Allow explicit ticket labels to add runtime skills for a run.
+
+This feature is additive:
+
+- base per-agent skills still apply
+- ticket labels can add more allowed skills
+- labels cannot remove base skills
+
+Recommended label format:
+
+- `sf:skill:develop-web-game`
+- `sf:skill:playwright`
+
+```yaml
+dynamic_skills:
+  enabled: true
+  label_source: linear          # linear | all
+  label_prefix: "sf:skill:"
+  allow_ticket_labels: true
+  allowlist:
+    - develop-web-game
+    - playwright
+    - phaser-arcade-platformer
+  denylist:
+    - internal-only-skill
+  agent_allowlist:
+    developer:
+      - develop-web-game
+      - phaser-arcade-platformer
+    qa:
+      - playwright
+```
+
+Behavior:
+
+- only labels with the configured prefix are considered
+- unknown or disallowed skills are ignored with warnings
+- if `agent_allowlist` is configured, only listed agents may receive listed skills
+- staged runtime metadata records base skills, label skills, ignored labels, and rejected skills
+
 ---
 
 ## Platform Config (`platform.yaml`)
@@ -510,6 +551,22 @@ guardrails:
     - "public/**"
 
 codex_skills_enabled: false
+
+dynamic_skills:
+  enabled: true
+  label_source: linear
+  label_prefix: "sf:skill:"
+  allow_ticket_labels: true
+  allowlist:
+    - develop-web-game
+    - playwright
+    - phaser-arcade-platformer
+  agent_allowlist:
+    developer:
+      - develop-web-game
+      - phaser-arcade-platformer
+    qa:
+      - playwright
 
 branch_strategy:
   prefix: feat/

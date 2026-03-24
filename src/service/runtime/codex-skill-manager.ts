@@ -147,6 +147,17 @@ export class CodexSkillManager {
     };
   }
 
+  async resolveCatalogForRuntime(
+    workspacePath: string,
+    runtimeProvider: RuntimeProvider = "codex"
+  ): Promise<Record<string, SkillDefinition>> {
+    const skillsV2Enabled =
+      this.projectConfig.skills_v2_enabled ??
+      this.platformConfig.defaults.skills_v2_enabled ??
+      false;
+    return this.resolveCatalog(workspacePath, runtimeProvider, skillsV2Enabled);
+  }
+
   private resolveDestination(
     workspacePath: string,
     runtimeProvider: RuntimeProvider

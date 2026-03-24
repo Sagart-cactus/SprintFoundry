@@ -1351,6 +1351,7 @@ export class OrchestrationService {
             stepAttempt: currentRework + 1,
             agent: step.agent,
             task: effectiveTask,
+            ticket: run.ticket,
             context_inputs: step.context_inputs,
             workspacePath,
             modelConfig,
