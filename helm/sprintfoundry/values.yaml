@@ -10,7 +10,7 @@ global:
 # -- Container image for all SprintFoundry services
 image:
   repository: ghcr.io/sagart-cactus/sprintfoundry-runner
-  tag: "0.7.1"
+  tag: "0.7.2"
   pullPolicy: IfNotPresent
 
 # =============================================================================

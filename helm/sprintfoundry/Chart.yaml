@@ -2,8 +2,8 @@ apiVersion: v2
 name: sprintfoundry
 description: A multi-agent orchestration platform for AI-powered software development
 type: application
-version: 0.7.1
-appVersion: "0.7.1"
+version: 0.7.2
+appVersion: "0.7.2"
 home: https://github.com/Sagart-cactus/SprintFoundry
 keywords:
   - ai
