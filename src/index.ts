@@ -958,4 +958,4 @@ const argv =
     ? [process.argv[0], process.argv[1], ...process.argv.slice(3)]
     : process.argv;
 
-program.parse(argv);
+await program.parseAsync(argv);

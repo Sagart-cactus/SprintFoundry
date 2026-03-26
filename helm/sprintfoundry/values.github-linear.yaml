@@ -1,0 +1,59 @@
+# Example values for a GitHub + Linear-backed SprintFoundry project.
+# Fill in the tokens and replace placeholder repo/project details before use.
+
+quickstart:
+  enabled: false
+
+projects:
+  - id: my-project
+    apiKeys:
+      openaiKey: "replace-me"
+      githubToken: "replace-me"
+      linearApiKey: "replace-me"
+    config:
+      project_id: my-project
+      name: My Project
+      stack: js
+      agents:
+        - developer
+        - qa
+        - merge-bot
+      repo:
+        url: https://github.com/example/my-project.git
+        default_branch: main
+      integrations:
+        scm:
+          type: github
+          config:
+            owner: example
+            repo: my-project
+            token: ${GITHUB_TOKEN}
+        ticket_source:
+          type: linear
+          config:
+            api_key: ${LINEAR_API_KEY}
+            team_id: replace-me
+      api_keys:
+        openai: ${OPENAI_API_KEY}
+      runtime_overrides:
+        developer:
+          provider: codex
+          mode: local_process
+          model_reasoning_effort: medium
+        qa:
+          provider: codex
+          mode: local_process
+          model_reasoning_effort: medium
+        merge-bot:
+          provider: codex
+          mode: local_process
+          model_reasoning_effort: low
+      ticket_workflow:
+        provider: linear_sdlc
+        linear:
+          todo_state: Todo
+          review_state: Review
+          done_state: Done
+      pull_requests:
+        enabled: true
+        merge_method: squash

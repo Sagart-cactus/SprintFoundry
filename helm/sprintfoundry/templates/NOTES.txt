@@ -1,5 +1,7 @@
 SprintFoundry has been installed.
 
+{{- $projects := include "sprintfoundry.projectsList" . | fromYamlArray }}
+
 === Services ===
 
 Dispatch Controller: {{ include "sprintfoundry.fullname" . }}-dispatch-controller:{{ .Values.dispatchController.port }}
@@ -25,9 +27,9 @@ To access the dispatch controller:
 
 === Projects ===
 
-{{- if .Values.projects }}
+{{- if $projects }}
 Configured projects:
-{{- range .Values.projects }}
+{{- range $projects }}
   - {{ .id }} (namespace: {{ default .id .namespace }})
 {{- end }}
 {{- else }}
@@ -48,7 +50,16 @@ Example:
 
 === Next Steps ===
 
+{{- if .Values.quickstart.enabled }}
+1. Run `helm test {{ .Release.Name }} -n {{ .Release.Namespace }}` to execute the built-in quickstart smoke test.
+2. Queue an extra prompt run manually if needed:
+   curl -X POST http://{{ include "sprintfoundry.fullname" . }}-dispatch-controller:{{ .Values.dispatchController.port }}/api/dispatch/run \
+     -H 'content-type: application/json' \
+     -d '{"project_id":"{{ .Values.quickstart.project.id | default "quickstart" }}","source":"prompt","agent":"developer","prompt":"Create quickstart-manual.txt describing this manual smoke run."}'
+3. Monitor runs at the Monitor UI
+{{- else }}
 1. Configure at least one project with API keys
 2. Set up a webhook (GitHub/Linear) pointing to:
    {{ include "sprintfoundry.fullname" . }}-dispatch-controller:{{ .Values.dispatchController.port }}/api/webhooks
 3. Monitor runs at the Monitor UI
+{{- end }}

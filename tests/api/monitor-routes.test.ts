@@ -793,6 +793,19 @@ describe("GET / — v3 default route", () => {
   });
 });
 
+describe("GET /health", () => {
+  it("returns HTTP 200 with JSON health metadata", async () => {
+    const { status, contentType, body } = await get(`${BASE}/health`);
+    expect(status).toBe(200);
+    expect(contentType).toMatch(/application\/json/);
+    const data = JSON.parse(body);
+    expect(data).toMatchObject({
+      status: "ok",
+    });
+    expect(typeof data.data_source).toBe("string");
+  });
+});
+
 describe("GET /v2 — removed route", () => {
   it("returns HTTP 404 for /v2", async () => {
     const { status } = await get(`${BASE}/v2`);
@@ -869,6 +882,12 @@ describe("GET /api/run", () => {
     const { status, body } = await get(`${BASE}/api/run`);
     expect(status).toBe(400);
     expect(JSON.parse(body)).toHaveProperty("error");
+  });
+
+  it("returns 404 when the requested run does not exist", async () => {
+    const { status, body } = await get(`${BASE}/api/run?project=missing-project&run=run-missing`);
+    expect(status).toBe(404);
+    expect(JSON.parse(body)).toEqual({ error: "Run not found" });
   });
 
   it("loads a session-backed run via workspace path fallback", async () => {

@@ -1,4 +1,5 @@
 {{- if not .Values.platformConfig.existingConfigMap }}
+{{- $agentSandbox := .Values.agentSandbox | default dict }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -174,13 +175,13 @@ data:
           fqdn_allowlist: []
           cidr_allowlist: []
       agent_sandbox:
-        enabled: true
-        whole_run_hosting_enabled: true
-        template_name: default
-        warm_pool_name: ""
-        api_group: extensions.agents.x-k8s.io
-        api_version: v1alpha1
-        claim_plural: sandboxclaims
+        enabled: {{- if hasKey $agentSandbox "enabled" }} {{ $agentSandbox.enabled }}{{- else }} true{{- end }}
+        whole_run_hosting_enabled: {{- if hasKey $agentSandbox "wholeRunHostingEnabled" }} {{ $agentSandbox.wholeRunHostingEnabled }}{{- else }} true{{- end }}
+        template_name: {{ default "default" $agentSandbox.templateName | quote }}
+        warm_pool_name: {{ default "" $agentSandbox.warmPoolName | quote }}
+        api_group: {{ default "extensions.agents.x-k8s.io" $agentSandbox.apiGroup | quote }}
+        api_version: {{ default "v1alpha1" $agentSandbox.apiVersion | quote }}
+        claim_plural: {{ default "sandboxclaims" $agentSandbox.claimPlural | quote }}
 
     lifecycle:
       enabled: false

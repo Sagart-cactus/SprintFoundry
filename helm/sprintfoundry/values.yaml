@@ -10,8 +10,41 @@ global:
 # -- Container image for all SprintFoundry services
 image:
   repository: ghcr.io/sagart-cactus/sprintfoundry-runner
-  tag: latest
+  tag: "0.7.1"
   pullPolicy: IfNotPresent
+
+# =============================================================================
+# Quickstart Project
+# =============================================================================
+# Enable this to get a prompt-only sample project with no extra onboarding.
+# It uses a public git repo and skips PR finalization by default, so a single
+# helm install plus one model API key is enough for a first run.
+quickstart:
+  enabled: false
+  skipPrFinalization: true
+  project:
+    id: quickstart
+    name: SprintFoundry Quickstart
+    # Defaults to <release-name>-<project-id> when left empty so multiple
+    # releases can coexist in the same cluster.
+    namespace: ""
+    repoUrl: https://github.com/octocat/Hello-World.git
+    defaultBranch: master
+  runtime:
+    provider: codex
+    mode: local_process
+  model:
+    provider: openai
+    name: gpt-5.2-codex
+    reasoningEffort: medium
+  apiKeys:
+    openaiKey: ""
+    anthropicKey: ""
+  run:
+    agent: developer
+    prompt: Create quickstart-smoke.txt containing a one-line note that SprintFoundry quickstart validation ran successfully.
+    timeoutSeconds: 900
+    pollIntervalSeconds: 5
 
 # -- Image used for the event-api service (defaults to main image if empty)
 eventApiImage:
@@ -24,6 +57,7 @@ eventApiImage:
 dispatchController:
   replicas: 1
   port: 4320
+  k8sMode: true
   resources:
     requests:
       cpu: 200m
@@ -73,6 +107,18 @@ monitor:
   extraEnv: []
 
 # =============================================================================
+# Agent Sandbox
+# =============================================================================
+agentSandbox:
+  enabled: true
+  wholeRunHostingEnabled: true
+  templateName: default
+  warmPoolName: ""
+  apiGroup: extensions.agents.x-k8s.io
+  apiVersion: v1alpha1
+  claimPlural: sandboxclaims
+
+# =============================================================================
 # System-level Secrets (control plane only)
 # =============================================================================
 # These are for inter-service auth and the monitor dashboard.
@@ -83,11 +129,11 @@ secrets:
   create: true
   # -- Use an existing Secret instead of creating one
   existingSecret: ""
-  # -- Inter-service authentication token
+  # -- Inter-service authentication token. Auto-generated when left empty.
   internalApiToken: ""
-  # -- Monitor dashboard read token
+  # -- Monitor dashboard read token. Auto-generated when left empty.
   monitorApiToken: ""
-  # -- Monitor dashboard write token
+  # -- Monitor dashboard write token. Auto-generated when left empty.
   monitorWriteToken: ""
 
 # =============================================================================
@@ -202,6 +248,8 @@ artifactUpload:
 # =============================================================================
 postgresql:
   enabled: true
+  image:
+    tag: latest
   auth:
     username: sf
     password: sf
@@ -224,6 +272,8 @@ externalDatabase:
 redis:
   enabled: true
   architecture: standalone
+  image:
+    tag: latest
   auth:
     enabled: false
 
@@ -238,6 +288,8 @@ externalRedis:
 # =============================================================================
 migration:
   enabled: true
+  maxAttempts: 40
+  retryDelayMs: 3000
   # -- Additional annotations for the migration Job
   annotations: {}
 

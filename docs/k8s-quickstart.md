@@ -1,135 +1,102 @@
 # Kubernetes Quickstart
 
-This is the shortest reliable path to a first whole-run Kubernetes setup.
+This is the shortest supported Helm path to a first working SprintFoundry
+install.
 
-## 1. Install The Control Plane
+## Prerequisites
 
-Render first:
+- Kubernetes cluster reachable from `kubectl`
+- Helm 3
+- a model API key
+  - quickstart supports `OPENAI_API_KEY` out of the box
 
-```bash
-kubectl kustomize k8s/overlays/dev
-helm template sprintfoundry ./helm/sprintfoundry
-```
+Quickstart does not require Agent Sandbox CRDs. The provided
+`values.quickstart.yaml` disables both Agent Sandbox and k8s-mode dispatch.
 
-Then install with either Kustomize or Helm.
-
-Kustomize:
-
-```bash
-kubectl apply -k k8s/overlays/dev
-```
-
-Helm:
+## One-Command Install
 
 ```bash
-helm upgrade --install sprintfoundry ./helm/sprintfoundry -n sprintfoundry-system --create-namespace
+helm upgrade --install sprintfoundry ./helm/sprintfoundry \
+  -n sprintfoundry-system \
+  --create-namespace \
+  -f helm/sprintfoundry/values.quickstart.yaml \
+  --set-string quickstart.apiKeys.openaiKey="$OPENAI_API_KEY" \
+  --wait --wait-for-jobs
 ```
 
-## 2. Create System Secrets
+That single install creates:
 
-At minimum, create the internal API token:
+- SprintFoundry control plane
+- Postgres and Redis
+- a prompt-only `quickstart` project
+- the project Secret and ConfigMap required for dispatch
+- a release-scoped quickstart namespace so multiple releases can coexist
+
+The quickstart project uses:
+
+- a public repo clone
+- prompt ticket source
+- `codex` with `local_process`
+- no GitHub PR finalization
+
+## Validate The Install
+
+Run the built-in Helm smoke tests:
 
 ```bash
-kubectl -n sprintfoundry-system create secret generic sprintfoundry-system-secrets \
-  --from-literal=SPRINTFOUNDRY_INTERNAL_API_TOKEN=replace-me
+helm test sprintfoundry -n sprintfoundry-system
 ```
 
-Add monitor tokens if you want monitor auth enabled.
+This verifies:
 
-## 3. Install Agent Sandbox Prerequisites
+1. dispatch, event-api, and monitor health endpoints respond
+2. a real prompt run can be queued
+3. the run reaches `completed`
 
-You need:
-
-- Agent Sandbox controller and CRDs
-- ExternalSecrets operator if you use the project onboarding template as-is
-- the `ClusterSecretStore` referenced by the project template
-
-Before running a task, verify:
+If you want hook logs inline while debugging:
 
 ```bash
-sprintfoundry doctor --profile k8s --project my-project
+helm test sprintfoundry -n sprintfoundry-system --logs
 ```
 
-## 4. Understand The Project Resource Contract
+## Observe The System
 
-SprintFoundry now expects one default contract per project:
-
-- namespace: `<project id>`
-- secret: `sprintfoundry-project-<project id>-secrets`
-- configmap: `sprintfoundry-project-<project id>-config`
-
-If you change those names, also change:
-
-- dispatch environment overrides
-- onboarding scripts
-- Helm values
-
-## 5. Onboard A Project
+Port-forward the monitor:
 
 ```bash
-scripts/onboard-project.sh \
-  --project-id my-project \
-  --config-file config/project.yaml \
-  --dry-run
+kubectl port-forward svc/sprintfoundry-monitor 4310:4310 -n sprintfoundry-system
 ```
 
-Then apply for real:
+Then open:
+
+```text
+http://localhost:4310
+```
+
+## Queue Another Prompt Run
 
 ```bash
-scripts/onboard-project.sh \
-  --project-id my-project \
-  --config-file config/project.yaml
+kubectl port-forward svc/sprintfoundry-dispatch-controller 4320:4320 -n sprintfoundry-system
+
+curl -X POST http://127.0.0.1:4320/api/dispatch/run \
+  -H 'content-type: application/json' \
+  -d '{
+    "project_id": "quickstart",
+    "source": "prompt",
+    "agent": "developer",
+    "prompt": "Create quickstart-manual.txt describing this manual validation run."
+  }'
 ```
 
-## 6. Preflight Before The First Run
+## Real Projects
 
-```bash
-sprintfoundry doctor --profile k8s --project my-project
-sprintfoundry validate --strict --project my-project
-```
+When you move beyond quickstart, switch to `.Values.projects` and provide the
+real project config plus GitHub/Linear credentials in the same Helm release.
 
-Those checks should confirm:
+Use the shipped examples:
 
-- kube context is valid
-- Agent Sandbox CRDs are installed
-- namespace exists
-- secret exists
-- configmap exists
-- RBAC allows SandboxClaim creation
+- [helm/sprintfoundry/values.github-linear.yaml](../helm/sprintfoundry/values.github-linear.yaml)
+- [helm/sprintfoundry/values.external-secrets.yaml](../helm/sprintfoundry/values.external-secrets.yaml)
 
-## 7. Run And Observe
-
-Start the monitor:
-
-```bash
-sprintfoundry monitor
-```
-
-Run a prompt or ticket:
-
-```bash
-sprintfoundry run --project my-project --source prompt --prompt "Smoke test the k8s whole-run path"
-```
-
-Use:
-
-- `sprintfoundry logs <run-id>`
-- the monitor UI
-- `kubectl get sandboxclaims,pods,pvc -n my-project`
-
-## 8. If A Run Fails
-
-Use:
-
-```bash
-sprintfoundry logs <run-id>
-sprintfoundry resume --latest --project my-project
-```
-
-If the workspace PVC is retained, the monitor will show a handoff action and status.
-
-## Related Docs
-
-- [k8s/README.md](../k8s/README.md)
-- [docs/troubleshooting.md](./troubleshooting.md)
-- [helm/sprintfoundry/README.md](../helm/sprintfoundry/README.md)
+See [helm/sprintfoundry/README.md](../helm/sprintfoundry/README.md) for the full
+project contract and install modes.

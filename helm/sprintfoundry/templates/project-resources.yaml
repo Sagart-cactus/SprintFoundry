@@ -1,6 +1,9 @@
-{{- range .Values.projects }}
+{{- $projects := include "sprintfoundry.projectsList" . | fromYamlArray -}}
+{{- range $projects }}
 {{- $project := . }}
 {{- $ns := default $project.id $project.namespace }}
+{{- $releaseNs := $.Release.Namespace }}
+{{- $tokens := include "sprintfoundry.resolvedSecretTokens" $ | fromYaml }}
 ---
 # Namespace for project: {{ $project.id }}
 apiVersion: v1
@@ -17,6 +20,37 @@ kind: Secret
 metadata:
   name: sprintfoundry-project-{{ $project.id }}-secrets
   namespace: {{ $ns }}
+  labels:
+    sprintfoundry.io/project-id: {{ $project.id | quote }}
+type: Opaque
+stringData:
+  {{- if and $project.apiKeys $project.apiKeys.anthropicKey }}
+  ANTHROPIC_API_KEY: {{ $project.apiKeys.anthropicKey | quote }}
+  {{- end }}
+  {{- if and $project.apiKeys $project.apiKeys.openaiKey }}
+  OPENAI_API_KEY: {{ $project.apiKeys.openaiKey | quote }}
+  {{- end }}
+  {{- if and $project.apiKeys $project.apiKeys.googleKey }}
+  GOOGLE_API_KEY: {{ $project.apiKeys.googleKey | quote }}
+  {{- end }}
+  {{- if and $project.apiKeys $project.apiKeys.githubToken }}
+  GITHUB_TOKEN: {{ $project.apiKeys.githubToken | quote }}
+  {{- end }}
+  {{- if and $project.apiKeys $project.apiKeys.linearApiKey }}
+  LINEAR_API_KEY: {{ $project.apiKeys.linearApiKey | quote }}
+  {{- end }}
+  {{- if and $project.apiKeys $project.apiKeys.jiraApiToken }}
+  JIRA_API_TOKEN: {{ $project.apiKeys.jiraApiToken | quote }}
+  {{- end }}
+{{- end }}
+{{- if and (not $project.existingSecret) (not (and $project.externalSecret $project.externalSecret.enabled)) (ne $ns $releaseNs) }}
+---
+# Dispatch-side mirrored Secret for project: {{ $project.id }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sprintfoundry-project-{{ $project.id }}-secrets
+  namespace: {{ $releaseNs }}
   labels:
     sprintfoundry.io/project-id: {{ $project.id | quote }}
 type: Opaque
@@ -62,6 +96,42 @@ spec:
     - find:
         path: {{ $project.externalSecret.remoteRef | quote }}
 {{- end }}
+{{- if and $project.externalSecret $project.externalSecret.enabled (ne $ns $releaseNs) }}
+---
+# Dispatch-side mirrored ExternalSecret for project: {{ $project.id }}
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: project-external-secrets
+  namespace: {{ $releaseNs }}
+  labels:
+    sprintfoundry.io/project-id: {{ $project.id | quote }}
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: {{ $project.externalSecret.secretStoreRef.kind | default "ClusterSecretStore" }}
+    name: {{ $project.externalSecret.secretStoreRef.name }}
+  target:
+    name: sprintfoundry-project-{{ $project.id }}-secrets
+    creationPolicy: Owner
+  dataFrom:
+    - find:
+        path: {{ $project.externalSecret.remoteRef | quote }}
+{{- end }}
+---
+{{- if $tokens.internal }}
+# Runtime secret for project: {{ $project.id }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "sprintfoundry.projectRuntimeSecretName" $project }}
+  namespace: {{ $ns }}
+  labels:
+    sprintfoundry.io/project-id: {{ $project.id | quote }}
+type: Opaque
+stringData:
+  SPRINTFOUNDRY_INTERNAL_API_TOKEN: {{ $tokens.internal | quote }}
+{{- end }}
 ---
 {{- if and (not $project.existingConfigMap) $project.config }}
 # ConfigMap for project: {{ $project.id }}
@@ -70,6 +140,20 @@ kind: ConfigMap
 metadata:
   name: sprintfoundry-project-{{ $project.id }}-config
   namespace: {{ $ns }}
+  labels:
+    sprintfoundry.io/project-id: {{ $project.id | quote }}
+data:
+  project.yaml: |
+    {{- $project.config | toYaml | nindent 4 }}
+{{- end }}
+{{- if and (not $project.existingConfigMap) $project.config (ne $ns $releaseNs) }}
+---
+# Dispatch-side mirrored ConfigMap for project: {{ $project.id }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sprintfoundry-project-{{ $project.id }}-config
+  namespace: {{ $releaseNs }}
   labels:
     sprintfoundry.io/project-id: {{ $project.id | quote }}
 data:

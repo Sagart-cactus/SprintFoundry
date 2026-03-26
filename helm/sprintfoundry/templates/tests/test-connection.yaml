@@ -17,15 +17,15 @@ spec:
       args:
         - |
           echo "Testing dispatch-controller..."
-          wget -q --spider --timeout=5 http://{{ include "sprintfoundry.fullname" . }}-dispatch-controller:{{ .Values.dispatchController.port }}/healthz || exit 1
+          wget -q -O - --timeout=5 http://{{ include "sprintfoundry.fullname" . }}-dispatch-controller:{{ .Values.dispatchController.port }}/health >/dev/null || exit 1
           echo "dispatch-controller: OK"
 
           echo "Testing event-api..."
-          wget -q --spider --timeout=5 http://{{ include "sprintfoundry.fullname" . }}-event-api:{{ .Values.eventApi.port }}/healthz || exit 1
+          wget -q -O - --timeout=5 http://{{ include "sprintfoundry.fullname" . }}-event-api:{{ .Values.eventApi.port }}/health >/dev/null || exit 1
           echo "event-api: OK"
 
           echo "Testing monitor..."
-          wget -q --spider --timeout=5 http://{{ include "sprintfoundry.fullname" . }}-monitor:{{ .Values.monitor.port }}/healthz || exit 1
+          wget -q -O - --timeout=5 http://{{ include "sprintfoundry.fullname" . }}-monitor:{{ .Values.monitor.port }}/health >/dev/null || exit 1
           echo "monitor: OK"
 
           echo "All services healthy."

@@ -40,6 +40,10 @@ spec:
               value: {{ include "sprintfoundry.databaseUrl" . | quote }}
             - name: SPRINTFOUNDRY_REDIS_URL
               value: {{ include "sprintfoundry.redisUrl" . | quote }}
+            - name: SPRINTFOUNDRY_MIGRATION_MAX_ATTEMPTS
+              value: {{ .Values.migration.maxAttempts | quote }}
+            - name: SPRINTFOUNDRY_MIGRATION_RETRY_DELAY_MS
+              value: {{ .Values.migration.retryDelayMs | quote }}
             - name: SPRINTFOUNDRY_INTERNAL_API_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -53,13 +57,13 @@ spec:
             {{- toYaml .Values.eventApi.resources | nindent 12 }}
           livenessProbe:
             httpGet:
-              path: /healthz
+              path: /health
               port: http
             initialDelaySeconds: 10
             periodSeconds: 30
           readinessProbe:
             httpGet:
-              path: /healthz
+              path: /health
               port: http
             initialDelaySeconds: 5
             periodSeconds: 10

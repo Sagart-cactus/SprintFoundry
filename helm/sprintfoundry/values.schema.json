@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "image": {
+      "type": "object",
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string", "minLength": 1 },
+        "pullPolicy": { "type": "string", "minLength": 1 }
+      }
+    },
+    "projects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "namespace": { "type": "string" },
+          "existingSecret": { "type": "string" },
+          "existingConfigMap": { "type": "string" },
+          "apiKeys": {
+            "type": "object",
+            "properties": {
+              "anthropicKey": { "type": "string" },
+              "openaiKey": { "type": "string" },
+              "googleKey": { "type": "string" },
+              "githubToken": { "type": "string" },
+              "linearApiKey": { "type": "string" },
+              "jiraApiToken": { "type": "string" }
+            }
+          },
+          "config": {
+            "type": "object",
+            "properties": {
+              "project_id": { "type": "string" },
+              "name": { "type": "string" },
+              "repo": {
+                "type": "object",
+                "properties": {
+                  "url": { "type": "string" },
+                  "default_branch": { "type": "string" }
+                }
+              },
+              "integrations": {
+                "type": "object",
+                "properties": {
+                  "ticket_source": {
+                    "type": "object",
+                    "properties": {
+                      "type": { "type": "string" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "quickstart": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "skipPrFinalization": { "type": "boolean" },
+        "project": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string", "minLength": 1 },
+            "name": { "type": "string", "minLength": 1 },
+            "namespace": { "type": "string" },
+            "repoUrl": { "type": "string", "minLength": 1 },
+            "defaultBranch": { "type": "string", "minLength": 1 }
+          }
+        },
+        "runtime": {
+          "type": "object",
+          "properties": {
+            "provider": {
+              "type": "string",
+              "enum": ["codex", "claude-code"]
+            },
+            "mode": {
+              "type": "string",
+              "enum": ["local_process", "local_sdk", "remote"]
+            }
+          }
+        },
+        "model": {
+          "type": "object",
+          "properties": {
+            "provider": {
+              "type": "string",
+              "enum": ["openai", "anthropic", "google"]
+            },
+            "name": { "type": "string", "minLength": 1 },
+            "reasoningEffort": {
+              "type": "string",
+              "enum": ["low", "medium", "high"]
+            }
+          }
+        },
+        "apiKeys": {
+          "type": "object",
+          "properties": {
+            "openaiKey": { "type": "string" },
+            "anthropicKey": { "type": "string" }
+          }
+        },
+        "run": {
+          "type": "object",
+          "properties": {
+            "agent": { "type": "string", "minLength": 1 },
+            "prompt": { "type": "string", "minLength": 1 },
+            "timeoutSeconds": { "type": "integer", "minimum": 30 },
+            "pollIntervalSeconds": { "type": "integer", "minimum": 1 }
+          }
+        }
+      }
+    },
+    "migration": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "maxAttempts": { "type": "integer", "minimum": 1 },
+        "retryDelayMs": { "type": "integer", "minimum": 100 }
+      }
+    }
+  }
+}

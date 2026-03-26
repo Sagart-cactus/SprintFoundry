@@ -28,7 +28,10 @@ const selectedDataSourceLabel = useDatabaseBackend
 
 const portArgIndex = process.argv.indexOf("--port");
 const portArg = portArgIndex !== -1 ? process.argv[portArgIndex + 1] : undefined;
+const hostArgIndex = process.argv.indexOf("--host");
+const hostArg = hostArgIndex !== -1 ? process.argv[hostArgIndex + 1] : undefined;
 const port = Number(portArg ?? process.env.MONITOR_PORT ?? 4310);
+const host = String(hostArg ?? process.env.MONITOR_HOST ?? "127.0.0.1").trim() || "127.0.0.1";
 const webhookPortEnv = process.env.SPRINTFOUNDRY_WEBHOOK_PORT;
 const webhookPortCandidate = Number(webhookPortEnv ?? "");
 const webhookSplitEnabled = Number.isFinite(webhookPortCandidate) && webhookPortCandidate > 0 && webhookPortCandidate !== port;
@@ -64,6 +67,10 @@ function toPositiveInt(value, fallback) {
   const n = Number(value ?? "");
   if (!Number.isFinite(n) || n <= 0) return fallback;
   return Math.floor(n);
+}
+
+function isRunNotFoundError(error) {
+  return error instanceof Error && /^Run not found: /.test(error.message);
 }
 
 async function fileExists(targetPath) {
@@ -2866,6 +2873,15 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (pathname === "/health") {
+      sendJson(res, 200, {
+        status: "ok",
+        auth_required: monitorAuthRequired,
+        data_source: selectedDataSourceLabel,
+      });
+      return;
+    }
+
     if (pathname === "/api/runs") {
       const runs = await listRunsSelected();
       sendJson(res, 200, { runs, runs_root: runsRoot });
@@ -2879,7 +2895,16 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { error: "Missing project/run query params" });
         return;
       }
-      const data = await loadRunSelected(project, run);
+      let data;
+      try {
+        data = await loadRunSelected(project, run);
+      } catch (error) {
+        if (isRunNotFoundError(error)) {
+          sendJson(res, 404, { error: "Run not found" });
+          return;
+        }
+        throw error;
+      }
       sendJson(res, 200, data);
       return;
     }
@@ -3323,9 +3348,9 @@ if (webhookServer) {
   });
 }
 
-server.listen(port, "127.0.0.1", () => {
+server.listen(port, host, () => {
   const actualPort = server.address()?.port ?? port;
-  console.log(`[monitor] Run Monitor listening at http://127.0.0.1:${actualPort}`);
+  console.log(`[monitor] Run Monitor listening at http://${host}:${actualPort}`);
   console.log(`[monitor] Data source: ${selectedDataSourceLabel}`);
   console.log(`[monitor] Watching runs under: ${runsRoot}`);
   if (monitorAuthRequired) {
@@ -3336,8 +3361,8 @@ server.listen(port, "127.0.0.1", () => {
 });
 
 if (webhookServer) {
-  webhookServer.listen(webhookPort, "127.0.0.1", () => {
+  webhookServer.listen(webhookPort, host, () => {
     const actualWebhookPort = webhookServer.address()?.port ?? webhookPort;
-    console.log(`[monitor] Webhook server listening at http://127.0.0.1:${actualWebhookPort}`);
+    console.log(`[monitor] Webhook server listening at http://${host}:${actualWebhookPort}`);
   });
 }
