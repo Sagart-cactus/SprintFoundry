@@ -114,8 +114,21 @@ export class EventSinkClient {
         signal: controller.signal,
       });
 
+      if (!response.ok) {
+        const responseText = await response.text().catch(() => "");
+        const detail = responseText.trim();
+        console.warn(
+          `[event-sink] POST ${url} failed with ${response.status}` +
+            (detail ? `: ${detail.slice(0, 500)}` : ""),
+        );
+        return false;
+      }
+
       return response.ok;
-    } catch {
+    } catch (error) {
+      console.warn(
+        `[event-sink] POST ${url} failed before response: ${error instanceof Error ? error.message : String(error)}`,
+      );
       return false;
     } finally {
       clearTimeout(timeout);

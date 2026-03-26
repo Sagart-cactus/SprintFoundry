@@ -7,6 +7,9 @@ metadata:
     {{- include "sprintfoundry.labels" . | nindent 4 }}
     app.kubernetes.io/component: dispatch-controller
 spec:
+  {{- $projects := include "sprintfoundry.projectsList" . | fromYamlArray }}
+  {{- $dispatch := .Values.dispatchController | default dict }}
+  {{- $dispatchK8sMode := hasKey $dispatch "k8sMode" | ternary $dispatch.k8sMode true }}
   replicas: {{ .Values.dispatchController.replicas }}
   selector:
     matchLabels:
@@ -41,7 +44,7 @@ spec:
               name: http
           env:
             - name: SPRINTFOUNDRY_K8S_MODE
-              value: "true"
+              value: {{ ternary "true" "false" $dispatchK8sMode | quote }}
             - name: SPRINTFOUNDRY_RUNNER_IMAGE
               value: {{ include "sprintfoundry.image" . }}
             - name: SPRINTFOUNDRY_EVENT_SINK_URL
@@ -56,6 +59,12 @@ spec:
                   name: {{ include "sprintfoundry.secretName" . }}
                   key: SPRINTFOUNDRY_INTERNAL_API_TOKEN
                   optional: true
+            - name: SPRINTFOUNDRY_SYSTEM_SECRET_NAME
+              value: {{ include "sprintfoundry.secretName" . }}
+            {{- if .Values.quickstart.enabled }}
+            - name: SPRINTFOUNDRY_SKIP_PR_FINALIZATION
+              value: {{ ternary "1" "0" (default true .Values.quickstart.skipPrFinalization) | quote }}
+            {{- end }}
             {{- if .Values.snapshot.enabled }}
             - name: SPRINTFOUNDRY_SNAPSHOT_BUCKET
               value: {{ .Values.snapshot.bucket | quote }}
@@ -106,15 +115,28 @@ spec:
               mountPath: /config/platform.yaml
               subPath: platform.yaml
               readOnly: true
+            {{- range $projects }}
+            - name: project-config-{{ .id }}
+              mountPath: /config/project-{{ .id }}.yaml
+              subPath: project.yaml
+              readOnly: true
+            {{- end }}
+            {{- if not $dispatchK8sMode }}
+            {{- range $projects }}
+            - name: project-secret-{{ .id }}
+              mountPath: /config/project-secrets/{{ .id }}
+              readOnly: true
+            {{- end }}
+            {{- end }}
           livenessProbe:
             httpGet:
-              path: /healthz
+              path: /health
               port: http
             initialDelaySeconds: 10
             periodSeconds: 30
           readinessProbe:
             httpGet:
-              path: /healthz
+              path: /health
               port: http
             initialDelaySeconds: 5
             periodSeconds: 10
@@ -122,6 +144,19 @@ spec:
         - name: platform-config
           configMap:
             name: {{ include "sprintfoundry.platformConfigMapName" . }}
+        {{- range $projects }}
+        - name: project-config-{{ .id }}
+          configMap:
+            name: {{ include "sprintfoundry.projectConfigMapName" . }}
+        {{- end }}
+        {{- if not $dispatchK8sMode }}
+        {{- range $projects }}
+        - name: project-secret-{{ .id }}
+          secret:
+            secretName: {{ include "sprintfoundry.projectSecretName" . }}
+            optional: true
+        {{- end }}
+        {{- end }}
       {{- with .Values.dispatchController.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

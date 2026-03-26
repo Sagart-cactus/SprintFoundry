@@ -1,0 +1,11 @@
+quickstart:
+  enabled: true
+  apiKeys:
+    openaiKey: "replace-me"
+
+dispatchController:
+  k8sMode: false
+
+agentSandbox:
+  enabled: false
+  wholeRunHostingEnabled: false

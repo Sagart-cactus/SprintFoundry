@@ -25,8 +25,20 @@ jobs:
       - name: Lint chart
         run: helm lint helm/sprintfoundry
 
+      - name: Lint quickstart chart
+        run: helm lint helm/sprintfoundry -f helm/sprintfoundry/values.quickstart.yaml --set-string quickstart.apiKeys.openaiKey=test-key
+
       - name: Template validation
         run: helm template test helm/sprintfoundry --debug
+
+      - name: Template quickstart values
+        run: helm template quickstart helm/sprintfoundry -f helm/sprintfoundry/values.quickstart.yaml --set-string quickstart.apiKeys.openaiKey=test-key >/tmp/sprintfoundry-quickstart-render.yaml
+
+      - name: Template GitHub + Linear example
+        run: helm template github-linear helm/sprintfoundry -f helm/sprintfoundry/values.github-linear.yaml >/tmp/sprintfoundry-github-linear-render.yaml
+
+      - name: Template External Secrets example
+        run: helm template external-secrets helm/sprintfoundry -f helm/sprintfoundry/values.external-secrets.yaml >/tmp/sprintfoundry-external-secrets-render.yaml
 
   publish:
     needs: lint-and-validate
@@ -37,6 +49,10 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+
+      - name: Normalize image owner
+        id: image-owner
+        run: echo "value=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Helm
         uses: azure/setup-helm@v4
@@ -54,4 +70,4 @@ jobs:
         run: helm package helm/sprintfoundry --version ${GITHUB_REF_NAME#v} --app-version ${GITHUB_REF_NAME#v}
 
       - name: Push chart to OCI registry
-        run: helm push sprintfoundry-*.tgz oci://ghcr.io/${{ github.repository_owner }}/charts
+        run: helm push sprintfoundry-*.tgz oci://ghcr.io/${{ steps.image-owner.outputs.value }}/charts

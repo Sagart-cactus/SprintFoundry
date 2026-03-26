@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   defaultProjectConfigMapName,
   defaultProjectNamespace,
+  defaultProjectRuntimeSecretName,
   defaultProjectSecretName,
   describeProjectK8sContract,
 } from "../src/service/k8s-project-contract.js";
@@ -14,6 +15,7 @@ describe("k8s project contract", () => {
   it("derives default secret and configmap names from the project id", () => {
     expect(defaultProjectSecretName("demo-project")).toBe("sprintfoundry-project-demo-project-secrets");
     expect(defaultProjectConfigMapName("demo-project")).toBe("sprintfoundry-project-demo-project-config");
+    expect(defaultProjectRuntimeSecretName("demo-project")).toBe("sprintfoundry-project-demo-project-runtime-secrets");
   });
 
   it("honors environment overrides", () => {
@@ -27,6 +29,7 @@ describe("k8s project contract", () => {
       namespace: "custom-ns",
       secretName: "custom-secret",
       configMapName: "custom-config",
+      runtimeSecretName: "sprintfoundry-project-demo-project-runtime-secrets",
     });
   });
 });

@@ -1,0 +1,141 @@
+{{- if .Values.quickstart.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "sprintfoundry.fullname" . }}-quickstart-test
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sprintfoundry.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        {{- include "sprintfoundry.labels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      activeDeadlineSeconds: {{ .Values.quickstart.run.timeoutSeconds | default 900 | int | add 60 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: quickstart-smoke
+          image: {{ include "sprintfoundry.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: DISPATCH_BASE_URL
+              value: http://{{ include "sprintfoundry.fullname" . }}-dispatch-controller:{{ .Values.dispatchController.port }}
+            - name: MONITOR_BASE_URL
+              value: http://{{ include "sprintfoundry.fullname" . }}-monitor:{{ .Values.monitor.port }}
+            - name: QUICKSTART_PROJECT_ID
+              value: {{ .Values.quickstart.project.id | default "quickstart" | quote }}
+            - name: QUICKSTART_AGENT
+              value: {{ .Values.quickstart.run.agent | default "developer" | quote }}
+            - name: QUICKSTART_PROMPT
+              value: {{ .Values.quickstart.run.prompt | quote }}
+            - name: QUICKSTART_TIMEOUT_SECONDS
+              value: {{ .Values.quickstart.run.timeoutSeconds | quote }}
+            - name: QUICKSTART_POLL_INTERVAL_SECONDS
+              value: {{ .Values.quickstart.run.pollIntervalSeconds | quote }}
+            - name: MONITOR_ACCESS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "sprintfoundry.secretName" . }}
+                  key: SPRINTFOUNDRY_MONITOR_API_TOKEN
+                  optional: true
+          command:
+            - sh
+            - -lc
+            - |
+              set -eu
+
+              echo "Checking dispatch health..."
+              curl -fsS "${DISPATCH_BASE_URL}/health" >/dev/null
+
+              echo "Checking monitor health..."
+              curl -fsS "${MONITOR_BASE_URL}/health" >/dev/null
+
+              echo "Queueing quickstart run..."
+              TEST_START_ISO="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+              RUN_RESPONSE="$(
+                curl -fsS \
+                  -H 'content-type: application/json' \
+                  -X POST "${DISPATCH_BASE_URL}/api/dispatch/run" \
+                  -d "$(jq -cn --arg project_id "${QUICKSTART_PROJECT_ID}" --arg source "prompt" --arg agent "${QUICKSTART_AGENT}" --arg prompt "${QUICKSTART_PROMPT}" '{project_id:$project_id,source:$source,agent:$agent,prompt:$prompt}')"
+              )"
+              RUN_ID="$(printf '%s' "${RUN_RESPONSE}" | jq -r '.run_id // empty')"
+              if [ -z "${RUN_ID}" ]; then
+                echo "Dispatch response missing run_id: ${RUN_RESPONSE}" >&2
+                exit 1
+              fi
+
+              echo "Queued quickstart run: ${RUN_ID}"
+
+              REMAINING_SECONDS="${QUICKSTART_TIMEOUT_SECONDS:-900}"
+              POLL_SECONDS="${QUICKSTART_POLL_INTERVAL_SECONDS:-5}"
+
+              while [ "${REMAINING_SECONDS}" -gt 0 ]; do
+                if [ -n "${MONITOR_ACCESS_TOKEN:-}" ]; then
+                  RUNS_HTTP_RESPONSE="$(
+                    curl -sS -G "${MONITOR_BASE_URL}/api/runs" \
+                      --data-urlencode "access_token=${MONITOR_ACCESS_TOKEN}" \
+                      -w '\n%{http_code}'
+                  )"
+                else
+                  RUNS_HTTP_RESPONSE="$(
+                    curl -sS -G "${MONITOR_BASE_URL}/api/runs" \
+                      -w '\n%{http_code}'
+                  )"
+                fi
+
+                RUNS_HTTP_CODE="$(printf '%s' "${RUNS_HTTP_RESPONSE}" | tail -n 1)"
+                RUNS_RESPONSE="$(printf '%s' "${RUNS_HTTP_RESPONSE}" | sed '$d')"
+
+                if [ "${RUNS_HTTP_CODE}" != "200" ]; then
+                  echo "Quickstart runs lookup failed: HTTP ${RUNS_HTTP_CODE}: ${RUNS_RESPONSE}" >&2
+                  exit 1
+                fi
+
+                MATCHED_RUN="$(
+                  printf '%s' "${RUNS_RESPONSE}" | jq -cr \
+                    --arg project "${QUICKSTART_PROJECT_ID}" \
+                    --arg started "${TEST_START_ISO}" \
+                    '.runs
+                    | map(select(.project_id == $project and ((.started_at // "") >= $started)))
+                    | sort_by(.started_at)
+                    | last // empty'
+                )"
+
+                if [ -z "${MATCHED_RUN}" ] || [ "${MATCHED_RUN}" = "null" ]; then
+                  echo "Quickstart run not visible yet"
+                  sleep "${POLL_SECONDS}"
+                  REMAINING_SECONDS="$(( REMAINING_SECONDS - POLL_SECONDS ))"
+                  continue
+                fi
+
+                MATCHED_RUN_ID="$(printf '%s' "${MATCHED_RUN}" | jq -r '.run_id // empty')"
+                STATUS="$(printf '%s' "${MATCHED_RUN}" | jq -r '.status // "unknown"')"
+                echo "Observed quickstart run ${MATCHED_RUN_ID} with status ${STATUS}"
+
+                if [ "${STATUS}" = "completed" ]; then
+                  echo "Quickstart run completed: ${MATCHED_RUN_ID}"
+                  exit 0
+                fi
+
+                if [ "${STATUS}" = "failed" ] || [ "${STATUS}" = "cancelled" ]; then
+                  echo "Quickstart run ended in ${STATUS}: ${MATCHED_RUN}" >&2
+                  exit 1
+                fi
+
+                sleep "${POLL_SECONDS}"
+                REMAINING_SECONDS="$(( REMAINING_SECONDS - POLL_SECONDS ))"
+              done
+
+              echo "Quickstart run ${RUN_ID} did not complete within ${QUICKSTART_TIMEOUT_SECONDS}s" >&2
+              exit 1
+{{- end }}

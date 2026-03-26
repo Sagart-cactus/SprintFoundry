@@ -7,9 +7,9 @@ metadata:
   labels:
     {{- include "sprintfoundry.labels" . | nindent 4 }}
   annotations:
-    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook": post-install,post-upgrade
     "helm.sh/hook-weight": "-5"
-    "helm.sh/hook-delete-policy": before-hook-creation
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
     {{- with .Values.migration.annotations }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
@@ -35,6 +35,10 @@ spec:
           env:
             - name: SPRINTFOUNDRY_DATABASE_URL
               value: {{ include "sprintfoundry.databaseUrl" . | quote }}
+            - name: SPRINTFOUNDRY_MIGRATION_MAX_ATTEMPTS
+              value: {{ .Values.migration.maxAttempts | quote }}
+            - name: SPRINTFOUNDRY_MIGRATION_RETRY_DELAY_MS
+              value: {{ .Values.migration.retryDelayMs | quote }}
           resources:
             requests:
               cpu: 100m

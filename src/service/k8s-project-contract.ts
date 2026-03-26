@@ -3,6 +3,7 @@ import type { ProjectConfig } from "../shared/types.js";
 export const K8S_NAMESPACE_ENV = "SPRINTFOUNDRY_K8S_NAMESPACE";
 export const K8S_PROJECT_SECRET_ENV = "SPRINTFOUNDRY_K8S_PROJECT_SECRET_NAME";
 export const K8S_PROJECT_CONFIGMAP_ENV = "SPRINTFOUNDRY_K8S_PROJECT_CONFIGMAP_NAME";
+export const K8S_PROJECT_RUNTIME_SECRET_ENV = "SPRINTFOUNDRY_K8S_PROJECT_RUNTIME_SECRET_NAME";
 
 function readOverride(value: string | undefined): string | undefined {
   const normalized = String(value ?? "").trim();
@@ -21,6 +22,10 @@ export function defaultProjectConfigMapName(projectId: string): string {
   return `sprintfoundry-project-${String(projectId ?? "").trim()}-config`;
 }
 
+export function defaultProjectRuntimeSecretName(projectId: string): string {
+  return `sprintfoundry-project-${String(projectId ?? "").trim()}-runtime-secrets`;
+}
+
 export function resolveProjectNamespace(projectId: string, env: NodeJS.ProcessEnv = process.env): string {
   return readOverride(env[K8S_NAMESPACE_ENV]) ?? defaultProjectNamespace(projectId);
 }
@@ -33,10 +38,14 @@ export function resolveProjectConfigMapName(projectId: string, env: NodeJS.Proce
   return readOverride(env[K8S_PROJECT_CONFIGMAP_ENV]) ?? defaultProjectConfigMapName(projectId);
 }
 
+export function resolveProjectRuntimeSecretName(projectId: string, env: NodeJS.ProcessEnv = process.env): string {
+  return readOverride(env[K8S_PROJECT_RUNTIME_SECRET_ENV]) ?? defaultProjectRuntimeSecretName(projectId);
+}
+
 export function describeProjectK8sContract(
   projectOrId: Pick<ProjectConfig, "project_id"> | string,
   env: NodeJS.ProcessEnv = process.env
-): { namespace: string; secretName: string; configMapName: string } {
+): { namespace: string; secretName: string; configMapName: string; runtimeSecretName: string } {
   const projectId =
     typeof projectOrId === "string"
       ? projectOrId
@@ -45,5 +54,6 @@ export function describeProjectK8sContract(
     namespace: resolveProjectNamespace(projectId, env),
     secretName: resolveProjectSecretName(projectId, env),
     configMapName: resolveProjectConfigMapName(projectId, env),
+    runtimeSecretName: resolveProjectRuntimeSecretName(projectId, env),
   };
 }

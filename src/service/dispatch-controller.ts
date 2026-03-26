@@ -45,6 +45,10 @@ const AUTO_RESUME_ENV = "SPRINTFOUNDRY_AUTO_RESUME_EXISTING_RUN";
 const SKIP_PR_FINALIZATION_ENV = "SPRINTFOUNDRY_SKIP_PR_FINALIZATION";
 const EVENT_SINK_URL_ENV = "SPRINTFOUNDRY_EVENT_SINK_URL";
 const INTERNAL_API_TOKEN_ENV = "SPRINTFOUNDRY_INTERNAL_API_TOKEN";
+const SYSTEM_SECRET_NAME_ENV = "SPRINTFOUNDRY_SYSTEM_SECRET_NAME";
+const REDIS_CONNECT_MAX_ATTEMPTS_ENV = "SPRINTFOUNDRY_DISPATCH_REDIS_MAX_ATTEMPTS";
+const REDIS_CONNECT_RETRY_DELAY_MS_ENV = "SPRINTFOUNDRY_DISPATCH_REDIS_RETRY_DELAY_MS";
+const PROJECT_SECRET_MOUNT_ROOT_ENV = "SPRINTFOUNDRY_PROJECT_SECRET_MOUNT_ROOT";
 
 export interface DispatchControllerStartOptions {
   host?: string;
@@ -325,6 +329,7 @@ export interface DispatchRedisClient {
   connect?(): Promise<void>;
   quit?(): Promise<void>;
   ping?(): Promise<string>;
+  duplicate?(): DispatchRedisClient;
   lPush(key: string, value: string): Promise<number>;
   brPop(keys: string | string[], timeoutSeconds: number): Promise<{ key: string; element: string } | null>;
   set(key: string, value: string, options?: { NX?: boolean; EX?: number }): Promise<string | null>;
@@ -364,13 +369,49 @@ function projectArgFromFileName(fileName: string): string | null {
   return match[1] ?? null;
 }
 
-function interpolateEnvVars(raw: string): string {
-  return raw.replace(/\$\{(\w+)\}/g, (_match, envName) => process.env[envName] ?? "");
+function interpolateEnvVars(raw: string, env: NodeJS.ProcessEnv = process.env): string {
+  return raw.replace(/\$\{(\w+)\}/g, (_match, envName) => env[envName] ?? "");
 }
 
-async function loadYamlFile(filePath: string): Promise<Record<string, unknown>> {
+async function loadYamlFile(filePath: string, env: NodeJS.ProcessEnv = process.env): Promise<Record<string, unknown>> {
   const raw = await fs.readFile(filePath, "utf-8");
-  const interpolated = interpolateEnvVars(raw);
+  const interpolated = interpolateEnvVars(raw, env);
+  const parsed = parseYaml(interpolated);
+  return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {};
+}
+
+function projectSecretMountRoot(configDir: string, env: NodeJS.ProcessEnv = process.env): string {
+  return asString(env[PROJECT_SECRET_MOUNT_ROOT_ENV]) || path.join(configDir, "project-secrets");
+}
+
+async function readSecretDir(secretDir: string): Promise<Record<string, string>> {
+  const entries = await fs.readdir(secretDir, { withFileTypes: true }).catch(() => []);
+  const resolved: Record<string, string> = {};
+  for (const entry of entries) {
+    if (!entry.isFile() && !entry.isSymbolicLink()) continue;
+    const filePath = path.join(secretDir, entry.name);
+    const value = await fs.readFile(filePath, "utf-8").catch(() => "");
+    resolved[entry.name] = value.trim();
+  }
+  return resolved;
+}
+
+export async function resolveMountedProjectSecretEnv(
+  projectId: string,
+  configDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<Record<string, string>> {
+  const normalizedProjectId = asString(projectId);
+  if (!normalizedProjectId) return {};
+  return readSecretDir(path.join(projectSecretMountRoot(configDir, env), normalizedProjectId));
+}
+
+async function loadProjectYamlFile(filePath: string, configDir: string): Promise<Record<string, unknown>> {
+  const raw = await fs.readFile(filePath, "utf-8");
+  const initial = parseYaml(raw);
+  const projectId = typeof initial === "object" && initial !== null ? asString((initial as Record<string, unknown>).project_id) : "";
+  const projectEnv = await resolveMountedProjectSecretEnv(projectId, configDir);
+  const interpolated = interpolateEnvVars(raw, { ...process.env, ...projectEnv });
   const parsed = parseYaml(interpolated);
   return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {};
 }
@@ -613,9 +654,12 @@ async function defaultLocalRunExecutor(task: DispatchQueueItem, configDir: strin
   const command = runningFromJsEntrypoint ? process.execPath : "pnpm";
   const args = runningFromJsEntrypoint ? [process.argv[1], ...cliArgs] : ["dev", "--", ...cliArgs];
 
+  const projectSecretEnv = await resolveMountedProjectSecretEnv(task.project_id, configDir);
+
   await new Promise<void>((resolve, reject) => {
     const childEnv = {
       ...process.env,
+      ...projectSecretEnv,
       SPRINTFOUNDRY_TRIGGER_SOURCE: task.trigger_source ?? `${task.source}_dispatch`,
     };
 
@@ -674,6 +718,8 @@ function buildWholeRunRunnerEnv(
   task: DispatchQueueItem,
   options: {
     projectSecretName: string;
+    runtimeSecretName?: string;
+    systemSecretName?: string;
     eventSinkUrl?: string;
     hostingMode: "k8s-job-whole-run" | "k8s-agent-sandbox";
   }
@@ -690,7 +736,8 @@ function buildWholeRunRunnerEnv(
       };
     }
 > {
-  const { projectSecretName, eventSinkUrl, hostingMode } = options;
+  const { projectSecretName, runtimeSecretName, systemSecretName, eventSinkUrl, hostingMode } = options;
+  const internalTokenSecretName = asString(runtimeSecretName) || asString(systemSecretName) || projectSecretName;
   return [
     { name: "SPRINTFOUNDRY_RUN_ID", value: task.run_id },
     { name: "SPRINTFOUNDRY_PROJECT_ID", value: task.project_id },
@@ -709,7 +756,7 @@ function buildWholeRunRunnerEnv(
           name: INTERNAL_API_TOKEN_ENV,
           valueFrom: {
             secretKeyRef: {
-              name: projectSecretName,
+              name: internalTokenSecretName,
               key: INTERNAL_API_TOKEN_ENV,
               optional: true,
             },
@@ -732,6 +779,7 @@ function buildWholeRunRunnerPodSpec(
   options: {
     image?: string;
     projectSecretName?: string;
+    runtimeSecretName?: string;
     projectConfigMapName?: string;
     serviceAccountName?: string;
     cpuRequest?: string;
@@ -744,13 +792,17 @@ function buildWholeRunRunnerPodSpec(
 ): K8sJobManifest["spec"]["template"]["spec"] {
   const image = asString(options?.image) || "sprintfoundry-runner:latest";
   const projectSecretName = asString(options?.projectSecretName) || `sprintfoundry-project-${task.project_id}-secrets`;
+  const runtimeSecretName = asString(options?.runtimeSecretName) || `sprintfoundry-project-${task.project_id}-runtime-secrets`;
   const projectConfigMapName = asString(options?.projectConfigMapName) || `sprintfoundry-project-${task.project_id}-config`;
+  const systemSecretName = asString(process.env[SYSTEM_SECRET_NAME_ENV]) || undefined;
   const workspacePvcName = makeRunWorkspacePvcName(task.run_id);
   const eventSinkUrl = asString(options?.eventSinkUrl) || asString(process.env[EVENT_SINK_URL_ENV]);
   const mountedProjectConfigPath = buildMountedProjectConfigPath(task);
   const args = buildWholeRunRunnerArgs(task);
   const env = buildWholeRunRunnerEnv(task, {
     projectSecretName,
+    runtimeSecretName,
+    systemSecretName,
     eventSinkUrl: eventSinkUrl || undefined,
     hostingMode: options.hostingMode,
   });
@@ -799,6 +851,7 @@ export function buildK8sJobManifest(task: DispatchQueueItem, options?: {
   namespace?: string;
   image?: string;
   projectSecretName?: string;
+  runtimeSecretName?: string;
   projectConfigMapName?: string;
   serviceAccountName?: string;
   ttlSecondsAfterFinished?: number;
@@ -838,6 +891,7 @@ export function buildK8sJobManifest(task: DispatchQueueItem, options?: {
           ...buildWholeRunRunnerPodSpec(task, {
             image: options?.image,
             projectSecretName: options?.projectSecretName,
+            runtimeSecretName: options?.runtimeSecretName,
             projectConfigMapName: options?.projectConfigMapName,
             serviceAccountName: options?.serviceAccountName,
             cpuRequest: options?.cpuRequest,
@@ -872,6 +926,7 @@ export function buildSandboxTemplateManifest(task: DispatchQueueItem, options?: 
   apiGroup?: string;
   apiVersion?: string;
   projectSecretName?: string;
+  runtimeSecretName?: string;
   projectConfigMapName?: string;
   serviceAccountName?: string;
   cpuRequest?: string;
@@ -917,6 +972,7 @@ export function buildSandboxTemplateManifest(task: DispatchQueueItem, options?: 
         spec: buildWholeRunRunnerPodSpec(task, {
           image: options?.image,
           projectSecretName: options?.projectSecretName,
+          runtimeSecretName: options?.runtimeSecretName,
           projectConfigMapName: options?.projectConfigMapName,
           serviceAccountName: options?.serviceAccountName,
           cpuRequest: options?.cpuRequest,
@@ -1307,6 +1363,7 @@ async function defaultCreateSandboxHost(resources: SandboxHostResources, _task: 
 class DispatchController implements DispatchControllerRuntime {
   private readonly configDir: string;
   private readonly redis: DispatchRedisClient;
+  private readonly blockingRedis: DispatchRedisClient;
   private readonly logger: Pick<Console, "log" | "warn" | "error">;
   private readonly queuePollIntervalMs: number;
   private readonly queueBlockTimeoutSeconds: number;
@@ -1344,6 +1401,7 @@ class DispatchController implements DispatchControllerRuntime {
       ? resolvedConfigDir
       : path.resolve(process.cwd(), resolvedConfigDir);
     this.redis = buildRedisClient(options);
+    this.blockingRedis = this.redis.duplicate ? this.redis.duplicate() : this.redis;
     this.logger = options.logger ?? console;
     this.queuePollIntervalMs = options.queuePollIntervalMs ?? parsePositiveInt(process.env.SPRINTFOUNDRY_DISPATCH_QUEUE_POLL_MS, 1000);
     this.queueBlockTimeoutSeconds = options.queueBlockTimeoutSeconds ?? parsePositiveInt(process.env.SPRINTFOUNDRY_DISPATCH_QUEUE_BLOCK_SECONDS, 2);
@@ -1370,12 +1428,44 @@ class DispatchController implements DispatchControllerRuntime {
     await this.validatePlatformConfig(this.configDir);
     this.agentSandboxWholeRunConfig = await loadDispatchAgentSandboxWholeRunConfig(this.configDir);
     if (this.redis.connect) {
-      await this.redis.connect();
+      await this.connectRedisWithRetry();
     }
     this.running = true;
     if (this.options.autoStartConsumer !== false) {
       this.consumerLoop = this.runConsumerLoop();
     }
+  }
+
+  private async connectRedisWithRetry(): Promise<void> {
+    const maxAttempts = parsePositiveInt(process.env[REDIS_CONNECT_MAX_ATTEMPTS_ENV], 40);
+    const retryDelayMs = parsePositiveInt(process.env[REDIS_CONNECT_RETRY_DELAY_MS_ENV], 2000);
+    let lastError: unknown = null;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        await this.redis.connect?.();
+        if (this.blockingRedis !== this.redis) {
+          await this.blockingRedis.connect?.();
+        }
+        return;
+      } catch (error) {
+        lastError = error;
+        await this.redis.quit?.().catch(() => undefined);
+        if (this.blockingRedis !== this.redis) {
+          await this.blockingRedis.quit?.().catch(() => undefined);
+        }
+        if (attempt >= maxAttempts) break;
+        this.logger.warn(
+          `[dispatch] redis connect attempt ${attempt}/${maxAttempts} failed: ` +
+            `${error instanceof Error ? error.message : String(error)}`
+        );
+        await sleep(retryDelayMs);
+      }
+    }
+
+    throw lastError instanceof Error
+      ? lastError
+      : new Error(`Redis connection failed after ${maxAttempts} attempts`);
   }
 
   private async runConsumerLoop(): Promise<void> {
@@ -1445,7 +1535,7 @@ class DispatchController implements DispatchControllerRuntime {
       const filePath = path.join(this.configDir, fileName);
       let rawProject: Record<string, unknown>;
       try {
-        rawProject = await loadYamlFile(filePath);
+        rawProject = await loadProjectYamlFile(filePath, this.configDir);
       } catch {
         continue;
       }
@@ -1671,7 +1761,7 @@ class DispatchController implements DispatchControllerRuntime {
   private async dispatchTask(task: DispatchQueueItem): Promise<void> {
     if (this.k8sMode) {
       const project = await this.findProjectById(task.project_id);
-      const { namespace, secretName, configMapName } = describeProjectK8sContract(task.project_id);
+      const { namespace, secretName, configMapName, runtimeSecretName } = describeProjectK8sContract(task.project_id);
       const eventSinkUrl = asString(process.env[EVENT_SINK_URL_ENV]) || asString(project?.eventSinkUrl);
       if (!this.agentSandboxWholeRunConfig.enabled) {
         throw new Error(
@@ -1692,6 +1782,7 @@ class DispatchController implements DispatchControllerRuntime {
         apiGroup: this.agentSandboxWholeRunConfig.apiGroup,
         apiVersion: this.agentSandboxWholeRunConfig.apiVersion,
         projectSecretName: secretName,
+        runtimeSecretName,
         projectConfigMapName: configMapName,
         serviceAccountName: asString(process.env.SPRINTFOUNDRY_K8S_SERVICE_ACCOUNT) || undefined,
         eventSinkUrl: eventSinkUrl || undefined,
@@ -1718,7 +1809,7 @@ class DispatchController implements DispatchControllerRuntime {
       return false;
     }
 
-    const popped = await this.redis.brPop(queueKeys, this.queueBlockTimeoutSeconds);
+    const popped = await this.blockingRedis.brPop(queueKeys, this.queueBlockTimeoutSeconds);
     if (!popped || !popped.element) {
       return false;
     }
@@ -2067,7 +2158,14 @@ class DispatchController implements DispatchControllerRuntime {
 
   async handleHealth(req: RequestLike, res: ResponseLike): Promise<void> {
     if (!this.authorize(req, "read", res)) return;
+    await this.writeHealthResponse(res);
+  }
 
+  async handlePublicHealth(_req: RequestLike, res: ResponseLike): Promise<void> {
+    await this.writeHealthResponse(res);
+  }
+
+  private async writeHealthResponse(res: ResponseLike): Promise<void> {
     let redisStatus: "up" | "down" = "up";
     try {
       if (this.redis.ping) {
@@ -2110,6 +2208,9 @@ class DispatchController implements DispatchControllerRuntime {
     if (this.redis.quit) {
       await this.redis.quit();
     }
+    if (this.blockingRedis !== this.redis && this.blockingRedis.quit) {
+      await this.blockingRedis.quit();
+    }
   }
 }
 
@@ -2134,6 +2235,10 @@ export async function registerDispatchRoutes(
 
   app.get("/api/dispatch/health", async (req, res) => {
     await controller.handleHealth(req, res);
+  });
+
+  app.get("/health", async (req, res) => {
+    await controller.handlePublicHealth(req, res);
   });
 
   app.get("/api/dispatch/queue", async (req, res) => {

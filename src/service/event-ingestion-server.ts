@@ -171,6 +171,8 @@ async function applySqlMigrations(): Promise<void> {
   if (!databaseUrl) {
     throw new Error("SPRINTFOUNDRY_DATABASE_URL is required to apply event ingestion migrations");
   }
+  const maxAttempts = parsePositiveInteger(process.env.SPRINTFOUNDRY_MIGRATION_MAX_ATTEMPTS, 40);
+  const retryDelayMs = parsePositiveInteger(process.env.SPRINTFOUNDRY_MIGRATION_RETRY_DELAY_MS, 3000);
 
   const migrationsDir = path.resolve(
     path.dirname(fileURLToPath(import.meta.url)),
@@ -190,17 +192,45 @@ async function applySqlMigrations(): Promise<void> {
       end(): Promise<void>;
     };
   };
-  const client = new Client({ connectionString: databaseUrl });
-  await client.connect();
-  try {
-    for (const fileName of entries) {
-      const sql = await fs.readFile(path.join(migrationsDir, fileName), "utf-8");
-      if (!sql.trim()) continue;
-      await client.query(sql);
+  let lastError: unknown = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const client = new Client({ connectionString: databaseUrl });
+    try {
+      await client.connect();
+      for (const fileName of entries) {
+        const sql = await fs.readFile(path.join(migrationsDir, fileName), "utf-8");
+        if (!sql.trim()) continue;
+        await client.query(sql);
+      }
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt >= maxAttempts) {
+        break;
+      }
+      console.warn(
+        `[event-api] migration attempt ${attempt}/${maxAttempts} failed: ` +
+          `${error instanceof Error ? error.message : String(error)}`
+      );
+      await sleep(retryDelayMs);
+    } finally {
+      await client.end().catch(() => undefined);
     }
-  } finally {
-    await client.end();
   }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(`Event ingestion migrations failed after ${maxAttempts} attempts`);
+}
+
+function parsePositiveInteger(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 main().catch((error) => {

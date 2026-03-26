@@ -35,6 +35,8 @@ spec:
             - containerPort: {{ .Values.monitor.port }}
               name: http
           env:
+            - name: MONITOR_HOST
+              value: "0.0.0.0"
             - name: MONITOR_PORT
               value: {{ .Values.monitor.port | quote }}
             - name: SPRINTFOUNDRY_DATABASE_URL
@@ -60,13 +62,13 @@ spec:
             {{- toYaml .Values.monitor.resources | nindent 12 }}
           livenessProbe:
             httpGet:
-              path: /healthz
+              path: /health
               port: http
             initialDelaySeconds: 10
             periodSeconds: 30
           readinessProbe:
             httpGet:
-              path: /healthz
+              path: /health
               port: http
             initialDelaySeconds: 5
             periodSeconds: 10

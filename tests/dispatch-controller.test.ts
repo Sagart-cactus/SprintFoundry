@@ -12,6 +12,7 @@ import {
   buildK8sWorkspacePvcManifest,
   makeRunSandboxTemplateName,
   registerDispatchRoutes,
+  resolveMountedProjectSecretEnv,
   type DispatchRedisClient,
   type K8sJobManifest,
   type SandboxHostResources,
@@ -144,6 +145,10 @@ class FakeRedisClient implements DispatchRedisClient {
     return "PONG";
   }
 
+  duplicate(): DispatchRedisClient {
+    return this;
+  }
+
   async lPush(key: string, value: string): Promise<number> {
     const list = this.lists.get(key) ?? [];
     list.unshift(value);
@@ -272,6 +277,14 @@ function makeProjectConfig(configDir: string, fileName: string, content: string)
   writeFileSync(path.join(configDir, fileName), content, "utf-8");
 }
 
+function makeProjectSecret(configDir: string, projectId: string, values: Record<string, string>): void {
+  const secretDir = path.join(configDir, "project-secrets", projectId);
+  mkdirSync(secretDir, { recursive: true });
+  for (const [key, value] of Object.entries(values)) {
+    writeFileSync(path.join(secretDir, key), value, "utf-8");
+  }
+}
+
 function queueKey(projectId: string): string {
   return `sprintfoundry:dispatch:${projectId}`;
 }
@@ -363,6 +376,20 @@ describe("dispatch-controller", () => {
     await runtime.close();
   });
 
+  it("reads mounted per-project secrets from the local dispatch config tree", async () => {
+    const configDir = mkdtempSync(path.join(os.tmpdir(), "sf-dispatch-secret-mount-"));
+    tempDirs.push(configDir);
+    makeProjectSecret(configDir, "acme", {
+      OPENAI_API_KEY: "openai-test-key",
+      GITHUB_TOKEN: "github-test-token",
+    });
+
+    await expect(resolveMountedProjectSecretEnv("acme", configDir)).resolves.toEqual({
+      OPENAI_API_KEY: "openai-test-key",
+      GITHUB_TOKEN: "github-test-token",
+    });
+  });
+
   it("loads project configs from symlinked files (k8s ConfigMap layout)", async () => {
     const configDir = mkdtempSync(path.join(os.tmpdir(), "sf-dispatch-config-symlink-"));
     tempDirs.push(configDir);
@@ -412,6 +439,112 @@ describe("dispatch-controller", () => {
     expect(response.status).toBe(202);
     expect(await redis.lLen(queueKey("live-gaps-worktree"))).toBe(1);
     await runtime.close();
+  });
+
+  it("serves unauthenticated /health for probes while keeping the authenticated API health route", async () => {
+    const configDir = mkdtempSync(path.join(os.tmpdir(), "sf-dispatch-health-"));
+    tempDirs.push(configDir);
+    makeProjectConfig(
+      configDir,
+      "project.yaml",
+      [
+        "project_id: probe-test",
+        "name: Probe Test",
+        "repo:",
+        "  url: https://github.com/octocat/Hello-World.git",
+        "  default_branch: master",
+        "integrations:",
+        "  ticket_source:",
+        "    type: prompt",
+        "    config: {}",
+        "rules: []",
+        "",
+      ].join("\n"),
+    );
+
+    const redis = new FakeRedisClient();
+    const app = new FakeExpressApp();
+    const runtime = await registerDispatchRoutes(app, {
+      configDir,
+      redisClient: redis,
+      autoStartConsumer: false,
+      readToken: "dispatch-read-token",
+    });
+
+    const publicHealth = await app.inject({
+      method: "GET",
+      path: "/health",
+    });
+    expect(publicHealth.status).toBe(200);
+    expect(publicHealth.body).toMatchObject({ status: "ok", redis: "up" });
+
+    const protectedHealth = await app.inject({
+      method: "GET",
+      path: "/api/dispatch/health",
+    });
+    expect(protectedHealth.status).toBe(401);
+
+    await runtime.close();
+  });
+
+  it("retries redis startup until the dependency becomes reachable", async () => {
+    const configDir = mkdtempSync(path.join(os.tmpdir(), "sf-dispatch-redis-retry-"));
+    tempDirs.push(configDir);
+    makeProjectConfig(
+      configDir,
+      "project.yaml",
+      [
+        "project_id: retry-test",
+        "name: Retry Test",
+        "repo:",
+        "  url: https://github.com/octocat/Hello-World.git",
+        "  default_branch: master",
+        "integrations:",
+        "  ticket_source:",
+        "    type: prompt",
+        "    config: {}",
+        "rules: []",
+        "",
+      ].join("\n"),
+    );
+
+    const redis = new FakeRedisClient();
+    let attempts = 0;
+    redis.connect = async () => {
+      attempts += 1;
+      if (attempts < 3) {
+        throw new Error("ECONNREFUSED");
+      }
+      await FakeRedisClient.prototype.connect.call(redis);
+    };
+
+    const previousAttempts = process.env.SPRINTFOUNDRY_DISPATCH_REDIS_MAX_ATTEMPTS;
+    const previousDelay = process.env.SPRINTFOUNDRY_DISPATCH_REDIS_RETRY_DELAY_MS;
+    process.env.SPRINTFOUNDRY_DISPATCH_REDIS_MAX_ATTEMPTS = "3";
+    process.env.SPRINTFOUNDRY_DISPATCH_REDIS_RETRY_DELAY_MS = "1";
+
+    try {
+      const runtime = await registerDispatchRoutes(new FakeExpressApp(), {
+        configDir,
+        redisClient: redis,
+        autoStartConsumer: false,
+        logger: { log() {}, warn() {}, error() {} },
+      });
+
+      expect(attempts).toBe(3);
+      await runtime.close();
+    } finally {
+      if (previousAttempts === undefined) {
+        delete process.env.SPRINTFOUNDRY_DISPATCH_REDIS_MAX_ATTEMPTS;
+      } else {
+        process.env.SPRINTFOUNDRY_DISPATCH_REDIS_MAX_ATTEMPTS = previousAttempts;
+      }
+      if (previousDelay === undefined) {
+        delete process.env.SPRINTFOUNDRY_DISPATCH_REDIS_RETRY_DELAY_MS;
+      } else {
+        process.env.SPRINTFOUNDRY_DISPATCH_REDIS_RETRY_DELAY_MS = previousDelay;
+      }
+    }
   });
 
   it("deduplicates github webhook deliveries via redis SET NX", async () => {
@@ -603,6 +736,81 @@ describe("dispatch-controller", () => {
       workflow_stage: "qa",
       agent: "qa",
     });
+
+    await runtime.close();
+  });
+
+  it("loads project webhook secrets from mounted per-project secrets", async () => {
+    const configDir = mkdtempSync(path.join(os.tmpdir(), "sf-dispatch-linear-secret-mount-"));
+    tempDirs.push(configDir);
+
+    makeProjectConfig(
+      configDir,
+      "project.yaml",
+      [
+        "project_id: mounted-linear-secrets",
+        "name: Mounted Linear Secrets",
+        "repo:",
+        "  url: git@github.com:acme/repo.git",
+        "  default_branch: main",
+        "api_keys:",
+        "  openai: ${OPENAI_API_KEY}",
+        "integrations:",
+        "  ticket_source:",
+        "    type: linear",
+        "    config:",
+        "      api_key: ${LINEAR_API_KEY}",
+        "      team_key: LIN",
+        "autoexecute:",
+        "  enabled: true",
+        "  linear:",
+        "    enabled: true",
+        "    webhook_secret: ${LINEAR_WEBHOOK_SECRET}",
+        "rules: []",
+        "",
+      ].join("\n"),
+    );
+    makeProjectSecret(configDir, "mounted-linear-secrets", {
+      OPENAI_API_KEY: "openai-mounted",
+      LINEAR_API_KEY: "linear-mounted",
+      LINEAR_WEBHOOK_SECRET: "mounted-linear-secret",
+    });
+
+    const redis = new FakeRedisClient();
+    const app = new FakeExpressApp();
+    const runtime = await registerDispatchRoutes(app, {
+      configDir,
+      redisClient: redis,
+      autoStartConsumer: false,
+      idGenerator: () => "mounted01",
+      now: () => 1_750_000_000_000,
+    });
+
+    const payload = JSON.stringify({
+      type: "Issue",
+      action: "create",
+      webhookId: "mounted-linear-delivery-1",
+      webhookTimestamp: 1_750_000_000_000,
+      createdAt: "2026-03-26T00:00:00Z",
+      data: {
+        identifier: "LIN-7",
+        team: { key: "LIN" },
+      },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      path: "/api/webhooks/linear",
+      rawBody: payload,
+      headers: {
+        "content-type": "application/json",
+        "linear-signature": linearSignature(payload, "mounted-linear-secret"),
+      },
+    });
+
+    expect(response.status).toBe(202);
+    expect(response.body).toMatchObject({ accepted: true, queued: true, ticket_id: "LIN-7" });
+    expect(await redis.lLen(queueKey("mounted-linear-secrets"))).toBe(1);
 
     await runtime.close();
   });
@@ -1009,7 +1217,7 @@ describe("dispatch-controller", () => {
           name: "SPRINTFOUNDRY_INTERNAL_API_TOKEN",
           valueFrom: {
             secretKeyRef: {
-              name: "proj-secret",
+              name: "sprintfoundry-project-proj-1-runtime-secrets",
               key: "SPRINTFOUNDRY_INTERNAL_API_TOKEN",
               optional: true,
             },
@@ -1017,6 +1225,46 @@ describe("dispatch-controller", () => {
         },
       ]),
     );
+  });
+
+  it("prefers the project runtime secret for the internal event token when available", () => {
+    process.env.SPRINTFOUNDRY_SYSTEM_SECRET_NAME = "sf-system-secret";
+
+    const manifest = buildK8sJobManifest(
+      {
+        run_id: "run-xyz",
+        project_id: "proj-1",
+        project_arg: "proj",
+        source: "prompt",
+        ticket_id: "prompt",
+        prompt: "do the thing",
+        created_at: "2026-03-04T00:00:00.000Z",
+      },
+      {
+        namespace: "proj-ns",
+        image: "ghcr.io/acme/sprintfoundry:latest",
+        projectSecretName: "proj-secret",
+        projectConfigMapName: "proj-config",
+        eventSinkUrl: "https://sink.example/events",
+      },
+    );
+
+    expect(manifest.spec.template.spec.containers[0]?.env).toEqual(
+      expect.arrayContaining([
+        {
+          name: "SPRINTFOUNDRY_INTERNAL_API_TOKEN",
+          valueFrom: {
+            secretKeyRef: {
+              name: "sprintfoundry-project-proj-1-runtime-secrets",
+              key: "SPRINTFOUNDRY_INTERNAL_API_TOKEN",
+              optional: true,
+            },
+          },
+        },
+      ]),
+    );
+
+    delete process.env.SPRINTFOUNDRY_SYSTEM_SECRET_NAME;
   });
 
   it("builds a sandbox template manifest with the runner pod spec", () => {
@@ -1221,7 +1469,7 @@ describe("dispatch-controller", () => {
           name: "SPRINTFOUNDRY_INTERNAL_API_TOKEN",
           valueFrom: {
             secretKeyRef: {
-              name: "sprintfoundry-project-live-gaps-worktree-secrets",
+              name: "sprintfoundry-project-live-gaps-worktree-runtime-secrets",
               key: "SPRINTFOUNDRY_INTERNAL_API_TOKEN",
               optional: true,
             },
@@ -1230,6 +1478,106 @@ describe("dispatch-controller", () => {
       ]),
     );
 
+    await runtime.close();
+  });
+
+  it("passes the project runtime secret through to sandbox-hosted runs", async () => {
+    const configDir = mkdtempSync(path.join(os.tmpdir(), "sf-dispatch-config-k8s-system-secret-"));
+    tempDirs.push(configDir);
+
+    writeFileSync(
+      path.join(configDir, "platform.yaml"),
+      [
+        "defaults:",
+        "  model_per_agent: {}",
+        "  budgets:",
+        "    per_agent_tokens: 100",
+        "    per_task_total_tokens: 100",
+        "    per_task_max_cost_usd: 1",
+        "  timeouts:",
+        "    agent_timeout_minutes: 1",
+        "    task_timeout_minutes: 1",
+        "    human_gate_timeout_hours: 1",
+        "  max_rework_cycles: 1",
+        "rules: []",
+        "agent_definitions: []",
+        "k8s:",
+        "  agent_sandbox:",
+        "    enabled: true",
+        "    whole_run_hosting_enabled: true",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    makeProjectConfig(
+      configDir,
+      "project-live-gaps-worktree.yaml",
+      [
+        "project_id: live-gaps-worktree",
+        "name: Live Gaps Worktree",
+        "repo:",
+        "  url: https://github.com/Sagart-cactus/sprintfoundry-dryrun.git",
+        "  default_branch: main",
+        "integrations:",
+        "  ticket_source:",
+        "    type: prompt",
+        "    config: {}",
+        "  event_sink:",
+        "    url: https://sink.example/from-config",
+        "rules: []",
+        "",
+      ].join("\n"),
+    );
+
+    process.env.SPRINTFOUNDRY_SYSTEM_SECRET_NAME = "sf-system-secret";
+
+    const redis = new FakeRedisClient();
+    const app = new FakeExpressApp();
+    const createdHosts: SandboxHostResources[] = [];
+
+    const runtime = await registerDispatchRoutes(app, {
+      configDir,
+      redisClient: redis,
+      autoStartConsumer: false,
+      k8sMode: true,
+      validatePlatformConfig: async () => {},
+      createSandboxHost: async (resources) => {
+        createdHosts.push(resources);
+      },
+      idGenerator: () => "k8sjob02",
+      now: () => 1_750_000_000_000,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      path: "/api/dispatch/run",
+      body: {
+        project_id: "live-gaps-worktree",
+        source: "prompt",
+        prompt: "smoke",
+      },
+    });
+
+    expect(response.status).toBe(202);
+    await runtime.processQueueOnce();
+
+    expect(createdHosts[0]?.template.spec.podTemplate.spec.containers[0]?.env).toEqual(
+      expect.arrayContaining([
+        {
+          name: "SPRINTFOUNDRY_INTERNAL_API_TOKEN",
+          valueFrom: {
+            secretKeyRef: {
+              name: "sprintfoundry-project-live-gaps-worktree-runtime-secrets",
+              key: "SPRINTFOUNDRY_INTERNAL_API_TOKEN",
+              optional: true,
+            },
+          },
+        },
+      ]),
+    );
+
+    delete process.env.SPRINTFOUNDRY_SYSTEM_SECRET_NAME;
     await runtime.close();
   });
 
