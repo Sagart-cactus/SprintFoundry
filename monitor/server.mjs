@@ -4,7 +4,16 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { promises as fs, watchFile, unwatchFile, statSync, openSync, readSync, closeSync } from "node:fs";
+import {
+  promises as fs,
+  watchFile,
+  unwatchFile,
+  statSync,
+  openSync,
+  fstatSync,
+  readSync,
+  closeSync,
+} from "node:fs";
 import { execFile, spawn } from "node:child_process";
 import { parse as parseYaml } from "yaml";
 
@@ -2717,16 +2726,20 @@ function readNewEventsFromOffset(filePath, offset) {
   let content;
   let newOffset;
   try {
-    const stat = statSync(filePath);
-    if (stat.size <= offset) return { events: [], newOffset: offset };
     // The mode is ignored for read-only opens; it is passed so CodeQL's temp-file query
     // does not treat this read as an insecure file creation.
     const fd = openSync(filePath, "r", 0o600);
-    const buf = Buffer.alloc(stat.size - offset);
-    readSync(fd, buf, 0, buf.length, offset);
-    closeSync(fd);
-    content = buf.toString("utf-8");
-    newOffset = stat.size;
+    try {
+      // Size comes from the open descriptor so it matches the file actually being read.
+      const { size } = fstatSync(fd);
+      if (size <= offset) return { events: [], newOffset: offset };
+      const buf = Buffer.alloc(size - offset);
+      readSync(fd, buf, 0, buf.length, offset);
+      content = buf.toString("utf-8");
+      newOffset = size;
+    } finally {
+      closeSync(fd);
+    }
   } catch {
     return { events: [], newOffset: offset };
   }
