@@ -185,13 +185,15 @@ export async function runPreflight(
     "Install Git and ensure it is available in PATH.",
   );
 
-  const runsRoot = path.join(
-    process.env.SPRINTFOUNDRY_RUNS_ROOT || os.tmpdir(),
-    "sprintfoundry-preflight-write-test",
-  );
+  const runsRoot = process.env.SPRINTFOUNDRY_RUNS_ROOT || os.tmpdir();
   try {
     await fs.mkdir(runsRoot, { recursive: true });
-    await fs.writeFile(path.join(runsRoot, ".preflight"), "ok", "utf-8");
+    const probeDir = await fs.mkdtemp(path.join(runsRoot, "sprintfoundry-preflight-"));
+    try {
+      await fs.writeFile(path.join(probeDir, ".preflight"), "ok", { encoding: "utf-8", mode: 0o600 });
+    } finally {
+      await fs.rm(probeDir, { recursive: true, force: true });
+    }
     add(checks, "pass", "Runs root writable", runsRoot);
   } catch (error) {
     add(

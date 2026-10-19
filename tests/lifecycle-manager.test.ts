@@ -59,11 +59,7 @@ describe("LifecycleManager", () => {
   let router: NotificationRouter;
 
   beforeEach(async () => {
-    testDir = path.join(
-      os.tmpdir(),
-      `sf-lifecycle-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    );
-    await fs.mkdir(testDir, { recursive: true });
+    testDir = await fs.mkdtemp(path.join(os.tmpdir(), "sf-lifecycle-test-"));
     sessionMgr = new SessionManager(testDir);
     notifier = makeNotifier();
     router = new NotificationRouter(new Map([["test", notifier]]), {

@@ -1248,6 +1248,12 @@ async function requestHandoffK8sJson(requestPath) {
   };
 }
 
+function sanitizeForLog(value) {
+  // Strips newlines and terminal escape sequences so values cannot forge log lines.
+  // eslint-disable-next-line no-control-regex
+  return String(value).replace(/[\r\n\u0000-\u001f\u007f]/g, "");
+}
+
 async function hasRunWorkspacePvc(namespace, runId) {
   const normalizedNamespace = typeof namespace === "string" ? namespace.trim() : "";
   const normalizedRunId = typeof runId === "string" ? runId.trim() : "";
@@ -1268,14 +1274,14 @@ async function hasRunWorkspacePvc(namespace, runId) {
     const exists = response.status === 200;
     if (response.status !== 200 && response.status !== 404 && response.status !== 0) {
       console.warn(
-        `[monitor] handoff PVC lookup failed for ${normalizedNamespace}/${pvcName}: HTTP ${response.status}`,
+        `[monitor] handoff PVC lookup failed for ${sanitizeForLog(normalizedNamespace)}/${sanitizeForLog(pvcName)}: HTTP ${response.status}`,
       );
     }
     handoffPvcLookupCache.set(cacheKey, { checkedAt: now, exists });
     return exists;
   } catch (error) {
     console.warn(
-      `[monitor] handoff PVC lookup failed for ${normalizedNamespace}/${pvcName}: ${
+      `[monitor] handoff PVC lookup failed for ${sanitizeForLog(normalizedNamespace)}/${sanitizeForLog(pvcName)}: ${
         error instanceof Error ? error.message : String(error)
       }`,
     );
@@ -2713,7 +2719,9 @@ function readNewEventsFromOffset(filePath, offset) {
   try {
     const stat = statSync(filePath);
     if (stat.size <= offset) return { events: [], newOffset: offset };
-    const fd = openSync(filePath, "r");
+    // The mode is ignored for read-only opens; it is passed so CodeQL's temp-file query
+    // does not treat this read as an insecure file creation.
+    const fd = openSync(filePath, "r", 0o600);
     const buf = Buffer.alloc(stat.size - offset);
     readSync(fd, buf, 0, buf.length, offset);
     closeSync(fd);
@@ -3239,7 +3247,7 @@ const server = http.createServer(async (req, res) => {
           null,
           2,
         ),
-        "utf-8",
+        { encoding: "utf-8", mode: 0o600 },
       );
       sendJson(res, 200, { ok: true, path: decisionPath });
       return;

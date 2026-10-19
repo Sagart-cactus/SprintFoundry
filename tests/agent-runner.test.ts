@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
+import { mkdtempSync, rmSync } from "fs";
 import * as fs from "fs/promises";
 import * as path from "path";
 import * as os from "os";
@@ -17,6 +18,10 @@ const { query: mockClaudeSdkQuery } = await import("@anthropic-ai/claude-agent-s
 const { AgentRunner } = await import("../src/service/agent-runner.js");
 const { CodexRuntime } = await import("../src/service/runtime/codex-runtime.js");
 
+const defaultWorkspacePath = mkdtempSync(path.join(os.tmpdir(), "agent-runner-default-"));
+
+afterAll(() => rmSync(defaultWorkspacePath, { recursive: true, force: true }));
+
 function makeRunConfig(overrides?: Partial<AgentRunConfig>): AgentRunConfig {
   return {
     runId: overrides?.runId ?? "run-test-1",
@@ -26,7 +31,7 @@ function makeRunConfig(overrides?: Partial<AgentRunConfig>): AgentRunConfig {
     task: overrides?.task ?? "Implement the feature",
     ticket: overrides?.ticket,
     context_inputs: overrides?.context_inputs ?? [{ type: "ticket" }],
-    workspacePath: overrides?.workspacePath ?? "/tmp/test-workspace",
+    workspacePath: overrides?.workspacePath ?? defaultWorkspacePath,
     modelConfig: overrides?.modelConfig ?? makeModelConfig(),
     apiKey: overrides?.apiKey ?? "sk-ant-test-key",
     tokenBudget: overrides?.tokenBudget ?? 500_000,
