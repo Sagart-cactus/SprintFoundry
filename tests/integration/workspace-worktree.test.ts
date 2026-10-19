@@ -6,7 +6,7 @@
 
 import { describe, it, expect, afterEach } from "vitest";
 import { execSync } from "child_process";
-import { existsSync, mkdtempSync, rmSync, mkdirSync, writeFileSync } from "fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import * as path from "path";
 import * as os from "os";
 import { createFixtureWorkspace, type FixtureWorkspace } from "../helpers/fixture-workspace.js";
@@ -15,7 +15,11 @@ let cleanup: (() => void)[] = [];
 
 afterEach(() => {
   for (const fn of cleanup) {
-    try { fn(); } catch { /* */ }
+    try {
+      fn();
+    } catch {
+      /* */
+    }
   }
   cleanup = [];
 });
@@ -73,7 +77,13 @@ describe("Workspace Worktree — git worktree operations", () => {
     execSync("git add . && git -c commit.gpgsign=false commit -m 'test commit'", {
       cwd: worktreePath,
       stdio: "pipe",
-      env: { ...process.env, GIT_AUTHOR_NAME: "Test", GIT_AUTHOR_EMAIL: "test@test.com", GIT_COMMITTER_NAME: "Test", GIT_COMMITTER_EMAIL: "test@test.com" },
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "Test",
+        GIT_AUTHOR_EMAIL: "test@test.com",
+        GIT_COMMITTER_NAME: "Test",
+        GIT_COMMITTER_EMAIL: "test@test.com",
+      },
     });
 
     // Verify the commit exists
@@ -177,14 +187,26 @@ describe("Workspace Worktree — parallel sub-worktrees", () => {
     execSync("git add . && git -c commit.gpgsign=false commit -m 'step output'", {
       cwd: subPath,
       stdio: "pipe",
-      env: { ...process.env, GIT_AUTHOR_NAME: "Test", GIT_AUTHOR_EMAIL: "test@test.com", GIT_COMMITTER_NAME: "Test", GIT_COMMITTER_EMAIL: "test@test.com" },
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "Test",
+        GIT_AUTHOR_EMAIL: "test@test.com",
+        GIT_COMMITTER_NAME: "Test",
+        GIT_COMMITTER_EMAIL: "test@test.com",
+      },
     });
 
     // Merge back into parent
     execSync("git -c commit.gpgsign=false merge --no-ff feat/merge-step -m 'merge step'", {
       cwd: parentPath,
       stdio: "pipe",
-      env: { ...process.env, GIT_AUTHOR_NAME: "Test", GIT_AUTHOR_EMAIL: "test@test.com", GIT_COMMITTER_NAME: "Test", GIT_COMMITTER_EMAIL: "test@test.com" },
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "Test",
+        GIT_AUTHOR_EMAIL: "test@test.com",
+        GIT_COMMITTER_NAME: "Test",
+        GIT_COMMITTER_EMAIL: "test@test.com",
+      },
     });
 
     // Verify merged file exists in parent
@@ -220,14 +242,28 @@ describe("Workspace Worktree — parallel sub-worktrees", () => {
       stdio: "pipe",
     });
 
-    const gitEnv = { ...process.env, GIT_AUTHOR_NAME: "Test", GIT_AUTHOR_EMAIL: "test@test.com", GIT_COMMITTER_NAME: "Test", GIT_COMMITTER_EMAIL: "test@test.com" };
+    const gitEnv = {
+      ...process.env,
+      GIT_AUTHOR_NAME: "Test",
+      GIT_AUTHOR_EMAIL: "test@test.com",
+      GIT_COMMITTER_NAME: "Test",
+      GIT_COMMITTER_EMAIL: "test@test.com",
+    };
 
     // Both modify the same file
     writeFileSync(path.join(sub1, "README.md"), "# Modified by step 1\n");
-    execSync("git add . && git -c commit.gpgsign=false commit -m 'step 1 change'", { cwd: sub1, stdio: "pipe", env: gitEnv });
+    execSync("git add . && git -c commit.gpgsign=false commit -m 'step 1 change'", {
+      cwd: sub1,
+      stdio: "pipe",
+      env: gitEnv,
+    });
 
     writeFileSync(path.join(sub2, "README.md"), "# Modified by step 2\n");
-    execSync("git add . && git -c commit.gpgsign=false commit -m 'step 2 change'", { cwd: sub2, stdio: "pipe", env: gitEnv });
+    execSync("git add . && git -c commit.gpgsign=false commit -m 'step 2 change'", {
+      cwd: sub2,
+      stdio: "pipe",
+      env: gitEnv,
+    });
 
     // First merge succeeds
     execSync("git -c commit.gpgsign=false merge --no-ff feat/conflict-s1 -m 'merge s1'", {
@@ -265,8 +301,14 @@ describe("Workspace Worktree — worktree listing", () => {
     const worktreeDir = mkdtempSync(path.join(os.tmpdir(), "sf-list-wt-"));
     cleanup.push(() => rmSync(worktreeDir, { recursive: true, force: true }));
 
-    execSync(`git worktree add "${path.join(worktreeDir, "wt-a")}" -b feat/a main`, { cwd: bareRepo, stdio: "pipe" });
-    execSync(`git worktree add "${path.join(worktreeDir, "wt-b")}" -b feat/b main`, { cwd: bareRepo, stdio: "pipe" });
+    execSync(`git worktree add "${path.join(worktreeDir, "wt-a")}" -b feat/a main`, {
+      cwd: bareRepo,
+      stdio: "pipe",
+    });
+    execSync(`git worktree add "${path.join(worktreeDir, "wt-b")}" -b feat/b main`, {
+      cwd: bareRepo,
+      stdio: "pipe",
+    });
 
     const list = execSync("git worktree list --porcelain", { cwd: bareRepo, encoding: "utf-8" });
     expect(list).toContain("wt-a");

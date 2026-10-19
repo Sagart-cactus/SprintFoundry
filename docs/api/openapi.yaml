@@ -1,0 +1,308 @@
+openapi: 3.1.0
+info:
+  title: SprintFoundry Event Ingestion API
+  version: 1.0.0
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+  description: >
+    Internal API used by SprintFoundry workers to persist run events, summaries,
+    step results, and log chunks. All write operations require a bearer token.
+servers:
+  - url: http://localhost:3001
+    description: Local distributed development stack
+security:
+  - bearerAuth: []
+paths:
+  /events:
+    post:
+      operationId: ingestEvent
+      summary: Store a run event
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Event"
+      responses:
+        "201":
+          description: Event inserted.
+        "200":
+          description: Duplicate event was already present.
+        "401":
+          description: Missing or invalid internal bearer token.
+        "422":
+          description: Payload validation failed.
+  /runs:
+    post:
+      operationId: upsertRun
+      summary: Create or update a run summary
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Run"
+      responses:
+        "200":
+          description: Run summary stored.
+        "401":
+          description: Missing or invalid internal bearer token.
+        "422":
+          description: Payload validation failed.
+  /v1/runs/upsert:
+    post:
+      operationId: upsertRunV1
+      summary: Versioned alias for creating or updating a run summary
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Run"
+      responses:
+        "200":
+          description: Run summary stored.
+        "401":
+          description: Missing or invalid internal bearer token.
+        "422":
+          description: Payload validation failed.
+  /step-results:
+    post:
+      operationId: upsertStepResult
+      summary: Create or update a result for one run step attempt
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StepResult"
+      responses:
+        "200":
+          description: Step result stored.
+        "401":
+          description: Missing or invalid internal bearer token.
+        "422":
+          description: Payload validation failed.
+  /logs:
+    post:
+      operationId: ingestLogChunk
+      summary: Store a run log chunk
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LogChunk"
+      responses:
+        "201":
+          description: Log chunk inserted.
+        "200":
+          description: Duplicate log chunk was already present.
+        "401":
+          description: Missing or invalid internal bearer token.
+        "422":
+          description: Payload validation failed.
+  /v1/logs/chunk:
+    post:
+      operationId: ingestLogChunkV1
+      summary: Versioned alias for storing a run log chunk
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LogChunk"
+      responses:
+        "201":
+          description: Log chunk inserted.
+        "200":
+          description: Duplicate log chunk was already present.
+        "401":
+          description: Missing or invalid internal bearer token.
+        "422":
+          description: Payload validation failed.
+  /health:
+    get:
+      operationId: getIngestionHealth
+      summary: Check event API and backing service health
+      security: []
+      responses:
+        "200":
+          description: Health and dependency state.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, database, redis, timestamp]
+                properties:
+                  status:
+                    type: string
+                    enum: [ok, degraded]
+                  database:
+                    type: string
+                    enum: [up, down]
+                  redis:
+                    type: string
+                    enum: [up, down, disabled]
+                  timestamp:
+                    type: string
+                    format: date-time
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    Event:
+      type: object
+      required: [event_id, run_id, event_type, timestamp, data]
+      properties:
+        event_id:
+          type: string
+        run_id:
+          type: string
+        event_type:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        data:
+          type: object
+          additionalProperties: true
+    Run:
+      type: object
+      required:
+        - run_id
+        - project_id
+        - ticket_id
+        - ticket_source
+        - ticket_title
+        - status
+        - current_step
+        - total_steps
+        - total_tokens
+        - total_cost_usd
+        - created_at
+        - updated_at
+      properties:
+        run_id:
+          type: string
+        project_id:
+          type: string
+        ticket_id:
+          type: string
+        ticket_source:
+          type: string
+        ticket_title:
+          type: string
+        status:
+          type: string
+        hosting_mode:
+          type: [string, "null"]
+        current_step:
+          type: integer
+          minimum: 0
+        total_steps:
+          type: integer
+          minimum: 0
+        plan_classification:
+          type: [string, "null"]
+        workspace_path:
+          type: [string, "null"]
+        branch:
+          type: [string, "null"]
+        pr_url:
+          type: [string, "null"]
+        total_tokens:
+          type: integer
+          minimum: 0
+        total_cost_usd:
+          type: number
+          minimum: 0
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: [string, "null"]
+          format: date-time
+        error:
+          type: [string, "null"]
+    StepResult:
+      type: object
+      required:
+        - run_id
+        - step_number
+        - step_attempt
+        - agent
+        - status
+        - started_at
+        - completed_at
+        - result
+      properties:
+        run_id:
+          type: string
+        step_number:
+          type: integer
+          minimum: 1
+        step_attempt:
+          type: integer
+          minimum: 1
+        agent:
+          type: string
+        status:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+        result:
+          type: object
+          additionalProperties: true
+    LogChunk:
+      type: object
+      required:
+        - run_id
+        - step_number
+        - step_attempt
+        - agent
+        - runtime_provider
+        - sequence
+        - stream
+        - chunk
+        - byte_length
+        - is_final
+        - timestamp
+      properties:
+        run_id:
+          type: string
+        step_number:
+          type: integer
+          minimum: 1
+        step_attempt:
+          type: integer
+          minimum: 1
+        agent:
+          type: string
+        runtime_provider:
+          type: string
+        sequence:
+          type: integer
+          minimum: 0
+        stream:
+          type: string
+        chunk:
+          type: string
+        byte_length:
+          type: integer
+          minimum: 0
+        is_final:
+          type: boolean
+        timestamp:
+          type: string
+          format: date-time

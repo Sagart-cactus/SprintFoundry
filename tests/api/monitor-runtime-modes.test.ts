@@ -186,13 +186,13 @@ export class Pool {
         return { rows: [{ step_attempt: maxAttempt }] };
       }
       let stepNumber = null;
-      const stepMatch = norm.match(/step_number = \$(\d+)/);
+      const stepMatch = norm.match(/step_number = $(d+)/);
       if (stepMatch) {
         const idx = Number(stepMatch[1]) - 1;
         stepNumber = Number(params[idx]);
       }
       let stepAttempt = null;
-      const stepAttemptMatch = norm.match(/step_attempt = \$(\d+)/);
+      const stepAttemptMatch = norm.match(/step_attempt = $(d+)/);
       if (stepAttemptMatch) {
         const idx = Number(stepAttemptMatch[1]) - 1;
         stepAttempt = Number(params[idx]);
@@ -355,8 +355,18 @@ describe("monitor runtime modes", () => {
     writeFileSync(
       path.join(fsRunDir, ".events.jsonl"),
       [
-        JSON.stringify({ event_type: "task.created", timestamp: "2026-03-04T01:00:00.000Z", data: { ticket_id: "FS-1" } }),
-        JSON.stringify({ event_type: "task.plan_generated", timestamp: "2026-03-04T01:00:01.000Z", data: { plan: { classification: "small", steps: [{ step_number: 1, agent: "developer", task: "do fs" }] } } }),
+        JSON.stringify({
+          event_type: "task.created",
+          timestamp: "2026-03-04T01:00:00.000Z",
+          data: { ticket_id: "FS-1" },
+        }),
+        JSON.stringify({
+          event_type: "task.plan_generated",
+          timestamp: "2026-03-04T01:00:01.000Z",
+          data: {
+            plan: { classification: "small", steps: [{ step_number: 1, agent: "developer", task: "do fs" }] },
+          },
+        }),
       ].join("\n") + "\n",
       "utf-8",
     );
@@ -511,15 +521,24 @@ describe("monitor runtime modes", () => {
     expect(eventsPayload.events).toHaveLength(1);
     expect(eventsPayload.events[0].event_type).toBe("step.completed");
 
-    const plannerLogRes = await request(handler, "/api/log?project=db-project&run=run-db-001&kind=planner_stdout&lines=50");
+    const plannerLogRes = await request(
+      handler,
+      "/api/log?project=db-project&run=run-db-001&kind=planner_stdout&lines=50",
+    );
     expect(plannerLogRes.res.statusCode).toBe(200);
     expect(plannerLogRes.res.body).toContain("planner-db-log");
 
-    const latestAttemptLogRes = await request(handler, "/api/log?project=db-project&run=run-db-001&kind=agent_stdout&step=1&lines=50");
+    const latestAttemptLogRes = await request(
+      handler,
+      "/api/log?project=db-project&run=run-db-001&kind=agent_stdout&step=1&lines=50",
+    );
     expect(latestAttemptLogRes.res.statusCode).toBe(200);
     expect(latestAttemptLogRes.res.body).toContain("agent-db-log-attempt-2");
 
-    const agentResultRes = await request(handler, "/api/log?project=db-project&run=run-db-001&kind=agent_result&step=1");
+    const agentResultRes = await request(
+      handler,
+      "/api/log?project=db-project&run=run-db-001&kind=agent_result&step=1",
+    );
     expect(agentResultRes.res.statusCode).toBe(200);
     expect(agentResultRes.res.body).toContain("DB-backed step summary");
 
@@ -536,7 +555,10 @@ describe("monitor runtime modes", () => {
     sseRes.req.emit("close");
 
     const redisLog = readFileSync(redisLogPath, "utf-8");
-    expect(redisLog.includes("psubscribe:sprintfoundry:events:*") || redisLog.includes("subscribe:sprintfoundry:events:")).toBe(true);
+    expect(
+      redisLog.includes("psubscribe:sprintfoundry:events:*") ||
+        redisLog.includes("subscribe:sprintfoundry:events:"),
+    ).toBe(true);
 
     const queryLog = readFileSync(queryLogPath, "utf-8");
     expect(queryLog).toContain("FROM runs");
@@ -640,9 +662,16 @@ describe("monitor runtime modes", () => {
     const eventsRes = await request(handler, "/api/events?project=fs-project&run=run-fs-001&limit=20");
     expect(eventsRes.res.statusCode).toBe(200);
     const eventsPayload = JSON.parse(eventsRes.res.body);
-    expect(eventsPayload.events.some((event: { event_type: string }) => event.event_type === "task.plan_generated")).toBe(true);
+    expect(
+      eventsPayload.events.some(
+        (event: { event_type: string }) => event.event_type === "task.plan_generated",
+      ),
+    ).toBe(true);
 
-    const logRes = await request(handler, "/api/log?project=fs-project&run=run-fs-001&kind=planner_stdout&lines=20");
+    const logRes = await request(
+      handler,
+      "/api/log?project=fs-project&run=run-fs-001&kind=planner_stdout&lines=20",
+    );
     expect(logRes.res.statusCode).toBe(200);
     expect(logRes.res.body).toContain("planner filesystem log");
 

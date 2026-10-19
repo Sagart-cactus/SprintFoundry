@@ -19,7 +19,14 @@ import type {
 
 // Canonical ordering by role (used for inserting agents in correct position)
 const ROLE_ORDER: AgentRole[] = [
-  "product", "architect", "ui-ux", "developer", "code-review", "qa", "security", "devops",
+  "product",
+  "architect",
+  "ui-ux",
+  "developer",
+  "code-review",
+  "qa",
+  "security",
+  "devops",
 ];
 
 export class PlanValidator {
@@ -28,12 +35,9 @@ export class PlanValidator {
 
   constructor(
     private platformConfig: PlatformConfig,
-    private projectConfig: ProjectConfig
+    private projectConfig: ProjectConfig,
   ) {
-    this.allRules = [
-      ...platformConfig.rules,
-      ...projectConfig.rules,
-    ];
+    this.allRules = [...platformConfig.rules, ...projectConfig.rules];
     this.agentDefs = platformConfig.agent_definitions;
   }
 
@@ -103,29 +107,26 @@ export class PlanValidator {
       for (let i = 1; i < parts.length; i++) {
         const candidate = parts.slice(i).join("-");
         if (knownIds.has(candidate)) {
-          console.warn(
-            `[plan-validator] Unknown agent "${step.agent}" remapped to "${candidate}"`
-          );
+          console.warn(`[plan-validator] Unknown agent "${step.agent}" remapped to "${candidate}"`);
           step.agent = candidate as AgentType;
           return true;
         }
       }
 
       // Attempt role-match: find any agent whose role keyword appears in the ID
-      const matchByRole = this.agentDefs.find((d) =>
-        step.agent.includes(d.role) &&
-        (!catalog || catalog.length === 0 || catalog.includes(d.type))
+      const matchByRole = this.agentDefs.find(
+        (d) => step.agent.includes(d.role) && (!catalog || catalog.length === 0 || catalog.includes(d.type)),
       );
       if (matchByRole) {
         console.warn(
-          `[plan-validator] Unknown agent "${step.agent}" remapped to "${matchByRole.type}" via role match`
+          `[plan-validator] Unknown agent "${step.agent}" remapped to "${matchByRole.type}" via role match`,
         );
         step.agent = matchByRole.type as AgentType;
         return true;
       }
 
       console.warn(
-        `[plan-validator] Dropping step ${step.step_number}: unknown agent "${step.agent}" (not in platform.yaml)`
+        `[plan-validator] Dropping step ${step.step_number}: unknown agent "${step.agent}" (not in platform.yaml)`,
       );
       return false;
     });
@@ -133,7 +134,9 @@ export class PlanValidator {
     // Only re-number when steps were actually removed; preserving original numbers
     // lets validateNoDuplicateSteps catch plans that already had duplicate step numbers.
     if (plan.steps.length !== beforeCount) {
-      plan.steps.forEach((s, i) => { s.step_number = i + 1; });
+      plan.steps.forEach((s, i) => {
+        s.step_number = i + 1;
+      });
     }
   }
 
@@ -157,9 +160,7 @@ export class PlanValidator {
     // Prefer agents in the project's catalog if configured
     const catalog = this.projectConfig.agents;
     if (catalog && catalog.length > 0) {
-      const match = this.agentDefs.find(
-        (d) => d.role === role && catalog.includes(d.type)
-      );
+      const match = this.agentDefs.find((d) => d.role === role && catalog.includes(d.type));
       if (match) return match;
     }
     // Fallback: any agent with this role
@@ -171,7 +172,7 @@ export class PlanValidator {
   private evaluateCondition(
     condition: PlatformRule["condition"],
     ticket: TicketDetails,
-    plan: ExecutionPlan
+    plan: ExecutionPlan,
   ): boolean {
     switch (condition.type) {
       case "always":
@@ -181,9 +182,7 @@ export class PlanValidator {
         return condition.values.includes(plan.classification);
 
       case "label_contains":
-        return ticket.labels.some((l) =>
-          l.toLowerCase().includes(condition.value.toLowerCase())
-        );
+        return ticket.labels.some((l) => l.toLowerCase().includes(condition.value.toLowerCase()));
 
       case "file_path_matches":
         return this.matchesPlanPaths(plan, condition.pattern);
@@ -198,11 +197,7 @@ export class PlanValidator {
 
   // ---- Rule Enforcement ----
 
-  private enforceRequiredAgent(
-    plan: ExecutionPlan,
-    agent: AgentType,
-    injected: PlanStep[]
-  ) {
+  private enforceRequiredAgent(plan: ExecutionPlan, agent: AgentType, injected: PlanStep[]) {
     const hasAgent = plan.steps.some((s) => s.agent === agent);
     if (hasAgent) return; // already in plan
 
@@ -221,11 +216,7 @@ export class PlanValidator {
     });
   }
 
-  private enforceRequiredRole(
-    plan: ExecutionPlan,
-    role: AgentRole,
-    injected: PlanStep[]
-  ) {
+  private enforceRequiredRole(plan: ExecutionPlan, role: AgentRole, injected: PlanStep[]) {
     // Check if any agent with this role is already in the plan
     const hasRole = plan.steps.some((s) => this.getRoleForAgent(s.agent) === role);
     if (hasRole) return;
@@ -252,11 +243,7 @@ export class PlanValidator {
     });
   }
 
-  private enforceHumanGate(
-    plan: ExecutionPlan,
-    afterAgent: AgentType,
-    injected: HumanGate[]
-  ) {
+  private enforceHumanGate(plan: ExecutionPlan, afterAgent: AgentType, injected: HumanGate[]) {
     // Find the last step of the specified agent type
     let agentSteps = plan.steps.filter((s) => s.agent === afterAgent);
 
@@ -264,9 +251,7 @@ export class PlanValidator {
     if (agentSteps.length === 0) {
       const targetRole = this.getRoleForAgent(afterAgent);
       if (targetRole) {
-        agentSteps = plan.steps.filter(
-          (s) => this.getRoleForAgent(s.agent) === targetRole
-        );
+        agentSteps = plan.steps.filter((s) => this.getRoleForAgent(s.agent) === targetRole);
       }
     }
 
@@ -298,9 +283,7 @@ export class PlanValidator {
     }
 
     // If no prior agent found, return the last step
-    return plan.steps.length > 0
-      ? plan.steps[plan.steps.length - 1].step_number
-      : null;
+    return plan.steps.length > 0 ? plan.steps[plan.steps.length - 1].step_number : null;
   }
 
   private getNextStepNumber(plan: ExecutionPlan, injected: PlanStep[]): number {
@@ -320,7 +303,7 @@ export class PlanValidator {
       for (const dep of step.depends_on) {
         if (!stepNumbers.has(dep)) {
           throw new Error(
-            `Plan validation error: step ${step.step_number} depends on non-existent step ${dep}`
+            `Plan validation error: step ${step.step_number} depends on non-existent step ${dep}`,
           );
         }
       }
@@ -331,9 +314,7 @@ export class PlanValidator {
     const seen = new Set<number>();
     for (const step of plan.steps) {
       if (seen.has(step.step_number)) {
-        throw new Error(
-          `Plan validation error: duplicate step number ${step.step_number}`
-        );
+        throw new Error(`Plan validation error: duplicate step number ${step.step_number}`);
       }
       seen.add(step.step_number);
     }
@@ -348,7 +329,7 @@ export class PlanValidator {
           return [normalized, `${normalized}/`];
         }
         return [];
-      })
+      }),
     );
     if (candidatePaths.length === 0) return false;
 
@@ -362,7 +343,7 @@ export class PlanValidator {
 
   private globLikePatternToRegex(pattern: string): RegExp {
     const normalized = this.normalizePath(pattern);
-    const escaped = normalized.replace(/[.+^${}\[\]\\]/g, "\\$&");
+    const escaped = normalized.replace(/[.+^${}[\]\\]/g, "\\$&");
     const regexBody = escaped
       .replace(/\*\*/g, "___DOUBLE_STAR___")
       .replace(/\*/g, "[^/]*")

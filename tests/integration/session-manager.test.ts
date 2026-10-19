@@ -5,7 +5,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { SessionManager } from "../../src/service/session-manager.js";
-import { makeTaskRun, makeCompletedRun, makeFailedRun, makeWaitingRun } from "../helpers/session-factory.js";
+import { makeTaskRun, makeCompletedRun, makeFailedRun } from "../helpers/session-factory.js";
 import { mkdtempSync, rmSync } from "fs";
 import * as path from "path";
 import * as os from "os";
@@ -20,7 +20,11 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* */ }
+  try {
+    rmSync(tmpDir, { recursive: true, force: true });
+  } catch {
+    /* */
+  }
 });
 
 describe("Session Manager — persist and read", () => {

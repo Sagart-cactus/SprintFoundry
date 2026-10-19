@@ -4,18 +4,9 @@
 // and merge readiness. Triggers rework loops or notifications.
 // ============================================================
 
-import type {
-  LifecycleConfig,
-  ReactionTrigger,
-  RunSessionMetadata,
-} from "../shared/types.js";
+import type { LifecycleConfig } from "../shared/types.js";
 export type { LifecycleConfig } from "../shared/types.js";
-import type {
-  SCMPlugin,
-  PRInfo,
-  CIStatus,
-  ReviewDecision,
-} from "../shared/plugin-types.js";
+import type { SCMPlugin, PRInfo, CIStatus } from "../shared/plugin-types.js";
 import { SessionManager } from "./session-manager.js";
 import { NotificationRouter } from "./notification-router.js";
 
@@ -47,7 +38,7 @@ export class LifecycleManager {
     private scm: SCMPlugin | null,
     private sessionManager: SessionManager,
     private notificationRouter: NotificationRouter,
-    private callbacks: LifecycleCallbacks = {}
+    private callbacks: LifecycleCallbacks = {},
   ) {}
 
   /**
@@ -123,7 +114,9 @@ export class LifecycleManager {
         try {
           await this.checkRun(watched);
         } catch (err) {
-          console.warn(`[lifecycle] Error checking run ${watched.runId}: ${err instanceof Error ? err.message : String(err)}`);
+          console.warn(
+            `[lifecycle] Error checking run ${watched.runId}: ${err instanceof Error ? err.message : String(err)}`,
+          );
         }
       }
     } finally {
@@ -146,10 +139,7 @@ export class LifecycleManager {
     if (prState === "merged") {
       console.log(`[lifecycle] PR ${prInfo.url} merged, unwatching run ${watched.runId}`);
       await this.sessionManager.updateStatus(watched.runId, "completed");
-      await this.notificationRouter.notify(
-        `PR ${prInfo.url} merged for run ${watched.runId}`,
-        "info"
-      );
+      await this.notificationRouter.notify(`PR ${prInfo.url} merged for run ${watched.runId}`, "info");
       this.unwatch(watched.runId);
       return;
     }
@@ -188,16 +178,18 @@ export class LifecycleManager {
       // Escalate
       await this.notificationRouter.notify(
         `CI has failed ${watched.ciFailureCount} times for run ${watched.runId} (PR: ${prInfo.url}). Manual intervention required.`,
-        "urgent"
+        "urgent",
       );
       return;
     }
 
     if (reaction.auto && reaction.action === "trigger-rework") {
-      console.log(`[lifecycle] CI failed for run ${watched.runId}, triggering rework (attempt ${watched.ciFailureCount}/${reaction.retries})`);
+      console.log(
+        `[lifecycle] CI failed for run ${watched.runId}, triggering rework (attempt ${watched.ciFailureCount}/${reaction.retries})`,
+      );
       await this.notificationRouter.notify(
         `CI failed for run ${watched.runId}. Triggering automated rework (attempt ${watched.ciFailureCount}).`,
-        reaction.priority
+        reaction.priority,
       );
       if (this.callbacks.onCIFailure) {
         await this.callbacks.onCIFailure(watched.runId, prInfo, "failing");
@@ -205,7 +197,7 @@ export class LifecycleManager {
     } else {
       await this.notificationRouter.notify(
         `CI failed for run ${watched.runId} (PR: ${prInfo.url}). Requires attention.`,
-        reaction.priority
+        reaction.priority,
       );
     }
   }
@@ -219,7 +211,7 @@ export class LifecycleManager {
     if (watched.reviewReworkCount > reaction.retries) {
       await this.notificationRouter.notify(
         `Review changes requested ${watched.reviewReworkCount} times for run ${watched.runId}. Manual intervention required.`,
-        "urgent"
+        "urgent",
       );
       return;
     }
@@ -228,10 +220,12 @@ export class LifecycleManager {
       const comments = await this.scm!.getPendingComments(prInfo);
       const commentBodies = comments.map((c) => c.body);
 
-      console.log(`[lifecycle] Changes requested for run ${watched.runId}, triggering rework (attempt ${watched.reviewReworkCount}/${reaction.retries})`);
+      console.log(
+        `[lifecycle] Changes requested for run ${watched.runId}, triggering rework (attempt ${watched.reviewReworkCount}/${reaction.retries})`,
+      );
       await this.notificationRouter.notify(
         `Review changes requested for run ${watched.runId}. Triggering automated rework.`,
-        reaction.priority
+        reaction.priority,
       );
       if (this.callbacks.onChangesRequested) {
         await this.callbacks.onChangesRequested(watched.runId, prInfo, commentBodies);
@@ -239,7 +233,7 @@ export class LifecycleManager {
     } else {
       await this.notificationRouter.notify(
         `Review changes requested for run ${watched.runId} (PR: ${prInfo.url}).`,
-        reaction.priority
+        reaction.priority,
       );
     }
   }
@@ -257,19 +251,19 @@ export class LifecycleManager {
         }
         await this.notificationRouter.notify(
           `PR ${prInfo.url} auto-merged for run ${watched.runId}.`,
-          "info"
+          "info",
         );
         this.unwatch(watched.runId);
       } else {
         await this.notificationRouter.notify(
           `PR ${prInfo.url} approved and green but not mergeable: ${mergeability.blockers.join(", ")}`,
-          "warning"
+          "warning",
         );
       }
     } else {
       await this.notificationRouter.notify(
         `PR ${prInfo.url} is approved and CI is passing. Ready to merge.`,
-        reaction.priority
+        reaction.priority,
       );
     }
   }

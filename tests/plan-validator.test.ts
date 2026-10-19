@@ -1,17 +1,14 @@
 import { describe, it, expect } from "vitest";
 import { PlanValidator } from "../src/service/plan-validator.js";
-import { makePlatformConfig, makeProjectConfig, defaultAgentDefinitions, defaultPlatformRules } from "./fixtures/configs.js";
+import { makePlatformConfig, makeProjectConfig } from "./fixtures/configs.js";
 import { makePlan, makeStep } from "./fixtures/plans.js";
 import { makeTicket } from "./fixtures/tickets.js";
 
 function createValidator(
   platformOverrides?: Parameters<typeof makePlatformConfig>[0],
-  projectOverrides?: Parameters<typeof makeProjectConfig>[0]
+  projectOverrides?: Parameters<typeof makeProjectConfig>[0],
 ) {
-  return new PlanValidator(
-    makePlatformConfig(platformOverrides),
-    makeProjectConfig(projectOverrides)
-  );
+  return new PlanValidator(makePlatformConfig(platformOverrides), makeProjectConfig(projectOverrides));
 }
 
 describe("PlanValidator", () => {
@@ -47,18 +44,14 @@ describe("PlanValidator", () => {
   it("injects QA role when missing (always-qa-after-code rule)", () => {
     const validator = createValidator();
     const plan = makePlan({
-      steps: [
-        makeStep({ step_number: 1, agent: "developer", task: "Write code" }),
-      ],
+      steps: [makeStep({ step_number: 1, agent: "developer", task: "Write code" })],
     });
     const ticket = makeTicket({ labels: [] });
 
     const result = validator.validate(plan, ticket);
 
     // QA should be injected because of the "always" rule
-    const qaStep = result.steps.find(
-      (s) => s.agent === "qa" || s.agent === "go-qa"
-    );
+    const qaStep = result.steps.find((s) => s.agent === "qa" || s.agent === "go-qa");
     expect(qaStep).toBeDefined();
     expect(qaStep!.task).toContain("[AUTO-INJECTED BY RULE]");
   });
@@ -75,9 +68,7 @@ describe("PlanValidator", () => {
 
     const result = validator.validate(plan, ticket);
 
-    const qaSteps = result.steps.filter(
-      (s) => s.agent === "qa" || s.agent === "go-qa"
-    );
+    const qaSteps = result.steps.filter((s) => s.agent === "qa" || s.agent === "go-qa");
     expect(qaSteps.length).toBe(1);
   });
 
@@ -124,9 +115,7 @@ describe("PlanValidator", () => {
     });
     const ticket = makeTicket({ labels: [] });
 
-    expect(() => validator.validate(plan, ticket)).toThrow(
-      /depends on non-existent step 99/
-    );
+    expect(() => validator.validate(plan, ticket)).toThrow(/depends on non-existent step 99/);
   });
 
   it("throws on duplicate step numbers", () => {
@@ -139,9 +128,7 @@ describe("PlanValidator", () => {
     });
     const ticket = makeTicket({ labels: [] });
 
-    expect(() => validator.validate(plan, ticket)).toThrow(
-      /duplicate step number 1/
-    );
+    expect(() => validator.validate(plan, ticket)).toThrow(/duplicate step number 1/);
   });
 
   it("respects project catalog filtering (findAgentByRole)", () => {
@@ -150,9 +137,7 @@ describe("PlanValidator", () => {
       agents: ["go-developer", "go-qa"],
     });
     const plan = makePlan({
-      steps: [
-        makeStep({ step_number: 1, agent: "go-developer", task: "Write code" }),
-      ],
+      steps: [makeStep({ step_number: 1, agent: "go-developer", task: "Write code" })],
     });
     const ticket = makeTicket({ labels: [] });
 
@@ -167,9 +152,7 @@ describe("PlanValidator", () => {
     const validator = createValidator();
     // Plan has only developer step, missing qa
     const plan = makePlan({
-      steps: [
-        makeStep({ step_number: 1, agent: "developer", task: "Write code" }),
-      ],
+      steps: [makeStep({ step_number: 1, agent: "developer", task: "Write code" })],
     });
     const ticket = makeTicket({ labels: [] });
 
@@ -177,9 +160,7 @@ describe("PlanValidator", () => {
 
     // QA should be inserted after developer (by role order)
     const devIndex = result.steps.findIndex((s) => s.agent === "developer");
-    const qaIndex = result.steps.findIndex(
-      (s) => s.agent === "qa" || s.agent === "go-qa"
-    );
+    const qaIndex = result.steps.findIndex((s) => s.agent === "qa" || s.agent === "go-qa");
     expect(qaIndex).toBeGreaterThan(devIndex);
   });
 
@@ -258,9 +239,7 @@ describe("PlanValidator", () => {
     });
     const plan = makePlan({
       classification: "new_feature",
-      steps: [
-        makeStep({ step_number: 1, agent: "developer", task: "Write code" }),
-      ],
+      steps: [makeStep({ step_number: 1, agent: "developer", task: "Write code" })],
     });
     const ticket = makeTicket();
 
@@ -293,9 +272,7 @@ describe("PlanValidator", () => {
     const validator = createValidator();
     // Plan without qa so code-review is inserted by P0 rule and qa by always-qa rule
     const plan = makePlan({
-      steps: [
-        makeStep({ step_number: 1, agent: "developer", task: "Write code" }),
-      ],
+      steps: [makeStep({ step_number: 1, agent: "developer", task: "Write code" })],
     });
     const ticket = makeTicket({ priority: "p0" });
 
@@ -350,9 +327,7 @@ describe("PlanValidator", () => {
   it("code-review step depends on developer step", () => {
     const validator = createValidator();
     const plan = makePlan({
-      steps: [
-        makeStep({ step_number: 1, agent: "developer", task: "Write code" }),
-      ],
+      steps: [makeStep({ step_number: 1, agent: "developer", task: "Write code" })],
     });
     const ticket = makeTicket({ priority: "p0" });
 
@@ -377,9 +352,7 @@ describe("PlanValidator", () => {
     });
     const plan = makePlan({
       classification: "bug_fix",
-      steps: [
-        makeStep({ step_number: 1, agent: "developer", task: "Fix bug" }),
-      ],
+      steps: [makeStep({ step_number: 1, agent: "developer", task: "Fix bug" })],
     });
     const ticket = makeTicket();
 

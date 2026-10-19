@@ -1,6 +1,7 @@
 {
   "name": "sprintfoundry",
   "version": "0.7.2",
+  "packageManager": "pnpm@9.15.4",
   "description": "Multi-agent orchestration platform for AI-powered software development",
   "type": "module",
   "main": "dist/index.js",
@@ -17,7 +18,9 @@
   ],
   "scripts": {
     "build": "tsc && node scripts/copy-assets.mjs",
+    "build:website": "pnpm --filter @sprintfoundry/website build",
     "dev": "tsx src/index.ts",
+    "dev:website": "pnpm --filter @sprintfoundry/website dev",
     "event-api": "tsx src/service/event-ingestion-server.ts",
     "monitor": "node monitor/server.mjs",
     "infra:up": "./scripts/dev-infra.sh up",
@@ -27,11 +30,33 @@
     "infra:migrate": "./scripts/dev-infra.sh migrate",
     "dev:distributed": "./scripts/dev-distributed-local.sh",
     "start": "node dist/index.js",
-    "lint": "tsc --noEmit",
+    "lint": "eslint . && html-validate website/index.html && pnpm typecheck && pnpm --filter @sprintfoundry/website typecheck",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\" \"website/src/**/*.ts\" \"website/tests/**/*.ts\"",
+    "format:check": "prettier --check \"website/src/**/*.ts\" \"website/tests/**/*.ts\" \"website/*.config.ts\" \"scripts/*.mjs\" eslint.config.js AGENTS.md website/README.md docs/api/openapi.yaml docs/data-handling.md \".github/**/*.{yml,md}\" .devcontainer/devcontainer.json",
     "typecheck": "tsc --noEmit",
     "typecheck:tests": "tsc --noEmit -p tsconfig.tests.json",
+    "dead-code:check": "knip --include files,dependencies,unlisted,unresolved,binaries",
+    "dead-code:report": "knip",
+    "duplicates:check": "jscpd --config .jscpd.json src/service website/src",
+    "boundaries:check": "depcruise --config .dependency-cruiser.cjs src",
+    "versions:check": "syncpack lint",
+    "check:changed-files": "node scripts/check-changed-files.mjs",
+    "docs:validate": "node scripts/validate-agent-doc.mjs",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage --pool=forks --maxWorkers=1 --no-file-parallelism",
+    "profile": "node --cpu-prof --heap-prof dist/index.js",
+    "prepare": "husky || true"
+  },
+  "lint-staged": {
+    "*.{ts,tsx,js,jsx,mjs,cjs}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,md,yml,yaml}": [
+      "prettier --write"
+    ]
   },
   "keywords": [
     "ai",
@@ -59,17 +84,40 @@
     "@opentelemetry/exporter-metrics-otlp-http": "^0.57.0",
     "@opentelemetry/sdk-metrics": "^1.30.0",
     "commander": "^13.1.0",
-    "dockerode": "^4.0.4",
     "pg": "^8.16.3",
     "redis": "5.11.0",
-    "yaml": "^2.7.0"
+    "yaml": "^2.9.1"
   },
   "devDependencies": {
-    "@types/dockerode": "^3.3.34",
+    "@eslint/js": "^10.0.1",
     "@types/node": "^22.13.0",
+    "@vitest/coverage-v8": "~4.0.18",
+    "dependency-cruiser": "^16",
+    "eslint": "^10.13.0",
+    "globals": "^15",
+    "html-validate": "^10",
+    "husky": "^9",
+    "jscpd": "^4",
+    "knip": "^5",
+    "lint-staged": "^15",
+    "prettier": "^3",
+    "syncpack": "^13",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
+    "typescript-eslint": "^8",
     "vitest": "^4.0.18"
+  },
+  "pnpm": {
+    "overrides": {
+      "protobufjs@7": "^7.6.5",
+      "@protobufjs/utf8@1": "^1.1.1",
+      "fast-xml-parser@5": "^5.7.0",
+      "fast-xml-builder@1": "^1.1.7",
+      "ip-address@10": "^10.7.1",
+      "ws@8": "^8.21.0",
+      "form-data@4": "^4.0.6",
+      "js-yaml@4": "^4.3.2"
+    }
   },
   "engines": {
     "node": ">=20.0.0"

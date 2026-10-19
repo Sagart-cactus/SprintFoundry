@@ -4,16 +4,19 @@ Multi-agent orchestration platform for AI-powered software development. Takes ti
 
 ## Contents
 
-| Document | Description |
-|----------|-------------|
-| [configuration.md](./configuration.md) | Full project config schema — all fields, defaults, and examples |
-| [agents.md](./agents.md) | All agent types, roles, capabilities, plugins, and output artifacts |
-| [architecture.md](./architecture.md) | System design, two-layer model, filesystem message bus |
-| [architecture-k8s-hosting.md](./architecture-k8s-hosting.md) | Kubernetes/distributed hosting architecture and issue traceability (#65-#78) |
-| [monitor.md](./monitor.md) | Run monitor — setup, data sources, API |
+| Document                                                               | Description                                                                        |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| [configuration.md](./configuration.md)                                 | Full project config schema — all fields, defaults, and examples                    |
+| [agents.md](./agents.md)                                               | All agent types, roles, capabilities, plugins, and output artifacts                |
+| [architecture.md](./architecture.md)                                   | System design, two-layer model, filesystem message bus                             |
+| [architecture-k8s-hosting.md](./architecture-k8s-hosting.md)           | Kubernetes/distributed hosting architecture and issue traceability (#65-#78)       |
+| [monitor.md](./monitor.md)                                             | Run monitor — setup, data sources, API                                             |
 | [webhook-integrations-security.md](./webhook-integrations-security.md) | Secure GitHub + Linear webhook autoexecute setup (including split-port deployment) |
-| [operations.md](./operations.md) | Running tasks, human gates, rework cycles |
-| [decisions.md](./decisions.md) | Architecture decision records |
+| [operations.md](./operations.md)                                       | Running tasks, human gates, rework cycles                                          |
+| [runbooks.md](./runbooks.md)                                           | Alert response and release rollback procedures                                     |
+| [decisions.md](./decisions.md)                                         | Architecture decision records                                                      |
+| [api/openapi.yaml](./api/openapi.yaml)                                 | Internal event-ingestion API schema                                                |
+| [data-handling.md](./data-handling.md)                                 | Data minimization, handling, and retention baseline                                |
 
 ## Quick Start
 

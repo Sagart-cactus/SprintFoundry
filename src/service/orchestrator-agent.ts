@@ -25,7 +25,7 @@ export class OrchestratorAgent {
 
   constructor(
     private platformConfig: PlatformConfig,
-    private projectConfig: ProjectConfig
+    private projectConfig: ProjectConfig,
   ) {
     const apiKey = this.resolveApiKey();
     // If key is empty, let the SDK resolve from ANTHROPIC_API_KEY env var
@@ -43,7 +43,7 @@ export class OrchestratorAgent {
     ticket: TicketDetails,
     agentDefinitions: AgentDefinition[],
     rules: (PlatformRule | ProjectRule)[],
-    workspacePath: string
+    workspacePath: string,
   ): Promise<ExecutionPlan> {
     // Filter agents to project's catalog if configured
     const filteredAgents = this.filterAgents(agentDefinitions);
@@ -79,7 +79,7 @@ export class OrchestratorAgent {
     workspacePath: string,
     runSteps: StepExecution[] = [],
     reworkAttempt: number = 1,
-    previousReworkResults: AgentResult[] = []
+    previousReworkResults: AgentResult[] = [],
   ): Promise<{ steps: PlanStep[] }> {
     // Gather context the orchestrator needs for informed rework decisions
     const repoContext = await this.gatherRepoContext(workspacePath);
@@ -94,15 +94,20 @@ export class OrchestratorAgent {
       .map((s) => `- Step ${s.step_number} (${s.agent}): ${s.result!.summary}`)
       .join("\n");
 
-    const failedStepArtifacts = failureResult.artifacts_created.length > 0
-      ? `\nArtifacts from failed step: ${failureResult.artifacts_created.join(", ")}`
-      : "";
+    const failedStepArtifacts =
+      failureResult.artifacts_created.length > 0
+        ? `\nArtifacts from failed step: ${failureResult.artifacts_created.join(", ")}`
+        : "";
 
-    const reworkHistory = previousReworkResults.length > 0
-      ? `\n## Previous Rework Attempts\n${previousReworkResults.map((r, i) =>
-          `### Attempt ${i + 1}\nStatus: ${r.status}\nSummary: ${r.summary}\nIssues: ${r.issues.join("; ")}`
-        ).join("\n\n")}`
-      : "";
+    const reworkHistory =
+      previousReworkResults.length > 0
+        ? `\n## Previous Rework Attempts\n${previousReworkResults
+            .map(
+              (r, i) =>
+                `### Attempt ${i + 1}\nStatus: ${r.status}\nSummary: ${r.summary}\nIssues: ${r.issues.join("; ")}`,
+            )
+            .join("\n\n")}`
+        : "";
 
     const prompt = `
 A step in the execution plan has failed and needs rework.
@@ -187,19 +192,25 @@ Return ONLY valid JSON, no markdown fences.
 
   private buildSystemPrompt(
     agentDefinitions: AgentDefinition[],
-    rules: (PlatformRule | ProjectRule)[]
+    rules: (PlatformRule | ProjectRule)[],
   ): string {
     return `You are the orchestrator for SprintFoundry, an AI-powered software development platform.
 Your job is to analyze incoming tickets and create execution plans that assign work to specialized agents.
 
 ## Available Agents
 
-${agentDefinitions.map((a) => `### ${a.name} (id: "${a.type}", role: "${a.role}"${a.stack ? `, stack: "${a.stack}"` : ""}${a.plugins?.length ? `, plugins: [${a.plugins.join(", ")}]` : ""})
+${agentDefinitions
+  .map(
+    (
+      a,
+    ) => `### ${a.name} (id: "${a.type}", role: "${a.role}"${a.stack ? `, stack: "${a.stack}"` : ""}${a.plugins?.length ? `, plugins: [${a.plugins.join(", ")}]` : ""})
 ${a.description}
 Capabilities: ${a.capabilities.join(", ")}
 Outputs: ${a.output_artifacts.join(", ")}
 Requires: ${a.required_inputs.join(", ")}
-`).join("\n")}
+`,
+  )
+  .join("\n")}
 
 ## Platform Rules (you must respect these)
 
@@ -292,14 +303,14 @@ Labels: ${ticket.labels.join(", ") || "none"}
 ${ticket.description}
 
 ### Acceptance Criteria
-${ticket.acceptance_criteria.length > 0
-  ? ticket.acceptance_criteria.map((c) => `- ${c}`).join("\n")
-  : "None specified"}
+${
+  ticket.acceptance_criteria.length > 0
+    ? ticket.acceptance_criteria.map((c) => `- ${c}`).join("\n")
+    : "None specified"
+}
 
 ### Comments
-${ticket.comments.length > 0
-  ? ticket.comments.join("\n---\n")
-  : "None"}
+${ticket.comments.length > 0 ? ticket.comments.join("\n---\n") : "None"}
 
 ## Repository Context
 ${repoContext}
@@ -318,7 +329,7 @@ Analyze this ticket and return an execution plan as JSON.`;
       const { execSync } = await import("child_process");
       const tree = execSync(
         'find . -maxdepth 3 -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/.next/*" | head -100',
-        { cwd: workspacePath, encoding: "utf-8" }
+        { cwd: workspacePath, encoding: "utf-8" },
       );
       sections.push("### File Structure (top 3 levels)");
       sections.push("```");
@@ -330,13 +341,12 @@ Analyze this ticket and return an execution plan as JSON.`;
 
     // Read pre-detected project stack (written by orchestration-service after clone)
     try {
-      const stackJson = await fs.readFile(
-        path.join(workspacePath, ".agent-context", "stack.json"),
-        "utf-8"
-      );
+      const stackJson = await fs.readFile(path.join(workspacePath, ".agent-context", "stack.json"), "utf-8");
       const stack = JSON.parse(stackJson);
       sections.push("### Detected Project Stack");
-      sections.push(`Stack: ${stack.stack}${stack.package_manager ? ` (package manager: ${stack.package_manager})` : ""}`);
+      sections.push(
+        `Stack: ${stack.stack}${stack.package_manager ? ` (package manager: ${stack.package_manager})` : ""}`,
+      );
       sections.push(`Detected from: ${(stack.detected_from ?? []).join(", ") || "file structure"}`);
       if (stack.test_cmd) sections.push(`Test command: ${stack.test_cmd}`);
       if (stack.monorepo) sections.push("Monorepo: yes");
@@ -344,7 +354,9 @@ Analyze this ticket and return an execution plan as JSON.`;
         sections.push(`Pre-commit hooks: ${stack.pre_commit_hooks}`);
       }
       sections.push("");
-      sections.push("IMPORTANT: Use the stack-appropriate agent (e.g. 'go-developer'/'go-qa' for Go, 'developer'/'qa' for Node.js). The stack has been pre-detected — do not choose agents based on guesswork.");
+      sections.push(
+        "IMPORTANT: Use the stack-appropriate agent (e.g. 'go-developer'/'go-qa' for Go, 'developer'/'qa' for Node.js). The stack has been pre-detected — do not choose agents based on guesswork.",
+      );
     } catch {
       // Stack not pre-detected (dry-run or direct mode) — fall back to reading manifests
       try {
@@ -353,7 +365,9 @@ Analyze this ticket and return an execution plan as JSON.`;
         sections.push("### Tech Stack (from package.json)");
         sections.push(`Dependencies: ${Object.keys(parsed.dependencies ?? {}).join(", ")}`);
         sections.push(`Dev Dependencies: ${Object.keys(parsed.devDependencies ?? {}).join(", ")}`);
-      } catch { /* No package.json */ }
+      } catch {
+        /* No package.json */
+      }
 
       try {
         const gomod = await fs.readFile(path.join(workspacePath, "go.mod"), "utf-8");
@@ -362,7 +376,9 @@ Analyze this ticket and return an execution plan as JSON.`;
         if (moduleMatch) sections.push(`Module: ${moduleMatch[1]}`);
         const goMatch = gomod.match(/^go\s+(.+)$/m);
         if (goMatch) sections.push(`Go version: ${goMatch[1]}`);
-      } catch { /* No go.mod */ }
+      } catch {
+        /* No go.mod */
+      }
     }
 
     // Read existing artifacts if any
@@ -404,7 +420,8 @@ Analyze this ticket and return an execution plan as JSON.`;
       };
     } catch (error) {
       throw new Error(
-        `Failed to parse orchestrator agent plan: ${error}\n\nRaw output:\n${content.slice(0, 1000)}`
+        `Failed to parse orchestrator agent plan: ${error}\n\nRaw output:\n${content.slice(0, 1000)}`,
+        { cause: error },
       );
     }
   }
@@ -413,8 +430,7 @@ Analyze this ticket and return an execution plan as JSON.`;
 
   private resolveApiKey(): string {
     const keys = this.projectConfig.api_keys;
-    const provider =
-      this.projectConfig.model_overrides?.orchestrator?.provider ?? "anthropic";
+    const provider = this.projectConfig.model_overrides?.orchestrator?.provider ?? "anthropic";
     const key = keys[provider as keyof typeof keys];
     // Return empty string if no key configured — the Anthropic SDK will
     // fall back to ANTHROPIC_API_KEY env var automatically

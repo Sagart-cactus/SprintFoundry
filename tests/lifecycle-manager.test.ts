@@ -3,7 +3,7 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import * as os from "os";
 import { LifecycleManager, defaultLifecycleConfig } from "../src/service/lifecycle-manager.js";
-import { NotificationRouter, defaultRoutingConfig } from "../src/service/notification-router.js";
+import { NotificationRouter } from "../src/service/notification-router.js";
 import { SessionManager } from "../src/service/session-manager.js";
 import type { SCMPlugin, PRInfo, NotifierPlugin } from "../src/shared/plugin-types.js";
 import type { LifecycleConfig } from "../src/shared/types.js";
@@ -27,7 +27,9 @@ function makeSCM(overrides?: Partial<SCMPlugin>): SCMPlugin {
     getCISummary: vi.fn().mockResolvedValue("passing"),
     getReviewDecision: vi.fn().mockResolvedValue("pending"),
     getPendingComments: vi.fn().mockResolvedValue([]),
-    getMergeability: vi.fn().mockResolvedValue({ mergeable: true, ci: "passing", review: "approved", blockers: [] }),
+    getMergeability: vi
+      .fn()
+      .mockResolvedValue({ mergeable: true, ci: "passing", review: "approved", blockers: [] }),
     mergePR: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
@@ -38,7 +40,9 @@ function makeNotifier(): NotifierPlugin & { messages: string[] } {
   return {
     name: "test",
     messages,
-    notify: vi.fn(async (msg: string) => { messages.push(msg); }),
+    notify: vi.fn(async (msg: string) => {
+      messages.push(msg);
+    }),
   };
 }
 
@@ -55,14 +59,15 @@ describe("LifecycleManager", () => {
   let router: NotificationRouter;
 
   beforeEach(async () => {
-    testDir = path.join(os.tmpdir(), `sf-lifecycle-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-    await fs.mkdir(testDir, { recursive: true });
+    testDir = await fs.mkdtemp(path.join(os.tmpdir(), "sf-lifecycle-test-"));
     sessionMgr = new SessionManager(testDir);
     notifier = makeNotifier();
-    router = new NotificationRouter(
-      new Map([["test", notifier]]),
-      { urgent: ["test"], action: ["test"], warning: ["test"], info: ["test"] }
-    );
+    router = new NotificationRouter(new Map([["test", notifier]]), {
+      urgent: ["test"],
+      action: ["test"],
+      warning: ["test"],
+      info: ["test"],
+    });
   });
 
   afterEach(async () => {
@@ -161,9 +166,11 @@ describe("LifecycleManager", () => {
   it("triggers changes-requested rework", async () => {
     const scm = makeSCM({
       getReviewDecision: vi.fn().mockResolvedValue("changes_requested"),
-      getPendingComments: vi.fn().mockResolvedValue([
-        { id: 1, author: "reviewer", body: "Fix the tests", created_at: "2026-02-27T10:00:00Z" },
-      ]),
+      getPendingComments: vi
+        .fn()
+        .mockResolvedValue([
+          { id: 1, author: "reviewer", body: "Fix the tests", created_at: "2026-02-27T10:00:00Z" },
+        ]),
     });
     const onChangesRequested = vi.fn().mockResolvedValue(undefined);
     const mgr = new LifecycleManager(makeEnabledConfig(), scm, sessionMgr, router, { onChangesRequested });

@@ -2,7 +2,7 @@
  * Test helper: create realistic TaskEvent objects.
  */
 
-import type { TaskEvent, EventType } from "../../src/shared/types.js";
+import type { TaskEvent } from "../../src/shared/types.js";
 
 let eventCounter = 0;
 
@@ -114,14 +114,54 @@ export function makeReworkEventSequence(runId = "run-rework-1"): TaskEvent[] {
   const base = Date.now();
   return [
     makeEvent({ run_id: runId, event_type: "task.created", timestamp: new Date(base), data: {} }),
-    makeEvent({ run_id: runId, event_type: "task.plan_generated", timestamp: new Date(base + 1000), data: {} }),
-    makeEvent({ run_id: runId, event_type: "step.started", timestamp: new Date(base + 2000), data: { step: 1, agent: "developer" } }),
-    makeEvent({ run_id: runId, event_type: "step.completed", timestamp: new Date(base + 20_000), data: { step: 1, agent: "developer" } }),
-    makeEvent({ run_id: runId, event_type: "step.started", timestamp: new Date(base + 21_000), data: { step: 2, agent: "qa" } }),
-    makeEvent({ run_id: runId, event_type: "step.completed", timestamp: new Date(base + 40_000), data: { step: 2, agent: "qa" } }),
-    makeEvent({ run_id: runId, event_type: "step.rework_triggered", timestamp: new Date(base + 41_000), data: { step: 2, target: "developer", reason: "Tests failing" } }),
-    makeEvent({ run_id: runId, event_type: "step.started", timestamp: new Date(base + 42_000), data: { step: 901, agent: "developer" } }),
-    makeEvent({ run_id: runId, event_type: "step.completed", timestamp: new Date(base + 60_000), data: { step: 901, agent: "developer" } }),
+    makeEvent({
+      run_id: runId,
+      event_type: "task.plan_generated",
+      timestamp: new Date(base + 1000),
+      data: {},
+    }),
+    makeEvent({
+      run_id: runId,
+      event_type: "step.started",
+      timestamp: new Date(base + 2000),
+      data: { step: 1, agent: "developer" },
+    }),
+    makeEvent({
+      run_id: runId,
+      event_type: "step.completed",
+      timestamp: new Date(base + 20_000),
+      data: { step: 1, agent: "developer" },
+    }),
+    makeEvent({
+      run_id: runId,
+      event_type: "step.started",
+      timestamp: new Date(base + 21_000),
+      data: { step: 2, agent: "qa" },
+    }),
+    makeEvent({
+      run_id: runId,
+      event_type: "step.completed",
+      timestamp: new Date(base + 40_000),
+      data: { step: 2, agent: "qa" },
+    }),
+    makeEvent({
+      run_id: runId,
+      event_type: "step.rework_triggered",
+      timestamp: new Date(base + 41_000),
+      data: { step: 2, target: "developer", reason: "Tests failing" },
+    }),
+    makeEvent({
+      run_id: runId,
+      event_type: "step.started",
+      timestamp: new Date(base + 42_000),
+      data: { step: 901, agent: "developer" },
+    }),
+    makeEvent({
+      run_id: runId,
+      event_type: "step.completed",
+      timestamp: new Date(base + 60_000),
+      data: { step: 901, agent: "developer" },
+    }),
     makeEvent({ run_id: runId, event_type: "task.completed", timestamp: new Date(base + 61_000), data: {} }),
   ];
 }
@@ -131,9 +171,29 @@ export function makeHumanGateEventSequence(runId = "run-gate-1"): TaskEvent[] {
   const base = Date.now();
   return [
     makeEvent({ run_id: runId, event_type: "task.created", timestamp: new Date(base), data: {} }),
-    makeEvent({ run_id: runId, event_type: "task.plan_generated", timestamp: new Date(base + 1000), data: {} }),
-    makeEvent({ run_id: runId, event_type: "step.started", timestamp: new Date(base + 2000), data: { step: 1, agent: "developer" } }),
-    makeEvent({ run_id: runId, event_type: "step.completed", timestamp: new Date(base + 20_000), data: { step: 1, agent: "developer" } }),
-    makeEvent({ run_id: runId, event_type: "human_gate.requested", timestamp: new Date(base + 21_000), data: { after_step: 1, reason: "P0 requires review" } }),
+    makeEvent({
+      run_id: runId,
+      event_type: "task.plan_generated",
+      timestamp: new Date(base + 1000),
+      data: {},
+    }),
+    makeEvent({
+      run_id: runId,
+      event_type: "step.started",
+      timestamp: new Date(base + 2000),
+      data: { step: 1, agent: "developer" },
+    }),
+    makeEvent({
+      run_id: runId,
+      event_type: "step.completed",
+      timestamp: new Date(base + 20_000),
+      data: { step: 1, agent: "developer" },
+    }),
+    makeEvent({
+      run_id: runId,
+      event_type: "human_gate.requested",
+      timestamp: new Date(base + 21_000),
+      data: { after_step: 1, reason: "P0 requires review" },
+    }),
   ];
 }

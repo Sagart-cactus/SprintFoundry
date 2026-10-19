@@ -1,0 +1,8 @@
+node_modules/
+dist/
+coverage/
+package-lock.json
+pnpm-lock.yaml
+monitor/public-v3/
+website/assets/
+.factory/

@@ -77,6 +77,12 @@ From source, replace `sprintfoundry` with `pnpm dev --`.
 If you want a hand-written starting point instead of the wizard, use
 `config/project.minimal.yaml` as the baseline template.
 
+For repository-specific development conventions and verified commands, see
+[`AGENTS.md`](./AGENTS.md). The independently deployed static site has its own
+local development and QA instructions in [`website/README.md`](./website/README.md).
+The internal event-ingestion API contract is in
+[`docs/api/openapi.yaml`](./docs/api/openapi.yaml).
+
 ## Monitor
 
 ```bash
@@ -115,6 +121,7 @@ docker compose -f docker-compose.distributed.yml up -d --build
 ```
 
 This stack runs:
+
 - `postgres` (`postgres:16-alpine`) on `5432`
 - `redis` (`redis:7-alpine`) on `6379`
 - `migrate` one-shot init job (`migrations/001_create_event_tables.sql`)
@@ -239,13 +246,13 @@ For Kubernetes setup, start with [docs/k8s-quickstart.md](docs/k8s-quickstart.md
 
 Each agent runs in one of four modes, configured per-agent in your project config:
 
-| Provider | Mode | Description |
-|---|---|---|
-| `claude-code` | `local_sdk` | Claude Agent SDK in-process (fastest, no subprocess) |
-| `claude-code` | `local_process` | `claude` CLI as a subprocess |
-| `claude-code` | `container` | Claude Code in a Docker container |
-| `codex` | `local_sdk` | Codex SDK in-process |
-| `codex` | `local_process` | `codex` CLI as a subprocess |
+| Provider      | Mode            | Description                                          |
+| ------------- | --------------- | ---------------------------------------------------- |
+| `claude-code` | `local_sdk`     | Claude Agent SDK in-process (fastest, no subprocess) |
+| `claude-code` | `local_process` | `claude` CLI as a subprocess                         |
+| `claude-code` | `container`     | Claude Code in a Docker container                    |
+| `codex`       | `local_sdk`     | Codex SDK in-process                                 |
+| `codex`       | `local_process` | `codex` CLI as a subprocess                          |
 
 ```yaml
 # config/my-project.yaml
@@ -260,19 +267,19 @@ runtime_overrides:
 
 ## Agents
 
-| Agent | Role |
-|---|---|
-| `product` | Analyzes tickets, writes specs and user stories |
-| `architect` | Designs systems, writes ADRs and API contracts |
-| `developer` | Implements features, writes tests |
-| `go-developer` | Go-specific implementation |
-| `qa` | Writes and runs tests, validates quality |
-| `go-qa` | Go-specific QA |
-| `merge-bot` | Resolves merge blockers, smoke-tests the branch, and merges ready PRs |
-| `security` | Vulnerability scanning, auth review |
-| `ui-ux` | Component specs, wireframes, design tokens |
-| `devops` | CI/CD, Dockerfiles, infrastructure |
-| `code-review` | Code review, style and correctness |
+| Agent          | Role                                                                  |
+| -------------- | --------------------------------------------------------------------- |
+| `product`      | Analyzes tickets, writes specs and user stories                       |
+| `architect`    | Designs systems, writes ADRs and API contracts                        |
+| `developer`    | Implements features, writes tests                                     |
+| `go-developer` | Go-specific implementation                                            |
+| `qa`           | Writes and runs tests, validates quality                              |
+| `go-qa`        | Go-specific QA                                                        |
+| `merge-bot`    | Resolves merge blockers, smoke-tests the branch, and merges ready PRs |
+| `security`     | Vulnerability scanning, auth review                                   |
+| `ui-ux`        | Component specs, wireframes, design tokens                            |
+| `devops`       | CI/CD, Dockerfiles, infrastructure                                    |
+| `code-review`  | Code review, style and correctness                                    |
 
 You can also define **custom agents** via YAML and run them with `--agent-file`, or create one interactively with `sprintfoundry agent create`.
 
@@ -285,7 +292,7 @@ SprintFoundry automatically detects the project stack (Node.js, Go, Python, etc.
 You can also pin the stack explicitly in your project config:
 
 ```yaml
-stack: js   # skip auto-detection
+stack: js # skip auto-detection
 ```
 
 ## Doctor

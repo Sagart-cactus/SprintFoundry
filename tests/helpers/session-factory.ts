@@ -2,17 +2,9 @@
  * Test helper: create realistic TaskRun and StepExecution objects.
  */
 
-import type {
-  TaskRun,
-  StepExecution,
-  RunStatus,
-  StepStatus,
-  AgentResult,
-  ExecutionPlan,
-  TicketDetails,
-} from "../../src/shared/types.js";
+import type { TaskRun, StepExecution } from "../../src/shared/types.js";
 import { makeTicket } from "../fixtures/tickets.js";
-import { makePlan, makeStep } from "../fixtures/plans.js";
+import { makePlan } from "../fixtures/plans.js";
 import { makeResult } from "../fixtures/results.js";
 
 let counter = 0;
@@ -41,18 +33,19 @@ export function makeTaskRun(overrides?: Partial<TaskRun>): TaskRun {
     project_id: overrides?.project_id ?? "test-project",
     ticket: overrides?.ticket ?? makeTicket(),
     plan: overrides && "plan" in overrides ? overrides.plan! : makePlan(),
-    validated_plan: overrides && "validated_plan" in overrides
-      ? overrides.validated_plan!
-      : overrides && "plan" in overrides
-        ? overrides.plan!
-        : makePlan(),
+    validated_plan:
+      overrides && "validated_plan" in overrides
+        ? overrides.validated_plan!
+        : overrides && "plan" in overrides
+          ? overrides.plan!
+          : makePlan(),
     status: overrides?.status ?? "executing",
     steps: overrides?.steps ?? [
       makeStepExecution({ step_number: 1, agent: "developer", status: "completed", result: makeResult() }),
       makeStepExecution({ step_number: 2, agent: "qa", status: "running" }),
     ],
     total_tokens_used: overrides?.total_tokens_used ?? 150_000,
-    total_cost_usd: overrides?.total_cost_usd ?? 2.50,
+    total_cost_usd: overrides?.total_cost_usd ?? 2.5,
     created_at: overrides?.created_at ?? now,
     updated_at: overrides?.updated_at ?? now,
     completed_at: overrides?.completed_at ?? null,
@@ -74,7 +67,7 @@ export function makeCompletedRun(overrides?: Partial<TaskRun>): TaskRun {
         started_at: new Date(completed.getTime() - 60_000),
         completed_at: new Date(completed.getTime() - 30_000),
         tokens_used: 80_000,
-        cost_usd: 1.20,
+        cost_usd: 1.2,
         result: makeResult(),
       }),
       makeStepExecution({
@@ -84,12 +77,12 @@ export function makeCompletedRun(overrides?: Partial<TaskRun>): TaskRun {
         started_at: new Date(completed.getTime() - 29_000),
         completed_at: completed,
         tokens_used: 50_000,
-        cost_usd: 0.80,
+        cost_usd: 0.8,
         result: makeResult({ summary: "All tests pass" }),
       }),
     ],
     total_tokens_used: 130_000,
-    total_cost_usd: 2.00,
+    total_cost_usd: 2.0,
     completed_at: completed,
     pr_url: "https://github.com/test/repo/pull/42",
     ...overrides,

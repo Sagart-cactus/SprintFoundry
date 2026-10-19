@@ -1,0 +1,4 @@
+packages:
+  - "website"
+  - "monitor/v4"
+  - "monitor/v5"

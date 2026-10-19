@@ -1,0 +1,47 @@
+groups:
+  - name: sprintfoundry
+    rules:
+      - alert: SprintFoundryRunFailureRateHigh
+        expr: |
+          sum(rate(sprintfoundry_runs_total{status="failed"}[30m]))
+            / clamp_min(sum(rate(sprintfoundry_runs_total[30m])), 1e-9) > 0.25
+          and sum(increase(sprintfoundry_runs_total[30m])) >= 4
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: More than 25% of SprintFoundry runs failed in the last 30 minutes
+          runbook: docs/runbooks.md#run-failure-rate-high
+
+      - alert: SprintFoundryAgentTimeouts
+        expr: sum by (agent) (increase(sprintfoundry_agent_timeouts_total[1h])) >= 3
+        labels:
+          severity: warning
+        annotations:
+          summary: "Agent {{ $labels.agent }} timed out 3 or more times in the last hour"
+          runbook: docs/runbooks.md#agent-timeouts
+
+      - alert: SprintFoundryGitErrors
+        expr: sum by (operation) (increase(sprintfoundry_git_errors_total[30m])) >= 5
+        labels:
+          severity: warning
+        annotations:
+          summary: "Git operation {{ $labels.operation }} failed 5 or more times in 30 minutes"
+          runbook: docs/runbooks.md#git-errors
+
+      - alert: SprintFoundryDailyCostHigh
+        expr: sum(increase(sprintfoundry_cost_usd_total[24h])) > 200
+        labels:
+          severity: info
+        annotations:
+          summary: Model spend exceeded $200 in the last 24 hours
+          runbook: docs/runbooks.md#cost-spike
+
+      - alert: SprintFoundryMetricsMissing
+        expr: absent(up{job="sprintfoundry"} == 1)
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: Prometheus cannot scrape SprintFoundry metrics through the OTel Collector
+          runbook: docs/runbooks.md#metrics-missing

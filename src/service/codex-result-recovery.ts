@@ -18,9 +18,7 @@ type PatchOperation =
       hunks: string[][];
     };
 
-export async function recoverAgentResultFromCodexOutput(
-  workspacePath: string
-): Promise<boolean> {
+export async function recoverAgentResultFromCodexOutput(workspacePath: string): Promise<boolean> {
   const stdoutLogs = await findCodexStdoutLogs(workspacePath);
   for (const stdoutLog of stdoutLogs) {
     const content = await safeReadFile(stdoutLog);
@@ -40,7 +38,7 @@ export async function recoverAgentResultFromCodexOutput(
       console.warn(
         `[agent-runner] Failed to recover workspace changes from ${path.basename(stdoutLog)}: ${
           error instanceof Error ? error.message : String(error)
-        }`
+        }`,
       );
     }
   }
@@ -64,12 +62,10 @@ async function findCodexStdoutLogs(workspacePath: string): Promise<string[]> {
     stdoutFiles.map(async (filePath) => ({
       filePath,
       stat: await fs.stat(filePath),
-    }))
+    })),
   );
 
-  return withStats
-    .sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs)
-    .map((entry) => entry.filePath);
+  return withStats.sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs).map((entry) => entry.filePath);
 }
 
 async function safeReadFile(filePath: string): Promise<string | undefined> {
@@ -98,14 +94,16 @@ function extractLatestAgentMessage(stdoutContent: string): string | undefined {
 
 function pickAgentMessageText(event: Record<string, unknown>): string | undefined {
   if (event["type"] === "agent_message") {
-    return pickString(event, ["text", "message"])
-      ?? (isRecord(event["item"]) ? pickString(event["item"], ["text", "message"]) : undefined);
+    return (
+      pickString(event, ["text", "message"]) ??
+      (isRecord(event["item"]) ? pickString(event["item"], ["text", "message"]) : undefined)
+    );
   }
 
   if (
-    (event["type"] === "item.completed" || event["type"] === "item.started")
-    && isRecord(event["item"])
-    && event["item"]["type"] === "agent_message"
+    (event["type"] === "item.completed" || event["type"] === "item.started") &&
+    isRecord(event["item"]) &&
+    event["item"]["type"] === "agent_message"
   ) {
     return pickString(event["item"], ["text", "message"]);
   }
@@ -187,7 +185,7 @@ function parseSprintFoundryPatch(patchText: string): PatchOperation[] {
           index += 1;
           continue;
         }
-        if (!/^[ +\-]/.test(patchLine)) {
+        if (!/^[ +-]/.test(patchLine)) {
           throw new Error(`Invalid update line: ${patchLine}`);
         }
         currentHunk.push(patchLine);
@@ -216,10 +214,7 @@ function parseSprintFoundryPatch(patchText: string): PatchOperation[] {
   throw new Error("Patch is missing the expected end marker");
 }
 
-async function applySprintFoundryPatch(
-  workspacePath: string,
-  operations: PatchOperation[]
-): Promise<void> {
+async function applySprintFoundryPatch(workspacePath: string, operations: PatchOperation[]): Promise<void> {
   for (const operation of operations) {
     if (operation.kind === "add") {
       const targetPath = resolveWorkspacePath(workspacePath, operation.filePath);
@@ -245,9 +240,8 @@ async function applySprintFoundryPatch(
       const sourceHunkLines = hunk
         .filter((line) => line.startsWith(" ") || line.startsWith("-"))
         .map((line) => line.slice(1));
-      const startIndex = sourceHunkLines.length === 0
-        ? cursor
-        : findMatchingHunkStart(originalLines, sourceHunkLines, cursor);
+      const startIndex =
+        sourceHunkLines.length === 0 ? cursor : findMatchingHunkStart(originalLines, sourceHunkLines, cursor);
       if (startIndex < 0) {
         throw new Error(`Could not match update hunk for ${operation.filePath}`);
       }
@@ -281,27 +275,16 @@ async function applySprintFoundryPatch(
     }
 
     nextLines.push(...originalLines.slice(cursor));
-    const targetPath = resolveWorkspacePath(
-      workspacePath,
-      operation.moveTo ?? operation.filePath
-    );
+    const targetPath = resolveWorkspacePath(workspacePath, operation.moveTo ?? operation.filePath);
     await fs.mkdir(path.dirname(targetPath), { recursive: true });
-    await fs.writeFile(
-      targetPath,
-      joinFileLines(nextLines, originalHasTrailingNewline),
-      "utf-8"
-    );
+    await fs.writeFile(targetPath, joinFileLines(nextLines, originalHasTrailingNewline), "utf-8");
     if (targetPath !== sourcePath) {
       await fs.rm(sourcePath, { force: true });
     }
   }
 }
 
-function findMatchingHunkStart(
-  originalLines: string[],
-  sourceHunkLines: string[],
-  minIndex: number
-): number {
+function findMatchingHunkStart(originalLines: string[], sourceHunkLines: string[], minIndex: number): number {
   if (sourceHunkLines.length === 0) return minIndex;
   for (let start = minIndex; start <= originalLines.length - sourceHunkLines.length; start += 1) {
     let matched = true;
@@ -345,10 +328,7 @@ function ensureTrailingSeparator(value: string): string {
   return value.endsWith(path.sep) ? value : `${value}${path.sep}`;
 }
 
-function pickString(
-  value: Record<string, unknown>,
-  keys: string[]
-): string | undefined {
+function pickString(value: Record<string, unknown>, keys: string[]): string | undefined {
   for (const key of keys) {
     const candidate = value[key];
     if (typeof candidate === "string" && candidate.trim()) {

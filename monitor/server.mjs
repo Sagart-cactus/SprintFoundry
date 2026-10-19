@@ -4,7 +4,16 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { promises as fs, watchFile, unwatchFile, statSync, openSync, readSync, closeSync } from "node:fs";
+import {
+  promises as fs,
+  watchFile,
+  unwatchFile,
+  statSync,
+  openSync,
+  fstatSync,
+  readSync,
+  closeSync,
+} from "node:fs";
 import { execFile, spawn } from "node:child_process";
 import { parse as parseYaml } from "yaml";
 
@@ -12,8 +21,12 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const publicV3Dir = path.join(__dirname, "public-v3");
 const repoRoot = path.resolve(__dirname, "..");
-const runsRoot = process.env.SPRINTFOUNDRY_RUNS_ROOT ?? process.env.AGENTSDLC_RUNS_ROOT ?? path.join(os.tmpdir(), "sprintfoundry");
-const sessionsRoot = process.env.SPRINTFOUNDRY_SESSIONS_DIR ?? path.join(os.homedir(), ".sprintfoundry", "sessions");
+const runsRoot =
+  process.env.SPRINTFOUNDRY_RUNS_ROOT ??
+  process.env.AGENTSDLC_RUNS_ROOT ??
+  path.join(os.tmpdir(), "sprintfoundry");
+const sessionsRoot =
+  process.env.SPRINTFOUNDRY_SESSIONS_DIR ?? path.join(os.homedir(), ".sprintfoundry", "sessions");
 const configRoot = process.env.SPRINTFOUNDRY_CONFIG_DIR ?? path.join(repoRoot, "config");
 const autoexecuteDryRun = process.env.SPRINTFOUNDRY_AUTORUN_DRY_RUN === "1";
 const monitorAuthRequired = process.env.SPRINTFOUNDRY_MONITOR_AUTH_REQUIRED !== "0";
@@ -34,17 +47,23 @@ const port = Number(portArg ?? process.env.MONITOR_PORT ?? 4310);
 const host = String(hostArg ?? process.env.MONITOR_HOST ?? "127.0.0.1").trim() || "127.0.0.1";
 const webhookPortEnv = process.env.SPRINTFOUNDRY_WEBHOOK_PORT;
 const webhookPortCandidate = Number(webhookPortEnv ?? "");
-const webhookSplitEnabled = Number.isFinite(webhookPortCandidate) && webhookPortCandidate > 0 && webhookPortCandidate !== port;
+const webhookSplitEnabled =
+  Number.isFinite(webhookPortCandidate) && webhookPortCandidate > 0 && webhookPortCandidate !== port;
 const webhookPort = webhookSplitEnabled ? webhookPortCandidate : port;
 const monitorApiMaxBodyBytes = toPositiveInt(process.env.SPRINTFOUNDRY_MONITOR_API_MAX_BODY_BYTES, 262_144);
-const monitorWebhookMaxBodyBytes = toPositiveInt(process.env.SPRINTFOUNDRY_MONITOR_WEBHOOK_MAX_BODY_BYTES, 1_048_576);
+const monitorWebhookMaxBodyBytes = toPositiveInt(
+  process.env.SPRINTFOUNDRY_MONITOR_WEBHOOK_MAX_BODY_BYTES,
+  1_048_576,
+);
 const monitorBodyReadTimeoutMs = toPositiveInt(process.env.SPRINTFOUNDRY_MONITOR_BODY_TIMEOUT_MS, 10_000);
 const handoffK8sApiUrlOverride = String(process.env.SPRINTFOUNDRY_MONITOR_HANDOFF_K8S_API_URL ?? "").trim();
 const handoffK8sTokenFile = String(
-  process.env.SPRINTFOUNDRY_MONITOR_HANDOFF_K8S_TOKEN_FILE ?? "/var/run/secrets/kubernetes.io/serviceaccount/token"
+  process.env.SPRINTFOUNDRY_MONITOR_HANDOFF_K8S_TOKEN_FILE ??
+    "/var/run/secrets/kubernetes.io/serviceaccount/token",
 ).trim();
 const handoffK8sCaFile = String(
-  process.env.SPRINTFOUNDRY_MONITOR_HANDOFF_K8S_CA_FILE ?? "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+  process.env.SPRINTFOUNDRY_MONITOR_HANDOFF_K8S_CA_FILE ??
+    "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
 ).trim();
 const handoffPvcLookupCacheTtlMs = toPositiveInt(process.env.SPRINTFOUNDRY_MONITOR_HANDOFF_CACHE_MS, 30_000);
 const autoexecuteSeenStorePath = path.join(sessionsRoot, ".monitor-autoexecute-seen.json");
@@ -52,7 +71,7 @@ const autoexecuteSeenStorePath = path.join(sessionsRoot, ".monitor-autoexecute-s
 let autoexecuteCache = { loadedAt: 0, projects: [] };
 let projectRepoUrlCache = { loadedAt: 0, byProjectId: new Map() };
 let projectArgCache = { loadedAt: 0, byProjectId: new Map() };
-let workspaceRepoUrlCache = { loadedAt: 0, byWorkspacePath: new Map() };
+const workspaceRepoUrlCache = { loadedAt: 0, byWorkspacePath: new Map() };
 const autoexecuteQueue = [];
 const autoexecuteHistory = [];
 let autoexecuteRunning = false;
@@ -183,7 +202,10 @@ async function readStepResult(runPath, stepNumber, maxCompletedStep = null) {
   const contextDir = path.join(runPath, ".agent-context");
   const contextEntries = await fs.readdir(contextDir, { withFileTypes: true }).catch(() => []);
   const contextMatches = contextEntries
-    .filter((entry) => entry.isFile() && entry.name.startsWith(`step-${stepNumber}-`) && entry.name.endsWith(".json"))
+    .filter(
+      (entry) =>
+        entry.isFile() && entry.name.startsWith(`step-${stepNumber}-`) && entry.name.endsWith(".json"),
+    )
     .map((entry) => entry.name);
   if (contextMatches.length > 0) {
     const bestContextFile = contextMatches.sort().at(-1);
@@ -229,7 +251,7 @@ async function readStepResultFromDb(projectId, runId, stepNumber) {
       ORDER BY step_attempt DESC
       LIMIT 1
     `,
-    [runRecord.run_id, stepNumber]
+    [runRecord.run_id, stepNumber],
   );
   const row = result.rows[0];
   return {
@@ -490,7 +512,7 @@ async function getWorkspaceRepoUrl(runPath) {
         }
         const normalized = normalizeRepoUrlForDisplay(String(stdout ?? "").trim());
         resolve(normalized);
-      }
+      },
     );
   });
 
@@ -502,9 +524,10 @@ function normalizeGitHubAutoexecuteConfig(raw) {
   const github = raw?.autoexecute?.github ?? {};
   const topEnabled = raw?.autoexecute?.enabled;
   const enabled = (github.enabled ?? topEnabled) === true;
-  const allowedEvents = Array.isArray(github.allowed_events) && github.allowed_events.length
-    ? github.allowed_events.map((v) => String(v))
-    : ["issue_comment.created"];
+  const allowedEvents =
+    Array.isArray(github.allowed_events) && github.allowed_events.length
+      ? github.allowed_events.map((v) => String(v))
+      : ["issue_comment.created"];
   return {
     enabled,
     webhookSecret: String(github.webhook_secret ?? "").trim(),
@@ -520,9 +543,10 @@ function normalizeLinearAutoexecuteConfig(raw) {
   const linear = raw?.autoexecute?.linear ?? {};
   const topEnabled = raw?.autoexecute?.enabled;
   const enabled = (linear.enabled ?? topEnabled) === true;
-  const allowedEvents = Array.isArray(linear.allowed_events) && linear.allowed_events.length
-    ? linear.allowed_events.map((v) => String(v))
-    : ["Issue.create"];
+  const allowedEvents =
+    Array.isArray(linear.allowed_events) && linear.allowed_events.length
+      ? linear.allowed_events.map((v) => String(v))
+      : ["Issue.create"];
   return {
     enabled,
     webhookSecret: String(linear.webhook_secret ?? "").trim(),
@@ -583,11 +607,15 @@ async function loadAutoexecuteProjects() {
       const autoCfg = webhookHandlerApi.normalizeLinearAutoexecuteConfig(project);
       if (!autoCfg.enabled) continue;
 
-      const teamId = String(ticketSource?.config?.team_id ?? "").trim().toLowerCase();
-      const teamKey = String(ticketSource?.config?.team_key ?? "").trim().toLowerCase();
+      const teamId = String(ticketSource?.config?.team_id ?? "")
+        .trim()
+        .toLowerCase();
+      const teamKey = String(ticketSource?.config?.team_key ?? "")
+        .trim()
+        .toLowerCase();
       if (!teamId && !teamKey) {
         console.warn(
-          `[monitor] Skipping linear autoexecute for ${fileName}: team_id/team_key required to avoid ambiguous routing`
+          `[monitor] Skipping linear autoexecute for ${fileName}: team_id/team_key required to avoid ambiguous routing`,
         );
         continue;
       }
@@ -610,9 +638,11 @@ async function loadAutoexecuteProjects() {
 function findAutoexecuteProject(owner, repo, projects) {
   const ownerNorm = String(owner ?? "").toLowerCase();
   const repoNorm = String(repo ?? "").toLowerCase();
-  return projects.find(
-    (project) => project.provider === "github" && project.owner === ownerNorm && project.repo === repoNorm
-  ) ?? null;
+  return (
+    projects.find(
+      (project) => project.provider === "github" && project.owner === ownerNorm && project.repo === repoNorm,
+    ) ?? null
+  );
 }
 
 function findLinearAutoexecuteProject(payload, projects) {
@@ -621,15 +651,15 @@ function findLinearAutoexecuteProject(payload, projects) {
 
   const data = payload?.data ?? {};
   const identifier = String(data?.identifier ?? data?.issue?.identifier ?? "");
-  const identifierPrefix = identifier.includes("-")
-    ? identifier.split("-")[0].toLowerCase()
-    : "";
-  const candidates = new Set([
-    String(data?.teamId ?? "").toLowerCase(),
-    String(data?.team?.id ?? "").toLowerCase(),
-    String(data?.team?.key ?? "").toLowerCase(),
-    identifierPrefix,
-  ].filter(Boolean));
+  const identifierPrefix = identifier.includes("-") ? identifier.split("-")[0].toLowerCase() : "";
+  const candidates = new Set(
+    [
+      String(data?.teamId ?? "").toLowerCase(),
+      String(data?.team?.id ?? "").toLowerCase(),
+      String(data?.team?.key ?? "").toLowerCase(),
+      identifierPrefix,
+    ].filter(Boolean),
+  );
 
   const matches = linearProjects.filter((project) => {
     if (project.teamId && candidates.has(project.teamId)) return true;
@@ -772,7 +802,7 @@ async function persistAutoexecuteSeen() {
       entries,
     },
     null,
-    2
+    2,
   );
 
   await fs.mkdir(path.dirname(autoexecuteSeenStorePath), { recursive: true });
@@ -862,20 +892,20 @@ async function executeAutoexecuteTask(task) {
       [...invocation.prefixArgs, ...cliArgs],
       { cwd: invocation.cwd, env: childEnv, maxBuffer: 4 * 1024 * 1024 },
       (err, stdout, stderr) => {
-      autoexecuteHistory.push({
-        ts: new Date().toISOString(),
-        status: err ? "failed" : "completed",
-        task,
-        command: renderCliCommand(invocation, cliArgs),
-        stdout: String(stdout ?? "").slice(-4000),
-        stderr: String(stderr ?? "").slice(-4000),
-      });
-      if (err) {
-        reject(err);
-        return;
-      }
-      resolve();
-      }
+        autoexecuteHistory.push({
+          ts: new Date().toISOString(),
+          status: err ? "failed" : "completed",
+          task,
+          command: renderCliCommand(invocation, cliArgs),
+          stdout: String(stdout ?? "").slice(-4000),
+          stderr: String(stderr ?? "").slice(-4000),
+        });
+        if (err) {
+          reject(err);
+          return;
+        }
+        resolve();
+      },
     );
   });
 }
@@ -904,7 +934,7 @@ async function processAutoexecuteQueue() {
 }
 
 async function handleGitHubWebhookRequest(req, res) {
-  let rawBody = "";
+  let rawBody;
   try {
     rawBody = await readBody(req, {
       maxBytes: monitorWebhookMaxBodyBytes,
@@ -989,7 +1019,7 @@ async function handleGitHubWebhookRequest(req, res) {
 }
 
 async function handleLinearWebhookRequest(req, res) {
-  let rawBody = "";
+  let rawBody;
   try {
     rawBody = await readBody(req, {
       maxBytes: monitorWebhookMaxBodyBytes,
@@ -1131,16 +1161,10 @@ function buildRunIdCandidates(rawRunId) {
 }
 
 function resolveCanonicalRunId(runId, events = [], session = null) {
-  const eventRunId =
-    events.find((evt) => typeof evt?.run_id === "string" && evt.run_id.trim())?.run_id ?? "";
-  const sessionRunId =
-    typeof session?.run_id === "string" && session.run_id.trim() ? session.run_id : "";
+  const eventRunId = events.find((evt) => typeof evt?.run_id === "string" && evt.run_id.trim())?.run_id ?? "";
+  const sessionRunId = typeof session?.run_id === "string" && session.run_id.trim() ? session.run_id : "";
 
-  return (
-    canonicalizeRunId(eventRunId) ||
-    canonicalizeRunId(sessionRunId) ||
-    canonicalizeRunId(runId)
-  );
+  return canonicalizeRunId(eventRunId) || canonicalizeRunId(sessionRunId) || canonicalizeRunId(runId);
 }
 
 function deriveWholeRunNamespaces(projectId, runId) {
@@ -1210,7 +1234,7 @@ async function requestHandoffK8sApi(requestPath) {
         res.on("end", () => {
           resolve({ status: res.statusCode ?? 0, body });
         });
-      }
+      },
     );
     req.on("error", reject);
     req.end();
@@ -1233,6 +1257,12 @@ async function requestHandoffK8sJson(requestPath) {
   };
 }
 
+function sanitizeForLog(value) {
+  // Strips newlines and terminal escape sequences so values cannot forge log lines.
+  // eslint-disable-next-line no-control-regex
+  return String(value).replace(/[\r\n\u0000-\u001f\u007f]/g, "");
+}
+
 async function hasRunWorkspacePvc(namespace, runId) {
   const normalizedNamespace = typeof namespace === "string" ? namespace.trim() : "";
   const normalizedRunId = typeof runId === "string" ? runId.trim() : "";
@@ -1248,21 +1278,21 @@ async function hasRunWorkspacePvc(namespace, runId) {
   const pvcName = `sf-run-ws-${normalizedRunId}`;
   try {
     const response = await requestHandoffK8sApi(
-      `/api/v1/namespaces/${encodeURIComponent(normalizedNamespace)}/persistentvolumeclaims/${encodeURIComponent(pvcName)}`
+      `/api/v1/namespaces/${encodeURIComponent(normalizedNamespace)}/persistentvolumeclaims/${encodeURIComponent(pvcName)}`,
     );
     const exists = response.status === 200;
     if (response.status !== 200 && response.status !== 404 && response.status !== 0) {
       console.warn(
-        `[monitor] handoff PVC lookup failed for ${normalizedNamespace}/${pvcName}: HTTP ${response.status}`
+        `[monitor] handoff PVC lookup failed for ${sanitizeForLog(normalizedNamespace)}/${sanitizeForLog(pvcName)}: HTTP ${response.status}`,
       );
     }
     handoffPvcLookupCache.set(cacheKey, { checkedAt: now, exists });
     return exists;
   } catch (error) {
     console.warn(
-      `[monitor] handoff PVC lookup failed for ${normalizedNamespace}/${pvcName}: ${
+      `[monitor] handoff PVC lookup failed for ${sanitizeForLog(normalizedNamespace)}/${sanitizeForLog(pvcName)}: ${
         error instanceof Error ? error.message : String(error)
-      }`
+      }`,
     );
     handoffPvcLookupCache.set(cacheKey, { checkedAt: now, exists: false });
     return false;
@@ -1340,18 +1370,28 @@ async function lookupSandboxHost(projectId, runId) {
       return cached.value;
     }
 
-    const claimName = `sf-${String(runId ?? "").trim().toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "run"}`;
+    const claimName = `sf-${
+      String(runId ?? "")
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9-]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 60) || "run"
+    }`;
     try {
       const [claimResponse, podsResponse] = await Promise.all([
         requestHandoffK8sJson(
-          `/apis/extensions.agents.x-k8s.io/v1alpha1/namespaces/${encodeURIComponent(namespace)}/sandboxclaims/${encodeURIComponent(claimName)}`
+          `/apis/extensions.agents.x-k8s.io/v1alpha1/namespaces/${encodeURIComponent(namespace)}/sandboxclaims/${encodeURIComponent(claimName)}`,
         ),
         requestHandoffK8sJson(
-          `/api/v1/namespaces/${encodeURIComponent(namespace)}/pods?labelSelector=${encodeURIComponent(`sprintfoundry.io/run-id=${runId}`)}`
+          `/api/v1/namespaces/${encodeURIComponent(namespace)}/pods?labelSelector=${encodeURIComponent(`sprintfoundry.io/run-id=${runId}`)}`,
         ),
       ]);
 
-      if (claimResponse.status === 404 && (podsResponse.status === 404 || !Array.isArray(podsResponse.json?.items))) {
+      if (
+        claimResponse.status === 404 &&
+        (podsResponse.status === 404 || !Array.isArray(podsResponse.json?.items))
+      ) {
         sandboxHostLookupCache.set(cacheKey, { checkedAt: now, value: null });
         continue;
       }
@@ -1360,8 +1400,8 @@ async function lookupSandboxHost(projectId, runId) {
       const sandboxName = sandboxNameFromClaim(claim);
       const sandboxResponse = sandboxName
         ? await requestHandoffK8sJson(
-          `/apis/agents.x-k8s.io/v1alpha1/namespaces/${encodeURIComponent(namespace)}/sandboxes/${encodeURIComponent(sandboxName)}`
-        )
+            `/apis/agents.x-k8s.io/v1alpha1/namespaces/${encodeURIComponent(namespace)}/sandboxes/${encodeURIComponent(sandboxName)}`,
+          )
         : { status: 0, json: null };
       const pods = Array.isArray(podsResponse.json?.items) ? podsResponse.json.items : [];
       const value = {
@@ -1379,7 +1419,7 @@ async function lookupSandboxHost(projectId, runId) {
       console.warn(
         `[monitor] sandbox host lookup failed for ${namespace}/${runId}: ${
           error instanceof Error ? error.message : String(error)
-        }`
+        }`,
       );
       sandboxHostLookupCache.set(cacheKey, { checkedAt: now, value: null });
       return null;
@@ -1400,7 +1440,10 @@ async function getDatabasePool() {
       try {
         pgModule = await import("pg");
       } catch (err) {
-        throw new Error(`Database backend requested, but "pg" is unavailable: ${err instanceof Error ? err.message : String(err)}`);
+        throw new Error(
+          `Database backend requested, but "pg" is unavailable: ${err instanceof Error ? err.message : String(err)}`,
+          { cause: err },
+        );
       }
       const Pool = pgModule?.Pool ?? pgModule?.default?.Pool;
       if (!Pool) {
@@ -1420,7 +1463,10 @@ async function getRedisSubscriberFactory() {
       try {
         redisModule = await import("redis");
       } catch (err) {
-        throw new Error(`Redis backend requested, but "redis" is unavailable: ${err instanceof Error ? err.message : String(err)}`);
+        throw new Error(
+          `Redis backend requested, but "redis" is unavailable: ${err instanceof Error ? err.message : String(err)}`,
+          { cause: err },
+        );
       }
       const createClient = redisModule?.createClient ?? redisModule?.default?.createClient;
       if (!createClient) {
@@ -1487,7 +1533,7 @@ async function getDbRunRecord(projectId, runId) {
       WHERE project_id = $1 AND run_id = $2
       LIMIT 1
     `,
-    [projectId, runId]
+    [projectId, runId],
   );
   return query.rows[0] ?? null;
 }
@@ -1499,7 +1545,7 @@ async function readEventsFromDb(runId, limit = null) {
   const boundedLimit = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : null;
   const queryResult = boundedLimit
     ? await db.query(
-      `
+        `
         SELECT event_type, timestamp, data
         FROM (
           SELECT event_type, timestamp, data, received_at, event_id
@@ -1510,21 +1556,19 @@ async function readEventsFromDb(runId, limit = null) {
         ) recent
         ORDER BY timestamp ASC, received_at ASC, event_id ASC
       `,
-      [runId, boundedLimit]
-    )
+        [runId, boundedLimit],
+      )
     : await db.query(
-      `
+        `
         SELECT event_type, timestamp, data
         FROM events
         WHERE run_id = $1
         ORDER BY timestamp ASC, received_at ASC, event_id ASC
       `,
-      [runId]
-    );
+        [runId],
+      );
 
-  return queryResult.rows
-    .map((row) => normalizeMonitorEvent(row))
-    .filter(Boolean);
+  return queryResult.rows.map((row) => normalizeMonitorEvent(row)).filter(Boolean);
 }
 
 function buildDbSessionFallback(runRecord) {
@@ -1542,9 +1586,7 @@ function buildDbSessionFallback(runRecord) {
 }
 
 function extractResultSummaryText(result) {
-  return typeof result?.summary === "string" && result.summary.trim()
-    ? result.summary.trim()
-    : null;
+  return typeof result?.summary === "string" && result.summary.trim() ? result.summary.trim() : null;
 }
 
 function parseGitHubPullRequestUrl(prUrl) {
@@ -1578,7 +1620,9 @@ async function readGitHubPullRequestPatch(prUrl, filePath) {
   }
 
   for (let page = 1; page <= 10; page += 1) {
-    const apiUrl = new URL(`https://api.github.com/repos/${parsed.owner}/${parsed.repo}/pulls/${parsed.pullNumber}/files`);
+    const apiUrl = new URL(
+      `https://api.github.com/repos/${parsed.owner}/${parsed.repo}/pulls/${parsed.pullNumber}/files`,
+    );
     apiUrl.searchParams.set("per_page", "100");
     apiUrl.searchParams.set("page", String(page));
 
@@ -1601,9 +1645,8 @@ async function readGitHubPullRequestPatch(prUrl, filePath) {
     const match = payload.find((entry) => {
       if (!entry || typeof entry !== "object") return false;
       const filename = typeof entry.filename === "string" ? entry.filename.replace(/^\.?\//, "") : "";
-      const previousFilename = typeof entry.previous_filename === "string"
-        ? entry.previous_filename.replace(/^\.?\//, "")
-        : "";
+      const previousFilename =
+        typeof entry.previous_filename === "string" ? entry.previous_filename.replace(/^\.?\//, "") : "";
       return filename === targetFile || previousFilename === targetFile;
     });
     if (match) {
@@ -1638,9 +1681,10 @@ async function loadRunSummaryFromDbRecord(runRecord, options = {}) {
   const handoffMeta = options.includeHandoff
     ? await buildHandoffMetadata(runRecord.project_id, runRecord.run_id)
     : null;
-  const sandboxHost = options.includeSandboxHost && hostingMode === "k8s-agent-sandbox"
-    ? await lookupSandboxHost(runRecord.project_id, runRecord.run_id)
-    : null;
+  const sandboxHost =
+    options.includeSandboxHost && hostingMode === "k8s-agent-sandbox"
+      ? await lookupSandboxHost(runRecord.project_id, runRecord.run_id)
+      : null;
   const operationalAlerts = buildOperationalAlerts({
     status: hasEvents ? inferStatus(events) : (runRecord.status ?? "unknown"),
     hostingMode,
@@ -1657,11 +1701,14 @@ async function loadRunSummaryFromDbRecord(runRecord, options = {}) {
     classification: plan?.classification ?? runRecord.plan_classification ?? null,
     step_count: hasEvents ? (plan?.steps?.length ?? 0) : (runRecord.total_steps ?? 0),
     steps,
-    started_at: events.find((e) => e.event_type === "task.created")?.timestamp ?? toIsoTimestamp(runRecord.created_at),
+    started_at:
+      events.find((e) => e.event_type === "task.created")?.timestamp ?? toIsoTimestamp(runRecord.created_at),
     last_event_type: last?.event_type ?? null,
     last_event_ts: last?.timestamp
       ? Date.parse(last.timestamp)
-      : (runRecord.updated_at ? Date.parse(String(runRecord.updated_at)) : null),
+      : runRecord.updated_at
+        ? Date.parse(String(runRecord.updated_at))
+        : null,
     workspace_path: runRecord.workspace_path ?? "",
     terminal_workflow_state: snapshotState.terminal_workflow_state,
     durable_snapshot: snapshotState.durable_snapshot,
@@ -1699,7 +1746,7 @@ async function listRunsFromDb() {
         completed_at,
         error
       FROM runs
-    `
+    `,
   );
   const runs = await Promise.all(result.rows.map((runRecord) => loadRunSummaryFromDbRecord(runRecord)));
   runs.sort((a, b) => (b.last_event_ts ?? 0) - (a.last_event_ts ?? 0));
@@ -1711,7 +1758,10 @@ async function loadRunFromDb(projectId, runId) {
   if (!runRecord) {
     throw new Error(`Run not found: ${projectId}/${runId}`);
   }
-  const summary = await loadRunSummaryFromDbRecord(runRecord, { includeHandoff: true, includeSandboxHost: true });
+  const summary = await loadRunSummaryFromDbRecord(runRecord, {
+    includeHandoff: true,
+    includeSandboxHost: true,
+  });
   const events = await readEventsFromDb(runRecord.run_id);
   const planEvent = events.find((e) => e.event_type === "task.plan_generated");
   const db = await getDatabasePool();
@@ -1722,10 +1772,10 @@ async function loadRunFromDb(projectId, runId) {
       WHERE run_id = $1
       ORDER BY step_number ASC, step_attempt DESC
     `,
-    [runRecord.run_id]
+    [runRecord.run_id],
   );
   const summaryByStep = new Map(
-    stepResults.rows.map((row) => [row.step_number, extractResultSummaryText(row.result)])
+    stepResults.rows.map((row) => [row.step_number, extractResultSummaryText(row.result)]),
   );
 
   return {
@@ -1761,7 +1811,7 @@ async function readLogTextFromDb(projectId, runId, kind, lines = 400, stepNumber
         ORDER BY step_number DESC, step_attempt DESC
         LIMIT 1
       `,
-      params
+      params,
     );
     const row = result.rows[0];
     if (!row) return "";
@@ -1798,7 +1848,7 @@ async function readLogTextFromDb(projectId, runId, kind, lines = 400, stepNumber
           AND step_number = $2
           AND ${isPlanner ? "agent = 'planner'" : "agent <> 'planner'"}
       `,
-      [runRecord.run_id, stepNumber]
+      [runRecord.run_id, stepNumber],
     );
     const latestAttempt = Number(attemptRows.rows?.[0]?.step_attempt ?? 0);
     if (!Number.isFinite(latestAttempt) || latestAttempt <= 0) {
@@ -1816,7 +1866,7 @@ async function readLogTextFromDb(projectId, runId, kind, lines = 400, stepNumber
       ORDER BY ${hasStepFilter ? "sequence ASC" : "step_number ASC, step_attempt ASC, sequence ASC"}
       LIMIT 50000
     `,
-    params
+    params,
   );
   const text = chunks.rows.map((row) => String(row.chunk ?? "")).join("");
   return trimToLineCount(text, lines);
@@ -1841,11 +1891,9 @@ async function readNewEventsFromDbSince(runIdOrNull, cursor) {
       ORDER BY received_at ASC, event_id ASC
       LIMIT 500
     `,
-    params
+    params,
   );
-  const events = result.rows
-    .map((row) => normalizeMonitorEvent(row))
-    .filter(Boolean);
+  const events = result.rows.map((row) => normalizeMonitorEvent(row)).filter(Boolean);
   const lastRow = result.rows.at(-1);
   return {
     events,
@@ -1919,7 +1967,10 @@ async function resolveRunPath(projectId, runId) {
   const runIdCandidates = buildRunIdCandidates(runId);
   for (const runIdCandidate of runIdCandidates) {
     const runPath = safeJoin(runsRoot, projectId, runIdCandidate);
-    const exists = await fs.stat(runPath).then((s) => s.isDirectory(), () => false);
+    const exists = await fs.stat(runPath).then(
+      (s) => s.isDirectory(),
+      () => false,
+    );
     if (exists) return runPath;
   }
 
@@ -1928,17 +1979,16 @@ async function resolveRunPath(projectId, runId) {
   const match = sessions.find(
     (s) =>
       s?.project_id === projectId &&
-      (
-        runIdCandidates.includes(String(s?.run_id ?? "")) ||
-        canonicalizeRunId(s?.run_id) === canonicalRunId
-      ) &&
+      (runIdCandidates.includes(String(s?.run_id ?? "")) ||
+        canonicalizeRunId(s?.run_id) === canonicalRunId) &&
       typeof s?.workspace_path === "string" &&
-      s.workspace_path.length > 0
+      s.workspace_path.length > 0,
   );
   if (match?.workspace_path) {
-    const sessionPathExists = await fs
-      .stat(match.workspace_path)
-      .then((s) => s.isDirectory(), () => false);
+    const sessionPathExists = await fs.stat(match.workspace_path).then(
+      (s) => s.isDirectory(),
+      () => false,
+    );
     if (sessionPathExists) return match.workspace_path;
   }
 
@@ -1984,15 +2034,15 @@ async function findSessionMetadata(projectId, runId, workspacePath = null) {
   const sessions = await listSessionMetadata();
   const runIdCandidates = buildRunIdCandidates(runId);
   const canonicalRunId = canonicalizeRunId(runId);
-  return sessions.find(
-    (session) =>
-      session?.project_id === projectId &&
-      (
-        runIdCandidates.includes(String(session?.run_id ?? "")) ||
-        canonicalizeRunId(session?.run_id) === canonicalRunId
-      ) &&
-      (!workspacePath || session?.workspace_path === workspacePath)
-  ) ?? null;
+  return (
+    sessions.find(
+      (session) =>
+        session?.project_id === projectId &&
+        (runIdCandidates.includes(String(session?.run_id ?? "")) ||
+          canonicalizeRunId(session?.run_id) === canonicalRunId) &&
+        (!workspacePath || session?.workspace_path === workspacePath),
+    ) ?? null
+  );
 }
 
 function inferHostingModeFromExecutionBackend(executionBackend, session = null) {
@@ -2028,12 +2078,12 @@ function extractHostingMode(events, session = null, runRecord = null) {
 }
 
 function extractSnapshotState(events, session = null) {
-  const terminalWorkflowState = typeof session?.terminal_workflow_state === "string"
-    ? session.terminal_workflow_state
-    : null;
-  const durableSnapshot = session?.durable_snapshot && typeof session.durable_snapshot === "object"
-    ? session.durable_snapshot
-    : null;
+  const terminalWorkflowState =
+    typeof session?.terminal_workflow_state === "string" ? session.terminal_workflow_state : null;
+  const durableSnapshot =
+    session?.durable_snapshot && typeof session.durable_snapshot === "object"
+      ? session.durable_snapshot
+      : null;
 
   if (terminalWorkflowState === "cleanup_completed") {
     return {
@@ -2124,7 +2174,8 @@ function buildOperationalAlerts({ status, hostingMode, snapshotState, sandboxHos
       level: "error",
       code: "snapshot_failed",
       label: "Snapshot failed",
-      detail: durableSnapshot?.error || "Workspace snapshot or cleanup failed. Manual recovery may be required.",
+      detail:
+        durableSnapshot?.error || "Workspace snapshot or cleanup failed. Manual recovery may be required.",
     });
   } else if (terminalState === "snapshot_uploading") {
     alerts.push({
@@ -2174,9 +2225,7 @@ function extractRuntimeSkills(runtimeMetadata) {
   const skills = providerMeta.skills;
   if (!skills || typeof skills !== "object") return null;
 
-  const names = Array.isArray(skills.names)
-    ? skills.names.map((name) => String(name)).filter(Boolean)
-    : [];
+  const names = Array.isArray(skills.names) ? skills.names.map((name) => String(name)).filter(Boolean) : [];
   const warnings = Array.isArray(skills.warnings)
     ? skills.warnings.map((warning) => String(warning)).filter(Boolean)
     : [];
@@ -2268,7 +2317,7 @@ function extractRunResumeMetadata(events) {
       evt?.event_type === "task.started" &&
       evt?.data &&
       typeof evt.data === "object" &&
-      evt.data.resumed === true
+      evt.data.resumed === true,
   );
   const resumeSteps = resumedStartEvents
     .map((evt) => Number(evt?.data?.resume_step))
@@ -2323,32 +2372,28 @@ function extractRepoUrl(ticket) {
 function extractRunSourceMetadata(events, session = null, projectRepoUrl = null) {
   const taskCreatedEvents = events.filter((evt) => evt?.event_type === "task.created");
   const initialCreated = taskCreatedEvents.find((evt) => typeof evt?.data?.source === "string") ?? null;
-  const ticketCreated = taskCreatedEvents.find((evt) => evt?.data?.ticket && typeof evt.data.ticket === "object") ?? null;
+  const ticketCreated =
+    taskCreatedEvents.find((evt) => evt?.data?.ticket && typeof evt.data.ticket === "object") ?? null;
   const ticket = ticketCreated?.data?.ticket ?? null;
   const explicitTicketUrl = ticketCreated?.data?.ticket_url;
   const explicitTicketRepoUrl = ticketCreated?.data?.ticket_repo_url;
-  const ticketUrl = (typeof explicitTicketUrl === "string" && explicitTicketUrl.trim())
-    ? explicitTicketUrl
-    : extractTicketUrl(ticket);
-  const ticketRepoUrl = (
+  const ticketUrl =
+    typeof explicitTicketUrl === "string" && explicitTicketUrl.trim()
+      ? explicitTicketUrl
+      : extractTicketUrl(ticket);
+  const ticketRepoUrl =
     typeof explicitTicketRepoUrl === "string" && explicitTicketRepoUrl.trim()
       ? explicitTicketRepoUrl
-      : (projectRepoUrl || extractRepoUrl(ticket))
-  );
+      : projectRepoUrl || extractRepoUrl(ticket);
 
-  const triggerSource = (
-    ticketCreated?.data?.trigger_source ??
-    initialCreated?.data?.trigger_source ??
-    null
-  );
+  const triggerSource = ticketCreated?.data?.trigger_source ?? initialCreated?.data?.trigger_source ?? null;
 
-  const ticketSource = (
+  const ticketSource =
     ticket?.source ??
     ticketCreated?.data?.source ??
     initialCreated?.data?.source ??
     session?.ticket_source ??
-    null
-  );
+    null;
 
   return {
     ticket_source: typeof ticketSource === "string" ? ticketSource : null,
@@ -2371,13 +2416,14 @@ async function loadRunSummary(projectId, runId, runPath, session = null, options
   const hasEvents = events.length > 0;
   const projectRepoUrl = await getProjectRepoUrl(projectId);
   const sourceMeta = extractRunSourceMetadata(events, session, projectRepoUrl);
-  const fallbackRepoUrl = sourceMeta.ticket_repo_url ?? await getWorkspaceRepoUrl(runPath);
+  const fallbackRepoUrl = sourceMeta.ticket_repo_url ?? (await getWorkspaceRepoUrl(runPath));
   const hostingMode = extractHostingMode(events, session);
   const snapshotState = extractSnapshotState(events, session);
   const handoffMeta = options.includeHandoff ? await buildHandoffMetadata(projectId, canonicalRunId) : null;
-  const sandboxHost = options.includeSandboxHost && hostingMode === "k8s-agent-sandbox"
-    ? await lookupSandboxHost(projectId, canonicalRunId)
-    : null;
+  const sandboxHost =
+    options.includeSandboxHost && hostingMode === "k8s-agent-sandbox"
+      ? await lookupSandboxHost(projectId, canonicalRunId)
+      : null;
   const operationalAlerts = buildOperationalAlerts({
     status: hasEvents ? inferStatus(events) : (session?.status ?? "unknown"),
     hostingMode,
@@ -2397,7 +2443,9 @@ async function loadRunSummary(projectId, runId, runPath, session = null, options
     last_event_type: last?.event_type ?? null,
     last_event_ts: last?.timestamp
       ? Date.parse(last.timestamp)
-      : (session?.updated_at ? Date.parse(session.updated_at) : null),
+      : session?.updated_at
+        ? Date.parse(session.updated_at)
+        : null,
     workspace_path: runPath,
     terminal_workflow_state: snapshotState.terminal_workflow_state,
     durable_snapshot: snapshotState.durable_snapshot,
@@ -2420,22 +2468,21 @@ async function loadRun(projectId, runId) {
   const events = await readEvents(runPath);
   const planEvent = events.find((e) => e.event_type === "task.plan_generated");
   const step_models = await loadStepModels(runPath);
-  const maxCompletedStep = summary.steps
-    .filter((step) => step.status === "completed" || step.status === "failed")
-    .map((step) => step.step_number)
-    .sort((a, b) => b - a)[0] ?? null;
+  const maxCompletedStep =
+    summary.steps
+      .filter((step) => step.status === "completed" || step.status === "failed")
+      .map((step) => step.step_number)
+      .sort((a, b) => b - a)[0] ?? null;
   const steps = await Promise.all(
     (summary.steps ?? []).map(async (step) => {
       const { result } = await readStepResult(runPath, step.step_number, maxCompletedStep);
       const summaryText =
-        typeof result?.summary === "string" && result.summary.trim()
-          ? result.summary.trim()
-          : null;
+        typeof result?.summary === "string" && result.summary.trim() ? result.summary.trim() : null;
       return {
         ...step,
         result_summary: summaryText,
       };
-    })
+    }),
   );
   return {
     ...summary,
@@ -2469,7 +2516,7 @@ async function loadStepModels(runPath) {
     const filePath = path.join(runPath, entry.name);
     const raw = await fs.readFile(filePath, "utf-8").catch(() => "");
     if (!raw) continue;
-    let parsed = null;
+    let parsed;
     try {
       parsed = JSON.parse(raw);
     } catch {
@@ -2541,11 +2588,9 @@ async function readLogText(projectId, runId, kind, lines = 400, stepNumber = nul
       const logPath = path.join(runPath, file);
       const stat = await fs.stat(logPath).catch(() => null);
       return stat ? { logPath, mtimeMs: stat.mtimeMs } : null;
-    })
+    }),
   );
-  const selected = candidates
-    .filter(Boolean)
-    .sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
+  const selected = candidates.filter(Boolean).sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
   if (!selected) return "";
   const logPath = selected.logPath;
   const raw = await fs.readFile(logPath, "utf-8").catch(() => "");
@@ -2617,10 +2662,11 @@ async function readStepResultSelected(projectId, runId, stepNumber) {
   if (useDatabaseBackend) return readStepResultFromDb(projectId, runId, stepNumber);
   const runPath = await resolveRunPath(projectId, runId);
   const runSummary = await loadRunSummary(projectId, runId, runPath);
-  const maxCompletedStep = runSummary.steps
-    .filter((step) => step.status === "completed" || step.status === "failed")
-    .map((step) => step.step_number)
-    .sort((a, b) => b - a)[0] ?? null;
+  const maxCompletedStep =
+    runSummary.steps
+      .filter((step) => step.status === "completed" || step.status === "failed")
+      .map((step) => step.step_number)
+      .sort((a, b) => b - a)[0] ?? null;
   return readStepResult(runPath, stepNumber, maxCompletedStep);
 }
 
@@ -2677,17 +2723,23 @@ function sseWrite(res, event, data) {
 }
 
 function readNewEventsFromOffset(filePath, offset) {
-  let content = "";
-  let newOffset = offset;
+  let content;
+  let newOffset;
   try {
-    const stat = statSync(filePath);
-    if (stat.size <= offset) return { events: [], newOffset: offset };
-    const fd = openSync(filePath, "r");
-    const buf = Buffer.alloc(stat.size - offset);
-    readSync(fd, buf, 0, buf.length, offset);
-    closeSync(fd);
-    content = buf.toString("utf-8");
-    newOffset = stat.size;
+    // The mode is ignored for read-only opens; it is passed so CodeQL's temp-file query
+    // does not treat this read as an insecure file creation.
+    const fd = openSync(filePath, "r", 0o600);
+    try {
+      // Size comes from the open descriptor so it matches the file actually being read.
+      const { size } = fstatSync(fd);
+      if (size <= offset) return { events: [], newOffset: offset };
+      const buf = Buffer.alloc(size - offset);
+      readSync(fd, buf, 0, buf.length, offset);
+      content = buf.toString("utf-8");
+      newOffset = size;
+    } finally {
+      closeSync(fd);
+    }
   } catch {
     return { events: [], newOffset: offset };
   }
@@ -2695,7 +2747,13 @@ function readNewEventsFromOffset(filePath, offset) {
     .split("\n")
     .map((l) => l.trim())
     .filter(Boolean)
-    .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+    .map((l) => {
+      try {
+        return JSON.parse(l);
+      } catch {
+        return null;
+      }
+    })
     .filter(Boolean);
   return { events, newOffset };
 }
@@ -2703,7 +2761,7 @@ function readNewEventsFromOffset(filePath, offset) {
 function startSSEWatcher(eventsFilePath, res) {
   let watcher = sseWatchers.get(eventsFilePath);
   if (!watcher) {
-    let currentOffset = 0;
+    let currentOffset;
     try {
       const stat = statSync(eventsFilePath);
       currentOffset = stat.size; // Start from current end — only stream NEW events
@@ -2742,7 +2800,11 @@ function stopSSEWatcher(eventsFilePath, res) {
 // Heartbeat to keep SSE connections alive through proxies
 const sseHeartbeatInterval = setInterval(() => {
   for (const client of sseClients) {
-    try { client.write(`:heartbeat\n\n`); } catch { /* ignore */ }
+    try {
+      client.write(`:heartbeat\n\n`);
+    } catch {
+      /* ignore */
+    }
   }
 }, SSE_HEARTBEAT_MS);
 sseHeartbeatInterval.unref?.();
@@ -2756,7 +2818,11 @@ async function startDatabaseSSEFeed(project, run, res) {
     if (!runRecord) {
       return () => {
         for (const cleanup of cleanups) {
-          try { cleanup(); } catch { /* best effort */ }
+          try {
+            cleanup();
+          } catch {
+            /* best effort */
+          }
         }
       };
     }
@@ -2820,7 +2886,11 @@ async function startDatabaseSSEFeed(project, run, res) {
 
   return () => {
     for (const cleanup of cleanups) {
-      try { cleanup(); } catch { /* best effort */ }
+      try {
+        cleanup();
+      } catch {
+        /* best effort */
+      }
     }
   };
 }
@@ -2930,7 +3000,7 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
-        "Connection": "keep-alive",
+        Connection: "keep-alive",
         "X-Accel-Buffering": "no", // Disable buffering in nginx
       });
 
@@ -3008,7 +3078,13 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { error: "Missing project/run/kind query params" });
         return;
       }
-      const text = await readLogTextSelected(project, run, kind, lines, Number.isFinite(stepNumber) ? stepNumber : null);
+      const text = await readLogTextSelected(
+        project,
+        run,
+        kind,
+        lines,
+        Number.isFinite(stepNumber) ? stepNumber : null,
+      );
       sendText(res, 200, text);
       return;
     }
@@ -3070,11 +3146,12 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const relFile = path.relative(runPath, absFile);
-      const git = (args) => new Promise((resolve) => {
-        execFile("git", args, { cwd: runPath, maxBuffer: 2 * 1024 * 1024 }, (err, stdout) => {
-          resolve({ ok: !err, stdout: stdout || "" });
+      const git = (args) =>
+        new Promise((resolve) => {
+          execFile("git", args, { cwd: runPath, maxBuffer: 2 * 1024 * 1024 }, (err, stdout) => {
+            resolve({ ok: !err, stdout: stdout || "" });
+          });
         });
-      });
       // Try last-commit diff first
       const diff = await git(["diff", "HEAD~1..HEAD", "--", relFile]);
       if (diff.ok && diff.stdout.trim()) {
@@ -3084,7 +3161,10 @@ const server = http.createServer(async (req, res) => {
       // Fallback: show the file as entirely new (single-commit workspace)
       const show = await git(["show", `HEAD:${relFile}`]);
       if (show.ok && show.stdout) {
-        const body = show.stdout.split("\n").map((l) => `+${l}`).join("\n");
+        const body = show.stdout
+          .split("\n")
+          .map((l) => `+${l}`)
+          .join("\n");
         const synth = `--- /dev/null\n+++ b/${relFile}\n@@ -0,0 +1 @@\n${body}`;
         sendJson(res, 200, { diff: synth, kind: "new" });
         return;
@@ -3092,7 +3172,10 @@ const server = http.createServer(async (req, res) => {
       // Final fallback: file is untracked (e.g. in .gitignore like artifacts/) — read directly
       const raw = await fs.readFile(absFile, "utf-8").catch(() => null);
       if (raw != null) {
-        const body = raw.split("\n").map((l) => `+${l}`).join("\n");
+        const body = raw
+          .split("\n")
+          .map((l) => `+${l}`)
+          .join("\n");
         const synth = `--- /dev/null\n+++ b/${relFile}\n@@ -0,0 +1 @@\n${body}`;
         sendJson(res, 200, { diff: synth, kind: "untracked" });
         return;
@@ -3123,7 +3206,9 @@ const server = http.createServer(async (req, res) => {
         if (!raw) continue;
         try {
           reviews.push(JSON.parse(raw));
-        } catch { /* skip malformed */ }
+        } catch {
+          /* skip malformed */
+        }
       }
       sendJson(res, 200, { reviews });
       return;
@@ -3166,12 +3251,16 @@ const server = http.createServer(async (req, res) => {
       const decisionPath = path.join(reviewDir, `${review_id}.decision.json`);
       await fs.writeFile(
         decisionPath,
-        JSON.stringify({
-          status: decision,
-          reviewer_feedback: feedback ?? "",
-          decided_at: new Date().toISOString(),
-        }, null, 2),
-        "utf-8"
+        JSON.stringify(
+          {
+            status: decision,
+            reviewer_feedback: feedback ?? "",
+            decided_at: new Date().toISOString(),
+          },
+          null,
+          2,
+        ),
+        { encoding: "utf-8", mode: 0o600 },
       );
       sendJson(res, 200, { ok: true, path: decisionPath });
       return;
@@ -3214,10 +3303,7 @@ const server = http.createServer(async (req, res) => {
         step = parsedStep;
       }
 
-      const prompt =
-        typeof payload?.prompt === "string"
-          ? payload.prompt.trim()
-          : "";
+      const prompt = typeof payload?.prompt === "string" ? payload.prompt.trim() : "";
       if (payload?.prompt != null && typeof payload.prompt !== "string") {
         sendJson(res, 400, { error: "prompt must be a string" });
         return;

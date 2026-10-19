@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import * as fs from "fs/promises";
 import * as path from "path";
 import * as os from "os";
@@ -79,7 +79,7 @@ api_key: \${NONEXISTENT_VAR_FOR_STRICT_TEST}
     await fs.writeFile(filePath, yamlContent, "utf-8");
 
     await expect(loadYaml<any>(filePath, { strictEnv: true })).rejects.toThrow(
-      /Missing environment variable/
+      /Missing environment variable/,
     );
   });
 
@@ -204,9 +204,7 @@ agent_definitions: []
 `;
     await fs.writeFile(path.join(tmpDir, "platform.yaml"), platformYaml, "utf-8");
 
-    await expect(loadConfig(tmpDir, "nonexistent")).rejects.toThrow(
-      /Could not find project config/
-    );
+    await expect(loadConfig(tmpDir, "nonexistent")).rejects.toThrow(/Could not find project config/);
   });
 
   it("loadConfig throws when no project.yaml exists (no --project)", async () => {
@@ -269,7 +267,7 @@ branch_strategy:
     await fs.writeFile(path.join(tmpDir, "project.yaml"), projectYaml, "utf-8");
 
     await expect(loadConfig(tmpDir, undefined, { strictEnv: true })).rejects.toThrow(
-      /Missing environment variable/
+      /Missing environment variable/,
     );
   });
 });

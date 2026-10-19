@@ -1,0 +1,32 @@
+name: Bug report
+description: Report a reproducible problem in SprintFoundry.
+title: "[bug]: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the observed behavior and the expected behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Include the command, runtime mode, and a minimal configuration with secrets removed.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Redact tokens, repository credentials, ticket contents, and personal data.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: SprintFoundry version
+      placeholder: "0.7.2"
+    validations:
+      required: true

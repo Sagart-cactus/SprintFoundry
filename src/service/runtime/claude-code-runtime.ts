@@ -2,14 +2,9 @@ import * as path from "path";
 import * as fs from "fs/promises";
 import { spawn } from "child_process";
 import { query, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
-import type {
-  AgentRuntime,
-  RuntimeActivityEvent,
-  RuntimeStepContext,
-  RuntimeStepResult,
-} from "./types.js";
+import type { AgentRuntime, RuntimeActivityEvent, RuntimeStepContext, RuntimeStepResult } from "./types.js";
 import { evaluateGuardrail, type GuardrailToolCall } from "./agent-hooks.js";
-import { runProcess, parseTokenUsage } from "./process-utils.js";
+import { runProcess } from "./process-utils.js";
 import type { RuntimeMetadataEnvelope } from "../../shared/types.js";
 import type { RuntimeLogChunk } from "../event-sink-client.js";
 
@@ -36,7 +31,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
 
   private async runLocal(
     config: RuntimeStepContext,
-    activityDispatcher: ActivityDispatcher
+    activityDispatcher: ActivityDispatcher,
   ): Promise<RuntimeStepResult> {
     // When there is an activity listener, use streaming so the monitor gets per-turn events.
     if (activityDispatcher.hasConsumer) return this.runLocalStreaming(config, activityDispatcher);
@@ -63,13 +58,15 @@ export class ClaudeCodeRuntime implements AgentRuntime {
         // Inject OTel telemetry env vars when enabled so Claude Code CLI
         // forwards its own metrics (token usage, cost, session duration)
         // to the shared OTLP collector.
-        ...(process.env.SPRINTFOUNDRY_OTEL_ENABLED === "1" ? {
-          CLAUDE_CODE_ENABLE_TELEMETRY: "1",
-          OTEL_EXPORTER_OTLP_ENDPOINT: process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? "http://localhost:4318",
-          OTEL_EXPORTER_OTLP_PROTOCOL: process.env.OTEL_EXPORTER_OTLP_PROTOCOL ?? "http/protobuf",
-          OTEL_METRICS_EXPORTER: "otlp",
-          OTEL_LOGS_EXPORTER: "otlp",
-        } : {}),
+        ...(process.env.SPRINTFOUNDRY_OTEL_ENABLED === "1"
+          ? {
+              CLAUDE_CODE_ENABLE_TELEMETRY: "1",
+              OTEL_EXPORTER_OTLP_ENDPOINT: process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? "http://localhost:4318",
+              OTEL_EXPORTER_OTLP_PROTOCOL: process.env.OTEL_EXPORTER_OTLP_PROTOCOL ?? "http/protobuf",
+              OTEL_METRICS_EXPORTER: "otlp",
+              OTEL_LOGS_EXPORTER: "otlp",
+            }
+          : {}),
         ...(config.runtime.env ?? {}),
       },
       timeoutMs: config.timeoutMinutes * 60 * 1000,
@@ -79,7 +76,12 @@ export class ClaudeCodeRuntime implements AgentRuntime {
         stderrPath: paths.stepStderrPath,
       },
     });
-    await this.copyLatestLogs(paths.stepStdoutPath, paths.stepStderrPath, paths.latestStdoutPath, paths.latestStderrPath);
+    await this.copyLatestLogs(
+      paths.stepStdoutPath,
+      paths.stepStderrPath,
+      paths.latestStdoutPath,
+      paths.latestStderrPath,
+    );
     const runtimeId = this.extractSessionIdFromOutput(result.stdout) ?? result.runtimeId;
     const runtimeMetadata = this.buildRuntimeMetadata(config, runtimeId, {
       resume: this.buildResumeMetadata(config),
@@ -100,7 +102,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
 
   private async runLocalStreaming(
     config: RuntimeStepContext,
-    activityDispatcher: ActivityDispatcher
+    activityDispatcher: ActivityDispatcher,
   ): Promise<RuntimeStepResult> {
     const paths = this.buildLogPaths(config);
     const args = this.buildCliArgs(config, "stream-json");
@@ -112,13 +114,15 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       // Inject OTel telemetry env vars when enabled so Claude Code CLI
       // forwards its own metrics (token usage, cost, session duration)
       // to the shared OTLP collector.
-      ...(process.env.SPRINTFOUNDRY_OTEL_ENABLED === "1" ? {
-        CLAUDE_CODE_ENABLE_TELEMETRY: "1",
-        OTEL_EXPORTER_OTLP_ENDPOINT: process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? "http://localhost:4318",
-        OTEL_EXPORTER_OTLP_PROTOCOL: process.env.OTEL_EXPORTER_OTLP_PROTOCOL ?? "http/protobuf",
-        OTEL_METRICS_EXPORTER: "otlp",
-        OTEL_LOGS_EXPORTER: "otlp",
-      } : {}),
+      ...(process.env.SPRINTFOUNDRY_OTEL_ENABLED === "1"
+        ? {
+            CLAUDE_CODE_ENABLE_TELEMETRY: "1",
+            OTEL_EXPORTER_OTLP_ENDPOINT: process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? "http://localhost:4318",
+            OTEL_EXPORTER_OTLP_PROTOCOL: process.env.OTEL_EXPORTER_OTLP_PROTOCOL ?? "http/protobuf",
+            OTEL_METRICS_EXPORTER: "otlp",
+            OTEL_LOGS_EXPORTER: "otlp",
+          }
+        : {}),
       ...(config.runtime.env ?? {}),
     };
 
@@ -150,14 +154,21 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       let costUsd: number | undefined;
       let timedOut = false;
 
-      const timeoutHandle = setTimeout(() => {
-        timedOut = true;
-        proc.kill("SIGTERM");
-        // Force-kill after 5 s grace period if the process ignores SIGTERM
-        setTimeout(() => {
-          try { proc.kill("SIGKILL"); } catch { /* already exited */ }
-        }, 5000);
-      }, config.timeoutMinutes * 60 * 1000);
+      const timeoutHandle = setTimeout(
+        () => {
+          timedOut = true;
+          proc.kill("SIGTERM");
+          // Force-kill after 5 s grace period if the process ignores SIGTERM
+          setTimeout(() => {
+            try {
+              proc.kill("SIGKILL");
+            } catch {
+              /* already exited */
+            }
+          }, 5000);
+        },
+        config.timeoutMinutes * 60 * 1000,
+      );
 
       proc.stdout?.on("data", (chunk: Buffer) => {
         lineBuffer += chunk.toString();
@@ -216,17 +227,25 @@ export class ClaudeCodeRuntime implements AgentRuntime {
               if (usage) tokensUsed = (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0);
               if (typeof msg.total_cost_usd === "number") costUsd = msg.total_cost_usd;
             }
-          } catch { /* not JSON */ }
+          } catch {
+            /* not JSON */
+          }
         }
         const stdout = stdoutLines.join("\n");
         await Promise.all([
           fs.writeFile(paths.stepStdoutPath, stdout, "utf-8"),
           fs.writeFile(paths.stepStderrPath, stderrData, "utf-8"),
         ]);
-        await this.copyLatestLogs(paths.stepStdoutPath, paths.stepStderrPath, paths.latestStdoutPath, paths.latestStderrPath);
+        await this.copyLatestLogs(
+          paths.stepStdoutPath,
+          paths.stepStderrPath,
+          paths.latestStdoutPath,
+          paths.latestStderrPath,
+        );
 
         if (timedOut) return reject(new Error("Process claude timed out"));
-        if (code !== 0) return reject(new Error(`Process claude exited with code 1. ${stderrData.slice(0, 300)}`));
+        if (code !== 0)
+          return reject(new Error(`Process claude exited with code 1. ${stderrData.slice(0, 300)}`));
 
         const finalRuntimeId = runtimeId ?? `claude-stream-${Date.now()}`;
         const runtimeMetadata = this.buildRuntimeMetadata(config, finalRuntimeId, {
@@ -247,7 +266,9 @@ export class ClaudeCodeRuntime implements AgentRuntime {
         });
       };
 
-      proc.on("close", (code: number | null) => { finish(code).catch(reject); });
+      proc.on("close", (code: number | null) => {
+        finish(code).catch(reject);
+      });
       proc.on("error", async (err: Error) => {
         clearTimeout(timeoutHandle);
         await Promise.all([
@@ -291,7 +312,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
 
   private async runSdk(
     config: RuntimeStepContext,
-    activityDispatcher: ActivityDispatcher
+    activityDispatcher: ActivityDispatcher,
   ): Promise<RuntimeStepResult> {
     const paths = this.buildLogPaths(config);
     const prompts = await this.readPrompts(config.workspacePath);
@@ -331,9 +352,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
         env,
         systemPrompt: prompts.systemPrompt,
         maxBudgetUsd:
-          flags.max_budget_usd !== undefined && flags.max_budget_usd > 0
-            ? flags.max_budget_usd
-            : undefined,
+          flags.max_budget_usd !== undefined && flags.max_budget_usd > 0 ? flags.max_budget_usd : undefined,
         permissionMode: flags.skip_permissions !== false ? "bypassPermissions" : undefined,
         allowDangerouslySkipPermissions: flags.skip_permissions !== false ? true : undefined,
         plugins: config.plugins?.map((pluginPath) => ({ type: "local" as const, path: pluginPath })),
@@ -376,7 +395,12 @@ export class ClaudeCodeRuntime implements AgentRuntime {
         fs.writeFile(paths.stepStdoutPath, stdout, "utf-8"),
         fs.writeFile(paths.stepStderrPath, stderr, "utf-8"),
       ]);
-      await this.copyLatestLogs(paths.stepStdoutPath, paths.stepStderrPath, paths.latestStdoutPath, paths.latestStderrPath);
+      await this.copyLatestLogs(
+        paths.stepStdoutPath,
+        paths.stepStderrPath,
+        paths.latestStdoutPath,
+        paths.latestStderrPath,
+      );
     }
 
     if (timeoutAbortController.signal.aborted && !finalResultMessage) {
@@ -418,7 +442,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
 
   private findGuardrailViolation(
     message: unknown,
-    config: RuntimeStepContext
+    config: RuntimeStepContext,
   ): (GuardrailToolCall & { reason?: string; rule?: string }) | null {
     if (!config.guardrails) return null;
     const toolCalls = this.extractClaudeToolCalls(message);
@@ -434,12 +458,13 @@ export class ClaudeCodeRuntime implements AgentRuntime {
   private extractClaudeToolCalls(message: unknown): GuardrailToolCall[] {
     if (!message || typeof message !== "object") return [];
     const raw = message as Record<string, unknown>;
-    const content =
-      (this.isRecord(raw["message"]) && Array.isArray((raw["message"] as any).content)
+    const content = (
+      this.isRecord(raw["message"]) && Array.isArray((raw["message"] as any).content)
         ? (raw["message"] as any).content
         : Array.isArray(raw["content"])
           ? raw["content"]
-          : []) as Array<Record<string, unknown>>;
+          : []
+    ) as Array<Record<string, unknown>>;
 
     const toolCalls: GuardrailToolCall[] = [];
     for (const block of content) {
@@ -489,7 +514,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
 
   private async emitGuardrailBlock(
     activityDispatcher: ActivityDispatcher,
-    toolCall: GuardrailToolCall & { reason?: string; rule?: string }
+    toolCall: GuardrailToolCall & { reason?: string; rule?: string },
   ): Promise<void> {
     await this.safeEmitActivity(activityDispatcher, {
       type: "agent_guardrail_block",
@@ -565,7 +590,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
 
   private async safeEmitActivity(
     activityDispatcher: ActivityDispatcher,
-    event: RuntimeActivityEvent
+    event: RuntimeActivityEvent,
   ): Promise<void> {
     try {
       await activityDispatcher.emit(event);
@@ -573,7 +598,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       console.warn(
         `[claude-runtime] Failed to emit activity event ${event.type}: ${
           error instanceof Error ? error.message : String(error)
-        }`
+        }`,
       );
     }
   }
@@ -640,7 +665,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
           console.warn(
             `[claude-runtime] Failed to post activity log chunk step=${config.stepNumber} attempt=${config.stepAttempt}: ${
               error instanceof Error ? error.message : String(error)
-            }`
+            }`,
           );
         } finally {
           startTimerIfNeeded();
@@ -659,7 +684,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
             console.warn(
               `[claude-runtime] Activity callback failed for ${event.type}: ${
                 error instanceof Error ? error.message : String(error)
-              }`
+              }`,
             );
           }
         }
@@ -743,10 +768,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     return events;
   }
 
-  private extractEventsFromMessagePayload(
-    value: Record<string, unknown>,
-    out: RuntimeActivityEvent[]
-  ): void {
+  private extractEventsFromMessagePayload(value: Record<string, unknown>, out: RuntimeActivityEvent[]): void {
     if (this.isRecord(value["content"])) {
       this.extractEventsFromContentArray([value["content"]], out);
       return;
@@ -756,10 +778,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     }
   }
 
-  private extractEventsFromContentArray(
-    contentItems: unknown[],
-    out: RuntimeActivityEvent[]
-  ): void {
+  private extractEventsFromContentArray(contentItems: unknown[], out: RuntimeActivityEvent[]): void {
     for (const item of contentItems) {
       if (!this.isRecord(item)) continue;
       const contentType = this.pickString(item, ["type"]).toLowerCase();
@@ -784,10 +803,14 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       if (contentType === "tool_use" || contentType === "server_tool_use" || toolName) {
         const command =
           this.pickString(item, ["command", "cmd"]) ||
-          (this.isRecord(item["input"]) ? this.pickString(item["input"] as Record<string, unknown>, ["command", "cmd"]) : "");
+          (this.isRecord(item["input"])
+            ? this.pickString(item["input"] as Record<string, unknown>, ["command", "cmd"])
+            : "");
         const filePath =
           this.pickString(item, ["path", "file_path"]) ||
-          (this.isRecord(item["input"]) ? this.pickString(item["input"] as Record<string, unknown>, ["path", "file_path", "target_path"]) : "");
+          (this.isRecord(item["input"])
+            ? this.pickString(item["input"] as Record<string, unknown>, ["path", "file_path", "target_path"])
+            : "");
 
         if (command) {
           out.push({
@@ -861,7 +884,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
 
   private async writeDebugFiles(
     paths: { stepDebugPath: string; latestDebugPath: string },
-    payload: Record<string, unknown>
+    payload: Record<string, unknown>,
   ): Promise<void> {
     const content = JSON.stringify(payload, null, 2);
     await Promise.all([
@@ -874,7 +897,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     stepStdoutPath: string,
     stepStderrPath: string,
     latestStdoutPath: string,
-    latestStderrPath: string
+    latestStderrPath: string,
   ): Promise<void> {
     const stdout = await fs.readFile(stepStdoutPath, "utf-8").catch(() => "");
     const stderr = await fs.readFile(stepStderrPath, "utf-8").catch(() => "");
@@ -887,7 +910,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
   private buildRuntimeMetadata(
     config: RuntimeStepContext,
     runtimeId: string,
-    extras?: Omit<RuntimeMetadataEnvelope, "schema_version" | "runtime">
+    extras?: Omit<RuntimeMetadataEnvelope, "schema_version" | "runtime">,
   ): RuntimeMetadataEnvelope {
     return {
       schema_version: 1,

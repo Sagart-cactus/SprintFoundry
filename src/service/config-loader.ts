@@ -8,10 +8,7 @@ export interface LoadConfigOptions {
   strictEnv?: boolean;
 }
 
-function interpolateEnvVars(
-  raw: string,
-  options?: { strictEnv?: boolean; source?: string }
-): string {
+function interpolateEnvVars(raw: string, options?: { strictEnv?: boolean; source?: string }): string {
   const missing = new Set<string>();
   const interpolated = raw.replace(/\$\{(\w+)\}/g, (_match, varName) => {
     const value = process.env[varName];
@@ -42,7 +39,7 @@ export async function loadYaml<T>(filePath: string, options?: LoadConfigOptions)
     interpolateEnvVars(raw, {
       strictEnv: options?.strictEnv,
       source: path.basename(filePath),
-    })
+    }),
   ) as T;
 }
 
@@ -79,7 +76,7 @@ export async function loadConfig(configDir: string, projectName?: string, option
     if (!loaded) {
       throw new Error(
         `Could not find project config for "${projectName}". ` +
-        `Tried: ${candidates.map((c) => path.basename(c)).join(", ")}`
+          `Tried: ${candidates.map((c) => path.basename(c)).join(", ")}`,
       );
     }
   } else {
@@ -92,7 +89,8 @@ export async function loadConfig(configDir: string, projectName?: string, option
         throw error;
       }
       throw new Error(
-        "config/project.yaml not found. Run `sprintfoundry init` or copy config/project.example.yaml to config/project.yaml and configure it."
+        "config/project.yaml not found. Run `sprintfoundry init` or copy config/project.example.yaml to config/project.yaml and configure it.",
+        { cause: error },
       );
     }
   }
@@ -132,7 +130,7 @@ export async function loadConfig(configDir: string, projectName?: string, option
         console.warn(
           `[config] Skipped malformed agent file: ${entry} — ${
             error instanceof Error ? error.message : String(error)
-          }`
+          }`,
         );
       }
     }

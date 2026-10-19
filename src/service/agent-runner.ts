@@ -20,7 +20,6 @@ import type {
   RuntimeMetadataEnvelope,
   TicketDetails,
 } from "../shared/types.js";
-import { RuntimeFactory } from "./runtime/runtime-factory.js";
 import { CodexSkillManager } from "./runtime/codex-skill-manager.js";
 import { DynamicSkillResolver } from "./runtime/dynamic-skill-resolver.js";
 import type { RuntimeActivityEvent } from "./runtime/types.js";
@@ -106,22 +105,18 @@ export class AgentRunner {
   constructor(
     private platformConfig: PlatformConfig,
     private projectConfig: ProjectConfig,
-    executionBackend?: ExecutionBackend
+    executionBackend?: ExecutionBackend,
   ) {
     const __filename = fileURLToPath(import.meta.url);
     const __dirname = path.dirname(__filename);
     this.agentDir = path.resolve(__dirname, "../agents");
     this.codexAgentDir = path.resolve(__dirname, "../agents-codex");
     this.projectRoot = path.resolve(__dirname, "../..");
-    this.codexSkillManager = new CodexSkillManager(
-      platformConfig,
-      projectConfig,
-      this.projectRoot
-    );
+    this.codexSkillManager = new CodexSkillManager(platformConfig, projectConfig, this.projectRoot);
     this.dynamicSkillResolver = new DynamicSkillResolver(
       platformConfig,
       projectConfig,
-      this.codexSkillManager
+      this.codexSkillManager,
     );
     this.executionBackend = executionBackend ?? new LocalExecutionBackend();
   }
@@ -130,7 +125,9 @@ export class AgentRunner {
     const startTime = Date.now();
     const runtime = this.resolveRuntime(config.agent);
 
-    console.log(`[agent-runner] Running agent ${config.agent} (runtime: ${runtime.provider}/${runtime.mode})`);
+    console.log(
+      `[agent-runner] Running agent ${config.agent} (runtime: ${runtime.provider}/${runtime.mode})`,
+    );
 
     // 1. Prepare the workspace for this agent
     console.log(`[agent-runner] Preparing workspace at ${config.workspacePath}...`);
@@ -138,23 +135,17 @@ export class AgentRunner {
 
     const agentDef = this.platformConfig.agent_definitions.find((d) => d.type === config.agent);
     console.log(`[agent-runner] Spawning ${runtime.provider} runtime for ${config.agent}...`);
-    const runEnvironment =
-      config.runEnvironment
-      ?? this.createFallbackRunEnvironment(config);
-    const result = await this.executionBackend.executeStep(
+    const runEnvironment = config.runEnvironment ?? this.createFallbackRunEnvironment(config);
+    const result = await this.executionBackend.executeStep(runEnvironment, this.toPlanStep(config), {
+      ...config,
       runEnvironment,
-      this.toPlanStep(config),
-      {
-        ...config,
-        runEnvironment,
-        runtime,
-        resolvedPluginPaths: this.resolvePluginPaths(config.plugins),
-        containerImage: agentDef?.container_image,
-        codexHomeDir: prep.codexHomeDir,
-        codexSkillNames: prep.codexSkillNames,
-        guardrails: this.resolveGuardrails(),
-      }
-    );
+      runtime,
+      resolvedPluginPaths: this.resolvePluginPaths(config.plugins),
+      containerImage: agentDef?.container_image,
+      codexHomeDir: prep.codexHomeDir,
+      codexSkillNames: prep.codexSkillNames,
+      guardrails: this.resolveGuardrails(),
+    });
 
     if ((prep.codexSkillNames?.length ?? 0) > 0 || (prep.skillWarnings?.length ?? 0) > 0) {
       result.runtime_metadata = this.mergeSkillMetadata(result.runtime_metadata, prep);
@@ -180,12 +171,11 @@ export class AgentRunner {
       config.stepNumber,
       config.stepAttempt,
       config.agent,
-      agentResult
+      agentResult,
     );
 
     const duration = (Date.now() - startTime) / 1000;
-    const costUsd =
-      result.cost_usd ?? this.estimateCost(result.tokens_used, config.modelConfig);
+    const costUsd = result.cost_usd ?? this.estimateCost(result.tokens_used, config.modelConfig);
 
     return {
       agentResult,
@@ -230,7 +220,7 @@ export class AgentRunner {
 
   private async prepareWorkspace(
     config: AgentRunConfig,
-    runtime: RuntimeConfig
+    runtime: RuntimeConfig,
   ): Promise<WorkspacePrepResult> {
     const workspacePath = config.workspacePath;
 
@@ -253,11 +243,7 @@ export class AgentRunner {
 
     // Write the task file
     const taskContent = this.buildTaskPrompt(config);
-    await fs.writeFile(
-      path.join(workspacePath, ".agent-task.md"),
-      taskContent,
-      "utf-8"
-    );
+    await fs.writeFile(path.join(workspacePath, ".agent-task.md"), taskContent, "utf-8");
 
     // Write previous step results as context
     if (config.previousStepResults.length > 0) {
@@ -268,7 +254,7 @@ export class AgentRunner {
         await fs.writeFile(
           path.join(contextDir, `step-${prev.step_number}-${prev.agent}.json`),
           JSON.stringify(prev.result, null, 2),
-          "utf-8"
+          "utf-8",
         );
       }
     }
@@ -305,7 +291,7 @@ export class AgentRunner {
     const staged = await this.codexSkillManager.stageSkills(
       workspacePath,
       resolved.finalSkillNames,
-      runtime.provider
+      runtime.provider,
     );
     for (const warning of staged.warnings) {
       console.warn(`[agent-runner] Skill staging warning: ${warning}`);
@@ -330,10 +316,7 @@ export class AgentRunner {
     };
   }
 
-  private async appendCodexSkillsSection(
-    agentsPath: string,
-    skillNames: string[]
-  ): Promise<void> {
+  private async appendCodexSkillsSection(agentsPath: string, skillNames: string[]): Promise<void> {
     const existing = await fs.readFile(agentsPath, "utf-8");
     const section = [
       "",
@@ -350,7 +333,7 @@ export class AgentRunner {
 
   private mergeSkillMetadata(
     runtimeMetadata: RuntimeMetadataEnvelope | undefined,
-    prep: WorkspacePrepResult
+    prep: WorkspacePrepResult,
   ): RuntimeMetadataEnvelope {
     const base: RuntimeMetadataEnvelope = runtimeMetadata ?? {
       schema_version: 1,
@@ -419,7 +402,7 @@ export class AgentRunner {
             break;
           case "step_output":
             sections.push(
-              `- Output from step ${input.step_number}: see \`.agent-context/step-${input.step_number}-*.json\``
+              `- Output from step ${input.step_number}: see \`.agent-context/step-${input.step_number}-*.json\``,
             );
             break;
           case "artifact":
@@ -451,16 +434,22 @@ export class AgentRunner {
     sections.push(`## Required Output`);
     sections.push(`When finished, write your results to \`.agent-result.json\` with this format:`);
     sections.push("```json");
-    sections.push(JSON.stringify({
-      status: "complete | needs_rework | blocked | failed",
-      summary: "brief description of what you did",
-      artifacts_created: ["list of files you created"],
-      artifacts_modified: ["list of files you modified"],
-      issues: ["any problems or concerns"],
-      rework_reason: "if needs_rework, explain why",
-      rework_target: "if needs_rework, which agent should fix it",
-      metadata: {},
-    }, null, 2));
+    sections.push(
+      JSON.stringify(
+        {
+          status: "complete | needs_rework | blocked | failed",
+          summary: "brief description of what you did",
+          artifacts_created: ["list of files you created"],
+          artifacts_modified: ["list of files you modified"],
+          issues: ["any problems or concerns"],
+          rework_reason: "if needs_rework, explain why",
+          rework_target: "if needs_rework, which agent should fix it",
+          metadata: {},
+        },
+        null,
+        2,
+      ),
+    );
     sections.push("```");
 
     return sections.join("\n");
@@ -468,10 +457,7 @@ export class AgentRunner {
 
   // ---- CLI Args Builder (shared by both modes) ----
 
-  private buildClaudeCliArgs(
-    taskPrompt: string,
-    config: AgentRunConfig
-  ): string[] {
+  private buildClaudeCliArgs(taskPrompt: string, config: AgentRunConfig): string[] {
     const flags = config.cliFlags ?? {};
     const args: string[] = ["-p", taskPrompt];
 
@@ -549,6 +535,7 @@ export class AgentRunner {
     try {
       return await tryReadResultFile();
     } catch (error) {
+      let failureReason = error;
       const recovered = await recoverAgentResultFromCodexOutput(workspacePath);
       if (recovered) {
         try {
@@ -559,7 +546,7 @@ export class AgentRunner {
           };
           return parsed;
         } catch (recoveryError) {
-          error = recoveryError;
+          failureReason = recoveryError;
         }
       }
 
@@ -568,7 +555,7 @@ export class AgentRunner {
         summary: "Agent did not produce a result file",
         artifacts_created: [],
         artifacts_modified: [],
-        issues: [`Failed to read .agent-result.json: ${error}`],
+        issues: [`Failed to read .agent-result.json: ${failureReason}`],
         metadata: {},
       };
     }
@@ -579,15 +566,12 @@ export class AgentRunner {
     stepNumber: number,
     stepAttempt: number,
     agent: AgentType,
-    result: AgentResult
+    result: AgentResult,
   ): Promise<void> {
     const dir = path.join(workspacePath, ".sprintfoundry", "step-results");
     await fs.mkdir(dir, { recursive: true });
     const safeAgent = agent.replace(/[^a-z0-9_-]/gi, "-");
-    const filePath = path.join(
-      dir,
-      `step-${stepNumber}.attempt-${stepAttempt}.${safeAgent}.json`
-    );
+    const filePath = path.join(dir, `step-${stepNumber}.attempt-${stepAttempt}.${safeAgent}.json`);
     await fs.writeFile(filePath, JSON.stringify(result, null, 2), "utf-8");
   }
 
@@ -596,9 +580,9 @@ export class AgentRunner {
   private estimateCost(tokens: number, model: ModelConfig): number {
     // Rough cost estimation per 1M tokens
     const costPer1M: Record<string, number> = {
-      "claude-sonnet-4-5-20250929": 3.0,    // input
-      "claude-opus-4-5-20250929": 15.0,      // input
-      "claude-haiku-4-5-20251001": 0.25,     // input
+      "claude-sonnet-4-5-20250929": 3.0, // input
+      "claude-opus-4-5-20250929": 15.0, // input
+      "claude-haiku-4-5-20251001": 0.25, // input
     };
 
     const rate = costPer1M[model.model] ?? 3.0;

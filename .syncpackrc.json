@@ -1,0 +1,6 @@
+{
+  "$schema": "./node_modules/syncpack/dist/schema.json",
+  "lintFormatting": false,
+  "lintSemverRanges": false,
+  "source": ["package.json", "website/package.json", "monitor/v4/package.json", "monitor/v5/package.json"]
+}

@@ -3,12 +3,9 @@
  * JSONL tail parsing edge cases, activity state classification logic.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import {
-  toClaudeProjectPath,
-  parseJsonlFileTail,
-} from "../../src/service/activity-detector.js";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "fs";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { toClaudeProjectPath, parseJsonlFileTail } from "../../src/service/activity-detector.js";
+import { mkdtempSync, writeFileSync, rmSync } from "fs";
 import * as path from "path";
 import * as os from "os";
 
@@ -19,7 +16,11 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* */ }
+  try {
+    rmSync(tmpDir, { recursive: true, force: true });
+  } catch {
+    /* */
+  }
 });
 
 describe("toClaudeProjectPath", () => {

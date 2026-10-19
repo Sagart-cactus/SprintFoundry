@@ -1,9 +1,4 @@
-import type {
-  AgentRuntime,
-  RuntimeActivityEvent,
-  RuntimeStepContext,
-  RuntimeStepResult,
-} from "./types.js";
+import type { AgentRuntime, RuntimeActivityEvent, RuntimeStepContext, RuntimeStepResult } from "./types.js";
 import { runProcess } from "./process-utils.js";
 import { evaluateGuardrail, type GuardrailToolCall } from "./agent-hooks.js";
 import { writeCodexConfigToml } from "./codex-planner-runtime.js";
@@ -53,7 +48,7 @@ type CodexThreadHandle = {
   id?: unknown;
   runStreamed: (
     prompt: string,
-    options?: { signal?: AbortSignal }
+    options?: { signal?: AbortSignal },
   ) => Promise<{ events?: AsyncGenerator<unknown> }>;
 };
 type ResumeTelemetry = {
@@ -84,19 +79,18 @@ export class CodexRuntime implements AgentRuntime {
     const hasSandboxFlag = runtimeArgs.includes("--sandbox") || runtimeArgs.includes("-s");
     const hasBypassFlag = runtimeArgs.includes("--dangerously-bypass-approvals-and-sandbox");
     const defaultSandboxArgs = this.resolveDefaultCliSandboxArgs(hasSandboxFlag, hasBypassFlag);
-    const reasoningEffort = this.resolveModelReasoningEffort(config.runtime.model_reasoning_effort, config.modelConfig.model);
-    const hasReasoningEffortArg = runtimeArgs.some(
-      (arg) => arg.includes("model_reasoning_effort")
+    const reasoningEffort = this.resolveModelReasoningEffort(
+      config.runtime.model_reasoning_effort,
+      config.modelConfig.model,
     );
+    const hasReasoningEffortArg = runtimeArgs.some((arg) => arg.includes("model_reasoning_effort"));
     const hasModelArg = runtimeArgs.some((arg) => arg.includes("model="));
     const args = [
       "exec",
       "--skip-git-repo-check",
-      ...(config.runtime.model && !hasModelArg
-        ? ["--config", `model="${config.runtime.model}"`]
-        : []),
+      ...(config.runtime.model && !hasModelArg ? ["--config", `model="${config.runtime.model}"`] : []),
       ...(reasoningEffort && !hasReasoningEffortArg
-        ? ["--config", `model_reasoning_effort=\"${reasoningEffort}\"`]
+        ? ["--config", `model_reasoning_effort="${reasoningEffort}"`]
         : []),
       prompt,
       "--json",
@@ -147,7 +141,7 @@ export class CodexRuntime implements AgentRuntime {
     await this.writeDebugFiles(stepPaths.debugPath, legacyPaths.debugPath, debugPayload);
 
     console.log(
-      `[codex-runtime] Debug env: openai_model=${env.OPENAI_MODEL}, openai_api_key_present=${Boolean(env.OPENAI_API_KEY)}, codex_home_present=${Boolean(env.CODEX_HOME)}, skills=${(config.codexSkillNames ?? []).join(",") || "none"}`
+      `[codex-runtime] Debug env: openai_model=${env.OPENAI_MODEL}, openai_api_key_present=${Boolean(env.OPENAI_API_KEY)}, codex_home_present=${Boolean(env.CODEX_HOME)}, skills=${(config.codexSkillNames ?? []).join(",") || "none"}`,
     );
 
     const command = config.runtime.command ?? "codex";
@@ -177,7 +171,7 @@ export class CodexRuntime implements AgentRuntime {
           console.warn(
             `[codex-runtime] Failed to stream activity log chunk step=${config.stepNumber} attempt=${config.stepAttempt}: ${
               error instanceof Error ? error.message : String(error)
-            }`
+            }`,
           );
         });
     };
@@ -211,24 +205,24 @@ export class CodexRuntime implements AgentRuntime {
         processResult.usedOutputPaths.stdoutPath,
         processResult.usedOutputPaths.stderrPath,
         legacyPaths.stdoutPath,
-        legacyPaths.stderrPath
+        legacyPaths.stderrPath,
       );
       return processResult.result;
     };
 
     const resumeArgs = config.resumeSessionId
       ? [
-        "exec",
-        "--skip-git-repo-check",
-        "resume",
-        config.resumeSessionId,
-        ...(reasoningEffort && !hasReasoningEffortArg
-          ? ["--config", `model_reasoning_effort=\"${reasoningEffort}\"`]
-          : []),
-        prompt,
-        "--json",
-        ...defaultSandboxArgs,
-      ]
+          "exec",
+          "--skip-git-repo-check",
+          "resume",
+          config.resumeSessionId,
+          ...(reasoningEffort && !hasReasoningEffortArg
+            ? ["--config", `model_reasoning_effort="${reasoningEffort}"`]
+            : []),
+          prompt,
+          "--json",
+          ...defaultSandboxArgs,
+        ]
       : null;
 
     const resumeUsed = Boolean(config.resumeSessionId);
@@ -249,7 +243,7 @@ export class CodexRuntime implements AgentRuntime {
         }
         resumeFallback = true;
         console.warn(
-          `[codex-runtime] Resume run failed for session ${config.resumeSessionId}; retrying with fresh run.`
+          `[codex-runtime] Resume run failed for session ${config.resumeSessionId}; retrying with fresh run.`,
         );
         try {
           result = await runWithCurrentEnv(args);
@@ -294,7 +288,7 @@ export class CodexRuntime implements AgentRuntime {
 
   private async runSdk(
     config: RuntimeStepContext,
-    activityDispatcher: ActivityDispatcher
+    activityDispatcher: ActivityDispatcher,
   ): Promise<RuntimeStepResult> {
     await fs.mkdir(config.workspacePath, { recursive: true });
 
@@ -324,7 +318,7 @@ export class CodexRuntime implements AgentRuntime {
     await this.writeDebugFiles(stepDebugPath, legacyDebugPath, debugPayload);
 
     console.log(
-      `[codex-runtime] SDK mode: openai_model=${env.OPENAI_MODEL}, openai_api_key_present=${Boolean(env.OPENAI_API_KEY)}, codex_home_present=${Boolean(env.CODEX_HOME)}, skills=${(config.codexSkillNames ?? []).join(",") || "none"}`
+      `[codex-runtime] SDK mode: openai_model=${env.OPENAI_MODEL}, openai_api_key_present=${Boolean(env.OPENAI_API_KEY)}, codex_home_present=${Boolean(env.CODEX_HOME)}, skills=${(config.codexSkillNames ?? []).join(",") || "none"}`,
     );
 
     const codex = new Codex({ env: env as Record<string, string> });
@@ -344,7 +338,7 @@ export class CodexRuntime implements AgentRuntime {
     };
     const sdkReasoningEffort = this.resolveModelReasoningEffort(
       config.runtime.model_reasoning_effort,
-      config.modelConfig.model
+      config.modelConfig.model,
     );
     if (sdkReasoningEffort) {
       threadOptions.modelReasoningEffort = sdkReasoningEffort;
@@ -367,7 +361,7 @@ export class CodexRuntime implements AgentRuntime {
         }
         resumeFallback = true;
         console.warn(
-          `[codex-runtime] Resume run failed for session ${config.resumeSessionId}; retrying with fresh SDK thread.`
+          `[codex-runtime] Resume run failed for session ${config.resumeSessionId}; retrying with fresh SDK thread.`,
         );
         const freshThread = codex.startThread(threadOptions);
         let freshTurn;
@@ -379,10 +373,10 @@ export class CodexRuntime implements AgentRuntime {
                 activityDispatcher,
                 (streamSignal) => freshThread.runStreamed(prompt, { signal: streamSignal }),
                 signal,
-                controller
+                controller,
               ),
             config.timeoutMinutes * 60 * 1000,
-            config
+            config,
           );
         } catch (fallbackError) {
           await this.writeSdkLogs({
@@ -409,7 +403,7 @@ export class CodexRuntime implements AgentRuntime {
             stepStderrPath,
             legacyStdoutPath,
             legacyStderrPath,
-          }
+          },
         );
         const runtimeMetadata = this.buildRuntimeMetadata(config, this.extractSdkRuntimeId(freshThread), {
           usage,
@@ -443,10 +437,10 @@ export class CodexRuntime implements AgentRuntime {
               activityDispatcher,
               (streamSignal) => resumedThread.runStreamed(prompt, { signal: streamSignal }),
               signal,
-              controller
+              controller,
             ),
           config.timeoutMinutes * 60 * 1000,
-          config
+          config,
         );
         const { usage, tokenSavings } = await this.captureSdkTurnTelemetry(
           config,
@@ -458,7 +452,7 @@ export class CodexRuntime implements AgentRuntime {
             stepStderrPath,
             legacyStdoutPath,
             legacyStderrPath,
-          }
+          },
         );
         const runtimeMetadata = this.buildRuntimeMetadata(config, this.extractSdkRuntimeId(resumedThread), {
           usage,
@@ -510,10 +504,10 @@ export class CodexRuntime implements AgentRuntime {
             activityDispatcher,
             (streamSignal) => thread.runStreamed(prompt, { signal: streamSignal }),
             signal,
-            controller
+            controller,
           ),
         config.timeoutMinutes * 60 * 1000,
-        config
+        config,
       );
     } catch (error) {
       await this.writeSdkLogs({
@@ -536,7 +530,7 @@ export class CodexRuntime implements AgentRuntime {
         stepStderrPath,
         legacyStdoutPath,
         legacyStderrPath,
-      }
+      },
     );
     const runtimeMetadata = this.buildRuntimeMetadata(config, this.extractSdkRuntimeId(thread), {
       usage,
@@ -574,7 +568,7 @@ export class CodexRuntime implements AgentRuntime {
       stepStderrPath: string;
       legacyStdoutPath: string;
       legacyStderrPath: string;
-    }
+    },
   ): Promise<{
     usage: Record<string, number>;
     tokenSavings?: Record<string, number>;
@@ -607,7 +601,7 @@ export class CodexRuntime implements AgentRuntime {
       approvalPolicy: "never";
       skipGitRepoCheck: true;
       modelReasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
-    }
+    },
   ): Promise<CodexThreadHandle> {
     if (!config.resumeSessionId) {
       return codex.startThread(threadOptions) as CodexThreadHandle;
@@ -615,7 +609,7 @@ export class CodexRuntime implements AgentRuntime {
     const resumableCodex = codex as Codex & {
       resumeThread: (
         sessionId: string,
-        options: typeof threadOptions
+        options: typeof threadOptions,
       ) => Promise<CodexThreadHandle> | CodexThreadHandle;
     };
     return await resumableCodex.resumeThread(config.resumeSessionId, threadOptions);
@@ -645,21 +639,17 @@ export class CodexRuntime implements AgentRuntime {
     usedOutputPaths: { stdoutPath: string; stderrPath: string };
   }> {
     try {
-      const result = await runProcess(
-        params.command,
-        [...params.runtimeArgs, ...params.execArgs],
-        {
-          cwd: params.config.workspacePath,
-          env: params.env,
-          timeoutMs: params.config.timeoutMinutes * 60 * 1000,
-          parseTokensFromStdout: true,
-          outputFiles: {
-            stdoutPath: params.outputPaths.firstStdoutPath,
-            stderrPath: params.outputPaths.firstStderrPath,
-          },
-          onStdoutData: params.onStdoutData,
-        }
-      );
+      const result = await runProcess(params.command, [...params.runtimeArgs, ...params.execArgs], {
+        cwd: params.config.workspacePath,
+        env: params.env,
+        timeoutMs: params.config.timeoutMinutes * 60 * 1000,
+        parseTokensFromStdout: true,
+        outputFiles: {
+          stdoutPath: params.outputPaths.firstStdoutPath,
+          stderrPath: params.outputPaths.firstStderrPath,
+        },
+        onStdoutData: params.onStdoutData,
+      });
       return {
         result,
         usedOutputPaths: {
@@ -668,26 +658,15 @@ export class CodexRuntime implements AgentRuntime {
         },
       };
     } catch (error) {
-      const firstStderr = await fs
-        .readFile(params.outputPaths.firstStderrPath, "utf-8")
-        .catch(() => "");
+      const firstStderr = await fs.readFile(params.outputPaths.firstStderrPath, "utf-8").catch(() => "");
       // Keep behavior decision: preserve a single bounded retry for local CLI auth-header 401s.
       // Simplification rejected: removing this retry regresses staged CODEX_HOME compatibility.
       // Security guardrails:
       // - opt-in only via CODEX_HOME_FALLBACK_ENV_FLAG;
       // - trusted stderr signature only (never stdout);
       // - single retry without CODEX_HOME, then normal error propagation.
-      if (
-        this.shouldRetryWithoutCodexHome(
-          params.env,
-          error,
-          firstStderr,
-          params.codexHomeFallbackEnabled
-        )
-      ) {
-        console.warn(
-          "[codex-runtime] Retrying once without CODEX_HOME after trusted auth-header failure."
-        );
+      if (this.shouldRetryWithoutCodexHome(params.env, error, firstStderr, params.codexHomeFallbackEnabled)) {
+        console.warn("[codex-runtime] Retrying once without CODEX_HOME after trusted auth-header failure.");
         const fallbackEnv = { ...params.env };
         delete fallbackEnv.CODEX_HOME;
         const fallbackPayload = {
@@ -698,23 +677,19 @@ export class CodexRuntime implements AgentRuntime {
         await this.writeDebugFiles(
           params.debugPaths.stepDebugPath,
           params.debugPaths.legacyDebugPath,
-          fallbackPayload
+          fallbackPayload,
         );
-        const result = await runProcess(
-          params.command,
-          [...params.runtimeArgs, ...params.execArgs],
-          {
-            cwd: params.config.workspacePath,
-            env: fallbackEnv,
-            timeoutMs: params.config.timeoutMinutes * 60 * 1000,
-            parseTokensFromStdout: true,
-            outputFiles: {
-              stdoutPath: params.outputPaths.retryStdoutPath,
-              stderrPath: params.outputPaths.retryStderrPath,
-            },
-            onStdoutData: params.onStdoutData,
-          }
-        );
+        const result = await runProcess(params.command, [...params.runtimeArgs, ...params.execArgs], {
+          cwd: params.config.workspacePath,
+          env: fallbackEnv,
+          timeoutMs: params.config.timeoutMinutes * 60 * 1000,
+          parseTokensFromStdout: true,
+          outputFiles: {
+            stdoutPath: params.outputPaths.retryStdoutPath,
+            stderrPath: params.outputPaths.retryStderrPath,
+          },
+          onStdoutData: params.onStdoutData,
+        });
         return {
           result,
           usedOutputPaths: {
@@ -756,10 +731,7 @@ export class CodexRuntime implements AgentRuntime {
     return env;
   }
 
-  private resolveDefaultCliSandboxArgs(
-    hasSandboxFlag: boolean,
-    hasBypassFlag: boolean
-  ): string[] {
+  private resolveDefaultCliSandboxArgs(hasSandboxFlag: boolean, hasBypassFlag: boolean): string[] {
     if (hasSandboxFlag || hasBypassFlag) {
       return [];
     }
@@ -779,7 +751,7 @@ export class CodexRuntime implements AgentRuntime {
 
   private resolveModelReasoningEffort(
     effort: RuntimeStepContext["runtime"]["model_reasoning_effort"] | undefined,
-    model: string
+    model: string,
   ): RuntimeStepContext["runtime"]["model_reasoning_effort"] | undefined {
     if (!effort) return undefined;
     return this.isCodexModel(model) ? effort : undefined;
@@ -793,7 +765,7 @@ export class CodexRuntime implements AgentRuntime {
     env: Record<string, string | undefined>,
     error: unknown,
     stderrOutput: string,
-    codexHomeFallbackEnabled: boolean
+    codexHomeFallbackEnabled: boolean,
   ): boolean {
     // Guarded fallback contract:
     // - opt-in only: disabled unless explicit flag enables it;
@@ -885,12 +857,12 @@ export class CodexRuntime implements AgentRuntime {
   private async runSdkTurnWithTimeout<T>(
     run: (signal: AbortSignal, controller: AbortController) => Promise<T>,
     timeoutMs: number,
-    config: RuntimeStepContext
+    config: RuntimeStepContext,
   ): Promise<T> {
     const controller = new AbortController();
     const effectiveTimeoutMs = Math.max(0, timeoutMs);
     const timeoutError = new Error(
-      `Codex SDK run timed out after ${effectiveTimeoutMs}ms (step=${config.stepNumber}, attempt=${config.stepAttempt})`
+      `Codex SDK run timed out after ${effectiveTimeoutMs}ms (step=${config.stepNumber}, attempt=${config.stepAttempt})`,
     );
 
     if (effectiveTimeoutMs === 0) {
@@ -917,7 +889,7 @@ export class CodexRuntime implements AgentRuntime {
 
       runResultPromise.then(
         (turn) => settle(() => resolve(turn)),
-        (error) => settle(() => reject(error))
+        (error) => settle(() => reject(error)),
       );
     });
   }
@@ -927,7 +899,7 @@ export class CodexRuntime implements AgentRuntime {
     activityDispatcher: ActivityDispatcher,
     runStreamed: (signal: AbortSignal) => Promise<{ events?: AsyncGenerator<unknown> }>,
     signal: AbortSignal,
-    controller: AbortController
+    controller: AbortController,
   ): Promise<{ usage: Record<string, number>; items: unknown[]; finalResponse: string }> {
     const streamed = await runStreamed(signal);
     const events = streamed?.events;
@@ -945,7 +917,7 @@ export class CodexRuntime implements AgentRuntime {
     config: RuntimeStepContext,
     activityDispatcher: ActivityDispatcher,
     events: AsyncGenerator<unknown>,
-    controller: AbortController
+    controller: AbortController,
   ): Promise<{ usage: Record<string, number>; items: unknown[]; finalResponse: string }> {
     const itemsById = new Map<string, unknown>();
     let finalResponse = "";
@@ -993,9 +965,7 @@ export class CodexRuntime implements AgentRuntime {
           const guardrailViolation = this.findSdkGuardrailViolation(item, config);
           if (guardrailViolation) {
             await this.emitGuardrailBlock(activityDispatcher, guardrailViolation);
-            controller.abort(
-              new Error(`Guardrail blocked: ${guardrailViolation.reason ?? "blocked"}`)
-            );
+            controller.abort(new Error(`Guardrail blocked: ${guardrailViolation.reason ?? "blocked"}`));
             throw new Error(`Guardrail blocked: ${guardrailViolation.reason ?? "blocked"}`);
           }
         }
@@ -1020,7 +990,7 @@ export class CodexRuntime implements AgentRuntime {
 
   private findSdkGuardrailViolation(
     item: Record<string, unknown>,
-    config: RuntimeStepContext
+    config: RuntimeStepContext,
   ): (GuardrailToolCall & { reason?: string; rule?: string }) | null {
     if (!config.guardrails) return null;
     const toolCalls = this.extractSdkGuardrailToolCalls(item);
@@ -1069,7 +1039,7 @@ export class CodexRuntime implements AgentRuntime {
 
   private async emitGuardrailBlock(
     activityDispatcher: ActivityDispatcher,
-    toolCall: GuardrailToolCall & { reason?: string; rule?: string }
+    toolCall: GuardrailToolCall & { reason?: string; rule?: string },
   ): Promise<void> {
     try {
       await activityDispatcher.emit({
@@ -1086,7 +1056,7 @@ export class CodexRuntime implements AgentRuntime {
       console.warn(
         `[codex-runtime] Failed to emit guardrail event: ${
           error instanceof Error ? error.message : String(error)
-        }`
+        }`,
       );
     }
   }
@@ -1151,7 +1121,7 @@ export class CodexRuntime implements AgentRuntime {
           console.warn(
             `[codex-runtime] Failed to post activity log chunk step=${config.stepNumber} attempt=${config.stepAttempt}: ${
               error instanceof Error ? error.message : String(error)
-            }`
+            }`,
           );
         } finally {
           startTimerIfNeeded();
@@ -1169,7 +1139,7 @@ export class CodexRuntime implements AgentRuntime {
             console.warn(
               `[codex-runtime] Activity callback failed for ${event.type}: ${
                 error instanceof Error ? error.message : String(error)
-              }`
+              }`,
             );
           }
         }
@@ -1203,13 +1173,15 @@ export class CodexRuntime implements AgentRuntime {
       };
     }
     const usage =
-      (turn as {
-        usage?: {
-          input_tokens?: number;
-          cached_input_tokens?: number;
-          output_tokens?: number;
-        } | null;
-      }).usage ?? null;
+      (
+        turn as {
+          usage?: {
+            input_tokens?: number;
+            cached_input_tokens?: number;
+            output_tokens?: number;
+          } | null;
+        }
+      ).usage ?? null;
     return {
       input_tokens: usage?.input_tokens ?? 0,
       cached_input_tokens: usage?.cached_input_tokens ?? 0,
@@ -1310,7 +1282,7 @@ export class CodexRuntime implements AgentRuntime {
         JSON.stringify({
           type: "thread.started",
           thread_id: params.runtimeId,
-        })
+        }),
       );
     }
     for (const activity of params.activityEvents) {
@@ -1324,14 +1296,14 @@ export class CodexRuntime implements AgentRuntime {
             type: "agent_message",
             message: this.truncate(params.finalResponse, 1200),
           },
-        })
+        }),
       );
     }
     lines.push(
       JSON.stringify({
         type: "turn.completed",
         usage: params.usage,
-      })
+      }),
     );
     return lines;
   }
@@ -1377,7 +1349,7 @@ export class CodexRuntime implements AgentRuntime {
 
   private async emitSdkActivityEvents(
     activityDispatcher: ActivityDispatcher,
-    events: RuntimeActivityEvent[]
+    events: RuntimeActivityEvent[],
   ): Promise<void> {
     if (events.length === 0) return;
     for (const event of events) {
@@ -1387,7 +1359,7 @@ export class CodexRuntime implements AgentRuntime {
         console.warn(
           `[codex-runtime] Failed to emit activity event ${event.type}: ${
             error instanceof Error ? error.message : String(error)
-          }`
+          }`,
         );
       }
     }
@@ -1445,7 +1417,9 @@ export class CodexRuntime implements AgentRuntime {
     if (typeof value === "string") return value;
     if (Array.isArray(value)) {
       return value
-        .map((entry) => (this.isRecord(entry) ? this.pickString(entry, ["text", "message", "output_text"]) : ""))
+        .map((entry) =>
+          this.isRecord(entry) ? this.pickString(entry, ["text", "message", "output_text"]) : "",
+        )
         .filter(Boolean)
         .join("\n");
     }
@@ -1512,7 +1486,7 @@ export class CodexRuntime implements AgentRuntime {
   private buildRuntimeMetadata(
     config: RuntimeStepContext,
     runtimeId: string,
-    extras?: Omit<RuntimeMetadataEnvelope, "schema_version" | "runtime">
+    extras?: Omit<RuntimeMetadataEnvelope, "schema_version" | "runtime">,
   ): RuntimeMetadataEnvelope {
     return {
       schema_version: 1,
@@ -1528,7 +1502,7 @@ export class CodexRuntime implements AgentRuntime {
 
   private buildResumeMetadata(
     config: RuntimeStepContext,
-    telemetry: ResumeTelemetry
+    telemetry: ResumeTelemetry,
   ): RuntimeMetadataEnvelope["resume"] | undefined {
     if (!config.resumeSessionId && !telemetry.resume_used) return undefined;
     return {
@@ -1556,7 +1530,7 @@ export class CodexRuntime implements AgentRuntime {
     if (!error) return "";
     if (error instanceof Error) {
       const parts = [error.message];
-      const maybeCode = (error as Error & { code?: unknown; category?: unknown; name?: unknown });
+      const maybeCode = error as Error & { code?: unknown; category?: unknown; name?: unknown };
       if (typeof maybeCode.code === "string") parts.push(maybeCode.code);
       if (typeof maybeCode.category === "string") parts.push(maybeCode.category);
       if (typeof maybeCode.name === "string") parts.push(maybeCode.name);
@@ -1579,10 +1553,7 @@ export class CodexRuntime implements AgentRuntime {
     return typeof id === "string" ? id : "";
   }
 
-  private withResumeTelemetry(
-    error: unknown,
-    telemetry: ResumeTelemetry
-  ): Error & ResumeTelemetry {
+  private withResumeTelemetry(error: unknown, telemetry: ResumeTelemetry): Error & ResumeTelemetry {
     const baseError =
       error instanceof Error ? error : new Error(typeof error === "string" ? error : String(error));
     const enriched = baseError as Error & ResumeTelemetry;
@@ -1595,7 +1566,7 @@ export class CodexRuntime implements AgentRuntime {
   private async writeDebugFiles(
     stepDebugPath: string,
     legacyDebugPath: string,
-    payload: Record<string, unknown>
+    payload: Record<string, unknown>,
   ): Promise<void> {
     const content = JSON.stringify(payload, null, 2);
     await Promise.all([
@@ -1608,7 +1579,7 @@ export class CodexRuntime implements AgentRuntime {
     sourceStdoutPath: string,
     sourceStderrPath: string,
     legacyStdoutPath: string,
-    legacyStderrPath: string
+    legacyStderrPath: string,
   ): Promise<void> {
     const stdout = await fs.readFile(sourceStdoutPath, "utf-8").catch(() => "");
     const stderr = await fs.readFile(sourceStderrPath, "utf-8").catch(() => "");

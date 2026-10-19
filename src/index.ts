@@ -11,7 +11,7 @@ import { spawn } from "child_process";
 
 const require = createRequire(import.meta.url);
 const { version } = require("../package.json");
-import type { PlatformConfig, ProjectConfig, RuntimeConfig, TaskRun, TaskSource } from "./shared/types.js";
+import type { PlatformConfig, ProjectConfig, TaskRun, TaskSource } from "./shared/types.js";
 import { OrchestrationService } from "./service/orchestration-service.js";
 import { loadConfig } from "./service/config-loader.js";
 import { migrateEnvVars } from "./service/env-compat.js";
@@ -49,12 +49,16 @@ const WHOLE_RUN_SANDBOX_MODE = "k8s-whole-run";
 const AUTO_RESUME_ENV = "SPRINTFOUNDRY_AUTO_RESUME_EXISTING_RUN";
 
 function isTruthy(value: string | undefined): boolean {
-  const normalized = String(value ?? "").trim().toLowerCase();
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase();
   return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
 function normalizeDoctorProfile(value: unknown): PreflightProfile | undefined {
-  const normalized = String(value ?? "").trim().toLowerCase();
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase();
   if (normalized === "local" || normalized === "distributed" || normalized === "k8s") {
     return normalized;
   }
@@ -86,12 +90,10 @@ function summarizeEventData(data: Record<string, unknown>): string {
 
 function resolveEventSinkClient(
   project: ProjectConfig,
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
 ): EventSinkClient | undefined {
   const sinkUrl =
-    env.SPRINTFOUNDRY_EVENT_SINK_URL?.trim() ||
-    project.integrations?.event_sink?.url?.trim() ||
-    "";
+    env.SPRINTFOUNDRY_EVENT_SINK_URL?.trim() || project.integrations?.event_sink?.url?.trim() || "";
   if (!sinkUrl) return undefined;
   const internalApiToken = env.SPRINTFOUNDRY_INTERNAL_API_TOKEN?.trim() || undefined;
   return new EventSinkClient(sinkUrl, globalThis.fetch, internalApiToken);
@@ -150,9 +152,7 @@ function buildPluginRegistry(platform: PlatformConfig, project: ProjectConfig): 
   const wholeRunSandbox = process.env[RUN_SANDBOX_MODE_ENV] === WHOLE_RUN_SANDBOX_MODE;
 
   const workspaceStrategy =
-    (wholeRunSandbox ? "tmpdir" : project.workspace?.strategy) ??
-    platform.workspace?.strategy ??
-    "tmpdir";
+    (wholeRunSandbox ? "tmpdir" : project.workspace?.strategy) ?? platform.workspace?.strategy ?? "tmpdir";
   const baseRepoDir =
     project.workspace?.base_repo_dir ??
     platform.workspace?.base_repo_dir ??
@@ -213,8 +213,14 @@ program
   .option("--config <dir>", "Config directory", "config")
   .option("--project <name>", "Project name (loads <name>.yaml or project-<name>.yaml)")
   .option("--dry-run", "Plan only — generate and print the execution plan without running agents")
-  .option("--agent <agent>", "Run a single agent directly, bypassing SDLC orchestration (default: generic agent)")
-  .option("--agent-file <path>", "Path to a YAML/JSON file defining a custom agent inline (used with --agent)")
+  .option(
+    "--agent <agent>",
+    "Run a single agent directly, bypassing SDLC orchestration (default: generic agent)",
+  )
+  .option(
+    "--agent-file <path>",
+    "Path to a YAML/JSON file defining a custom agent inline (used with --agent)",
+  )
   .addOption(new Option("--workflow-stage <stage>").hideHelp())
   .addOption(new Option("--workflow-branch <branch>").hideHelp())
   .addOption(new Option("--workflow-pr-url <url>").hideHelp())
@@ -270,15 +276,19 @@ program
               await events.close();
             }
             if (updated) {
-              console.error(`[run] Received ${signal}; marked run ${currentRunId} as cancelled and emitted task.cancelled.`);
+              console.error(
+                `[run] Received ${signal}; marked run ${currentRunId} as cancelled and emitted task.cancelled.`,
+              );
             } else {
-              console.error(`[run] Received ${signal}; run ${currentRunId} session was not available for cancellation.`);
+              console.error(
+                `[run] Received ${signal}; run ${currentRunId} session was not available for cancellation.`,
+              );
             }
           } catch (error) {
             console.error(
               `[run] Received ${signal}; failed to mark run ${currentRunId} as cancelled: ${
                 error instanceof Error ? error.message : String(error)
-              }`
+              }`,
             );
           }
         } else {
@@ -305,10 +315,12 @@ program
     if (opts.dryRun) console.log(`  Mode: dry-run (plan only)`);
     if (directAgent) {
       console.log(
-        `  Direct agent: ${directAgent}${directAgentWasDefaulted ? " (default)" : ""}${opts.agentFile ? ` (from ${opts.agentFile})` : ""}`
+        `  Direct agent: ${directAgent}${directAgentWasDefaulted ? " (default)" : ""}${opts.agentFile ? ` (from ${opts.agentFile})` : ""}`,
       );
     }
-    console.log("  Tip: run `sprintfoundry monitor` in another terminal to watch live progress at http://127.0.0.1:4310/");
+    console.log(
+      "  Tip: run `sprintfoundry monitor` in another terminal to watch live progress at http://127.0.0.1:4310/",
+    );
     console.log("");
 
     let run: TaskRun;
@@ -325,7 +337,7 @@ program
         });
       } else if (autoResumeAction === "restart") {
         console.log(
-          `Detected session for ${envRunId} without a workspace path; restarting the run with the same run_id.`
+          `Detected session for ${envRunId} without a workspace path; restarting the run with the same run_id.`,
         );
         run = await service.handleTask(ticketId, source, opts.prompt, {
           dryRun: !!opts.dryRun,
@@ -445,9 +457,9 @@ program
           decided_at: new Date().toISOString(),
         },
         null,
-        2
+        2,
       ),
-      "utf-8"
+      "utf-8",
     );
     console.log(`Review decision written: ${decisionPath}`);
   });
@@ -469,10 +481,7 @@ program
       console.error("Error: use either a run id or --latest, not both");
       process.exit(1);
     }
-    const step =
-      opts.step !== undefined
-        ? Number.parseInt(String(opts.step), 10)
-        : undefined;
+    const step = opts.step !== undefined ? Number.parseInt(String(opts.step), 10) : undefined;
     if (opts.step !== undefined && (!Number.isInteger(step) || (step as number) <= 0)) {
       console.error("Error: --step must be a positive integer");
       process.exit(1);
@@ -485,7 +494,8 @@ program
     const service = new OrchestrationService(platform, project, registry, executionBackend);
     const sessionManager = new SessionManager();
     const targetRunId = opts.latest
-      ? (await sessionManager.getLatestByStatus(["failed", "cancelled"], { projectId: project.project_id }))?.run_id
+      ? (await sessionManager.getLatestByStatus(["failed", "cancelled"], { projectId: project.project_id }))
+          ?.run_id
       : String(id);
 
     if (!targetRunId) {
@@ -553,7 +563,9 @@ program
         ? formatDurationMs(event.timestamp.getTime() - startedAt)
         : "-";
       const summary = summarizeEventData(event.data);
-      console.log(`  ${timestamp}  ${elapsed.padEnd(7)} [${event.event_type}]${summary ? ` ${summary}` : ""}`);
+      console.log(
+        `  ${timestamp}  ${elapsed.padEnd(7)} [${event.event_type}]${summary ? ` ${summary}` : ""}`,
+      );
     }
     console.log("");
   });
@@ -587,12 +599,15 @@ program
         run_id: String(id),
         project_id: project.project_id,
       },
-      destination
+      destination,
     );
 
-    const eventSinkUrl = project.integrations?.event_sink?.url?.trim() || process.env.SPRINTFOUNDRY_EVENT_SINK_URL?.trim() || "";
+    const eventSinkUrl =
+      project.integrations?.event_sink?.url?.trim() || process.env.SPRINTFOUNDRY_EVENT_SINK_URL?.trim() || "";
     const internalApiToken = process.env.SPRINTFOUNDRY_INTERNAL_API_TOKEN?.trim() || undefined;
-    const sinkClient = eventSinkUrl ? new EventSinkClient(eventSinkUrl, globalThis.fetch, internalApiToken) : undefined;
+    const sinkClient = eventSinkUrl
+      ? new EventSinkClient(eventSinkUrl, globalThis.fetch, internalApiToken)
+      : undefined;
     const sessionManager = new SessionManager(undefined, sinkClient);
     const restoredAt = new Date().toISOString();
     const restoredSession = {
@@ -644,7 +659,7 @@ program
     const runOnce = async () => {
       const summary = await controller.reconcileOnce();
       console.log(
-        `[snapshot-reconcile] inspected=${summary.inspectedRuns} exporters_created=${summary.exportersCreated} pvc_cleanup_completed=${summary.pvcCleanupCompleted} failures=${summary.snapshotFailuresDetected}`
+        `[snapshot-reconcile] inspected=${summary.inspectedRuns} exporters_created=${summary.exportersCreated} pvc_cleanup_completed=${summary.pvcCleanupCompleted} failures=${summary.snapshotFailuresDetected}`,
       );
     };
 
@@ -812,7 +827,10 @@ program.addCommand(agentCmd);
 program
   .command("sessions")
   .description("List all tracked run sessions")
-  .option("--status <status>", "Filter by status (pending, planning, executing, completed, failed, cancelled)")
+  .option(
+    "--status <status>",
+    "Filter by status (pending, planning, executing, completed, failed, cancelled)",
+  )
   .option("--json", "Output as JSON")
   .action(async (opts) => {
     const mgr = new SessionManager();
@@ -832,15 +850,19 @@ program
       return;
     }
 
-    console.log(`\n  ${"RUN ID".padEnd(20)} ${"STATUS".padEnd(14)} ${"STEP".padEnd(7)} ${"COST".padEnd(10)} ${"TICKET".padEnd(20)} TITLE`);
-    console.log(`  ${"─".repeat(20)} ${"─".repeat(14)} ${"─".repeat(7)} ${"─".repeat(10)} ${"─".repeat(20)} ${"─".repeat(30)}`);
+    console.log(
+      `\n  ${"RUN ID".padEnd(20)} ${"STATUS".padEnd(14)} ${"STEP".padEnd(7)} ${"COST".padEnd(10)} ${"TICKET".padEnd(20)} TITLE`,
+    );
+    console.log(
+      `  ${"─".repeat(20)} ${"─".repeat(14)} ${"─".repeat(7)} ${"─".repeat(10)} ${"─".repeat(20)} ${"─".repeat(30)}`,
+    );
 
     for (const s of sessions) {
       const step = s.total_steps > 0 ? `${s.current_step}/${s.total_steps}` : "-";
       const cost = `$${s.total_cost_usd.toFixed(2)}`;
       const title = s.ticket_title.length > 40 ? s.ticket_title.slice(0, 37) + "..." : s.ticket_title;
       console.log(
-        `  ${s.run_id.padEnd(20)} ${s.status.padEnd(14)} ${step.padEnd(7)} ${cost.padEnd(10)} ${s.ticket_id.padEnd(20)} ${title}`
+        `  ${s.run_id.padEnd(20)} ${s.status.padEnd(14)} ${step.padEnd(7)} ${cost.padEnd(10)} ${s.ticket_id.padEnd(20)} ${title}`,
       );
     }
     console.log(`\n  ${sessions.length} session(s)\n`);
@@ -954,8 +976,6 @@ program
   });
 
 const argv =
-  process.argv[2] === "--"
-    ? [process.argv[0], process.argv[1], ...process.argv.slice(3)]
-    : process.argv;
+  process.argv[2] === "--" ? [process.argv[0], process.argv[1], ...process.argv.slice(3)] : process.argv;
 
 await program.parseAsync(argv);
