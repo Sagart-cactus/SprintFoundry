@@ -624,9 +624,15 @@ function buildRedisClient(options: DispatchControllerStartOptions): DispatchRedi
   }
 
   const redisModule = require("redis") as {
-    createClient(config: { url: string }): DispatchRedisClient;
+    createClient(config: { url: string; commandOptions?: { timeout?: number } }): DispatchRedisClient;
   };
-  return redisModule.createClient({ url: redisUrl });
+  // redis v6 applies a 5s default command timeout, which aborts long BRPOP
+  // waits when SPRINTFOUNDRY_DISPATCH_QUEUE_BLOCK_SECONDS exceeds it. Disable
+  // the client-side timeout so blocking polls can run for their full duration.
+  return redisModule.createClient({
+    url: redisUrl,
+    commandOptions: { timeout: undefined },
+  });
 }
 
 async function defaultLocalRunExecutor(
