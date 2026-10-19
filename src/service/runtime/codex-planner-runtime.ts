@@ -19,14 +19,14 @@ import { runProcess } from "./process-utils.js";
 export class CodexPlannerRuntime implements PlannerRuntime {
   constructor(
     private platformConfig: PlatformConfig,
-    private projectConfig: ProjectConfig
+    private projectConfig: ProjectConfig,
   ) {}
 
   async generatePlan(
     ticket: TicketDetails,
     agentDefinitions: AgentDefinition[],
     rules: (PlatformRule | ProjectRule)[],
-    workspacePath: string
+    workspacePath: string,
   ): Promise<ExecutionPlan> {
     const taskPath = path.join(workspacePath, ".planner-task.md");
     const outputPath = path.join(workspacePath, ".planner-plan.raw.txt");
@@ -62,43 +62,40 @@ Set "model" for each step to the agent model that should run that step.`;
     const hasSandboxFlag = runtimeArgs.includes("--sandbox") || runtimeArgs.includes("-s");
     const hasBypassFlag = runtimeArgs.includes("--dangerously-bypass-approvals-and-sandbox");
     const plannerModel = this.resolvePlannerModel();
-    const reasoningEffort = this.resolveModelReasoningEffort(
-      runtime.model_reasoning_effort,
-      plannerModel
-    );
-    const hasReasoningEffortArg = runtimeArgs.some(
-      (arg) => arg.includes("model_reasoning_effort")
-    );
+    const reasoningEffort = this.resolveModelReasoningEffort(runtime.model_reasoning_effort, plannerModel);
+    const hasReasoningEffortArg = runtimeArgs.some((arg) => arg.includes("model_reasoning_effort"));
     const hasModelArg = runtimeArgs.some((arg) => arg.includes("model="));
-    await runProcess(runtime.command ?? "codex", [
-      ...runtimeArgs,
-      "exec",
-      "--skip-git-repo-check",
-      ...(runtime.model && !hasModelArg
-        ? ["--config", `model="${runtime.model}"`]
-        : []),
-      ...(reasoningEffort && !hasReasoningEffortArg
-        ? ["--config", `model_reasoning_effort=\"${reasoningEffort}\"`]
-        : []),
-      "Read .planner-task.md and return only the JSON plan with no markdown fences.",
-      "--json",
-      "--output-last-message",
-      ".planner-plan.raw.txt",
-      ...(hasSandboxFlag || hasBypassFlag ? [] : ["--sandbox", "workspace-write"]),
-    ], {
-      cwd: workspacePath,
-      env: {
-        ...process.env,
-        ...(apiKey ? { OPENAI_API_KEY: apiKey } : {}),
-        ...(runtime.env ?? {}),
+    await runProcess(
+      runtime.command ?? "codex",
+      [
+        ...runtimeArgs,
+        "exec",
+        "--skip-git-repo-check",
+        ...(runtime.model && !hasModelArg ? ["--config", `model="${runtime.model}"`] : []),
+        ...(reasoningEffort && !hasReasoningEffortArg
+          ? ["--config", `model_reasoning_effort="${reasoningEffort}"`]
+          : []),
+        "Read .planner-task.md and return only the JSON plan with no markdown fences.",
+        "--json",
+        "--output-last-message",
+        ".planner-plan.raw.txt",
+        ...(hasSandboxFlag || hasBypassFlag ? [] : ["--sandbox", "workspace-write"]),
+      ],
+      {
+        cwd: workspacePath,
+        env: {
+          ...process.env,
+          ...(apiKey ? { OPENAI_API_KEY: apiKey } : {}),
+          ...(runtime.env ?? {}),
+        },
+        timeoutMs: this.platformConfig.defaults.timeouts.agent_timeout_minutes * 60 * 1000,
+        parseTokensFromStdout: false,
+        outputFiles: {
+          stdoutPath: path.join(workspacePath, ".planner-runtime.stdout.log"),
+          stderrPath: path.join(workspacePath, ".planner-runtime.stderr.log"),
+        },
       },
-      timeoutMs: this.platformConfig.defaults.timeouts.agent_timeout_minutes * 60 * 1000,
-      parseTokensFromStdout: false,
-      outputFiles: {
-        stdoutPath: path.join(workspacePath, ".planner-runtime.stdout.log"),
-        stderrPath: path.join(workspacePath, ".planner-runtime.stderr.log"),
-      },
-    });
+    );
 
     const planRaw = await fs.readFile(outputPath, "utf-8");
     const cleaned = planRaw.replace(/```json\n?|```/g, "").trim();
@@ -106,7 +103,7 @@ Set "model" for each step to the agent model that should run that step.`;
     if (!parsed || typeof parsed !== "object" || !Array.isArray((parsed as { steps?: unknown }).steps)) {
       const hint = cleaned.slice(0, 500).replace(/\s+/g, " ");
       throw new Error(
-        `Planner returned invalid JSON schema (missing steps array). Raw output starts with: ${hint}`
+        `Planner returned invalid JSON schema (missing steps array). Raw output starts with: ${hint}`,
       );
     }
     const steps = (parsed.steps as PlanStep[]).map((step) => ({
@@ -131,7 +128,7 @@ Set "model" for each step to the agent model that should run that step.`;
     _workspacePath: string,
     _runSteps: StepExecution[] = [],
     _reworkAttempt: number = 1,
-    _previousReworkResults: AgentResult[] = []
+    _previousReworkResults: AgentResult[] = [],
   ): Promise<{ steps: PlanStep[] }> {
     return {
       steps: [
@@ -140,10 +137,7 @@ Set "model" for each step to the agent model that should run that step.`;
           agent: failureResult.rework_target ?? failedStep.agent,
           model: this.resolveModelForAgent(failureResult.rework_target ?? failedStep.agent),
           task: `Fix issue from step ${failedStep.step_number}: ${failureResult.rework_reason ?? failureResult.issues.join("; ")}`,
-          context_inputs: [
-            { type: "ticket" },
-            { type: "step_output", step_number: failedStep.step_number },
-          ],
+          context_inputs: [{ type: "ticket" }, { type: "step_output", step_number: failedStep.step_number }],
           depends_on: [],
           estimated_complexity: "medium",
         },
@@ -189,7 +183,7 @@ Set "model" for each step to the agent model that should run that step.`;
 
   private resolveModelReasoningEffort(
     effort: ReturnType<CodexPlannerRuntime["resolvePlannerRuntime"]>["model_reasoning_effort"] | undefined,
-    model: string
+    model: string,
   ): ReturnType<CodexPlannerRuntime["resolvePlannerRuntime"]>["model_reasoning_effort"] | undefined {
     if (!effort) return undefined;
     return /codex/i.test(model) ? effort : undefined;
@@ -222,7 +216,7 @@ export async function writeCodexConfigToml(apiKey: string, targetCodexHome?: str
   const existingAuth = await fs
     .readFile(authPath, "utf-8")
     .then((raw) => JSON.parse(raw) as CodexAuthState)
-    .catch(() => ({} as CodexAuthState));
+    .catch(() => ({}) as CodexAuthState);
   const nextAuth: CodexAuthState = {
     ...existingAuth,
     OPENAI_API_KEY: apiKey,

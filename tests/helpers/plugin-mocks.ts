@@ -17,14 +17,7 @@ import type {
   NotifierPlugin,
   PluginModule,
 } from "../../src/shared/plugin-types.js";
-import type {
-  TaskRun,
-  TicketDetails,
-  RepoConfig,
-  BranchStrategy,
-  EventPriority,
-  TaskSource,
-} from "../../src/shared/types.js";
+import type { TicketDetails, EventPriority } from "../../src/shared/types.js";
 import { makeTicket } from "../fixtures/tickets.js";
 
 // ---- Workspace Plugin Mock ----
@@ -52,12 +45,8 @@ export function createMockWorkspacePlugin(opts: MockWorkspacePluginOptions = {})
     createSubWorktree: opts.supportsSubWorktrees
       ? vi.fn(async (parentPath: string, step: number) => `${parentPath}/.worktrees/step-${step}`)
       : undefined,
-    mergeSubWorktree: opts.supportsSubWorktrees
-      ? vi.fn(async () => {})
-      : undefined,
-    removeSubWorktree: opts.supportsSubWorktrees
-      ? vi.fn(async () => {})
-      : undefined,
+    mergeSubWorktree: opts.supportsSubWorktrees ? vi.fn(async () => {}) : undefined,
+    removeSubWorktree: opts.supportsSubWorktrees ? vi.fn(async () => {}) : undefined,
   };
 }
 
@@ -102,14 +91,15 @@ export interface MockSCMPluginOptions {
 }
 
 export function createMockSCMPlugin(opts: MockSCMPluginOptions = {}): SCMPlugin {
-  const defaultPR: PRInfo | null = "defaultPR" in opts
-    ? (opts.defaultPR as PRInfo | null)
-    : {
-      number: 42,
-      url: "https://github.com/test/repo/pull/42",
-      branch: "feat/test",
-      repo: "test/repo",
-    };
+  const defaultPR: PRInfo | null =
+    "defaultPR" in opts
+      ? (opts.defaultPR as PRInfo | null)
+      : {
+          number: 42,
+          url: "https://github.com/test/repo/pull/42",
+          branch: "feat/test",
+          repo: "test/repo",
+        };
   return {
     name: opts.name ?? "mock-scm",
     detectPR: vi.fn(async () => defaultPR),
@@ -117,12 +107,15 @@ export function createMockSCMPlugin(opts: MockSCMPluginOptions = {}): SCMPlugin 
     getCISummary: vi.fn(async () => opts.defaultCIStatus ?? "passing"),
     getReviewDecision: vi.fn(async () => opts.defaultReviewDecision ?? "approved"),
     getPendingComments: vi.fn(async (): Promise<ReviewComment[]> => []),
-    getMergeability: vi.fn(async (): Promise<MergeReadiness> => opts.defaultMergeability ?? {
-      mergeable: true,
-      ci: "passing",
-      review: "approved",
-      blockers: [],
-    }),
+    getMergeability: vi.fn(
+      async (): Promise<MergeReadiness> =>
+        opts.defaultMergeability ?? {
+          mergeable: true,
+          ci: "passing",
+          review: "approved",
+          blockers: [],
+        },
+    ),
     mergePR: vi.fn(async () => {}),
   };
 }
@@ -143,7 +136,9 @@ export function createMockNotifierPlugin(opts: MockNotifierPluginOptions = {}): 
   return {
     name: opts.name ?? "mock-notifier",
     notify: opts.shouldFail
-      ? vi.fn(async () => { throw new Error("Notification delivery failed"); })
+      ? vi.fn(async () => {
+          throw new Error("Notification delivery failed");
+        })
       : vi.fn(async () => {}),
   };
 }
@@ -154,7 +149,9 @@ export const mockNotifierModule: PluginModule<NotifierPlugin> = {
 };
 
 /** Create a notifier that records all messages for assertion. */
-export function createRecordingNotifier(name = "recorder"): NotifierPlugin & { messages: Array<{ message: string; priority?: EventPriority }> } {
+export function createRecordingNotifier(
+  name = "recorder",
+): NotifierPlugin & { messages: Array<{ message: string; priority?: EventPriority }> } {
   const messages: Array<{ message: string; priority?: EventPriority }> = [];
   return {
     name,

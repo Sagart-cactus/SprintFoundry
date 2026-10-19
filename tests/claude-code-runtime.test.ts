@@ -10,7 +10,7 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
 
 vi.mock("../src/service/runtime/process-utils.js", async () => {
   const actual = await vi.importActual<typeof import("../src/service/runtime/process-utils.js")>(
-    "../src/service/runtime/process-utils.js"
+    "../src/service/runtime/process-utils.js",
   );
   return { ...actual, runProcess: vi.fn() };
 });
@@ -19,7 +19,10 @@ const { query: mockQuery } = await import("@anthropic-ai/claude-agent-sdk");
 const { runProcess: mockRunProcess } = await import("../src/service/runtime/process-utils.js");
 const { ClaudeCodeRuntime } = await import("../src/service/runtime/claude-code-runtime.js");
 
-function makeContext(workspacePath: string, mode: "local_sdk" | "local_process" = "local_sdk"): RuntimeStepContext {
+function makeContext(
+  workspacePath: string,
+  mode: "local_sdk" | "local_process" = "local_sdk",
+): RuntimeStepContext {
   return {
     runId: "run-claude-runtime-test",
     stepNumber: 1,
@@ -51,32 +54,34 @@ describe("ClaudeCodeRuntime", () => {
     await fs.writeFile(path.join(tmpDir, "CLAUDE.md"), "System prompt from file", "utf-8");
     await fs.writeFile(path.join(tmpDir, ".agent-task.md"), "Task prompt from file", "utf-8");
 
-    (mockQuery as any).mockImplementationOnce(({ options }: any) => (async function* () {
-      options.stderr("sdk stderr line");
-      yield { type: "system", subtype: "init", session_id: "sdk-session-123" };
-      yield {
-        type: "result",
-        subtype: "success",
-        is_error: false,
-        duration_ms: 1,
-        duration_api_ms: 1,
-        num_turns: 1,
-        stop_reason: null,
-        total_cost_usd: 0.42,
-        usage: {
-          input_tokens: 12,
-          output_tokens: 30,
-          cache_creation_input_tokens: 0,
-          cache_read_input_tokens: 0,
-          server_tool_use: { web_search_requests: 0 },
-        },
-        modelUsage: {},
-        permission_denials: [],
-        result: "ok",
-        uuid: "00000000-0000-0000-0000-000000000000",
-        session_id: "sdk-session-123",
-      };
-    })());
+    (mockQuery as any).mockImplementationOnce(({ options }: any) =>
+      (async function* () {
+        options.stderr("sdk stderr line");
+        yield { type: "system", subtype: "init", session_id: "sdk-session-123" };
+        yield {
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          duration_ms: 1,
+          duration_api_ms: 1,
+          num_turns: 1,
+          stop_reason: null,
+          total_cost_usd: 0.42,
+          usage: {
+            input_tokens: 12,
+            output_tokens: 30,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+            server_tool_use: { web_search_requests: 0 },
+          },
+          modelUsage: {},
+          permission_denials: [],
+          result: "ok",
+          uuid: "00000000-0000-0000-0000-000000000000",
+          session_id: "sdk-session-123",
+        };
+      })(),
+    );
 
     const runtime = new ClaudeCodeRuntime();
     const result = await runtime.runStep(makeContext(tmpDir));
@@ -117,13 +122,10 @@ describe("ClaudeCodeRuntime", () => {
     const stdoutLog = await fs.readFile(path.join(tmpDir, ".claude-runtime.stdout.log"), "utf-8");
     const stderrLog = await fs.readFile(path.join(tmpDir, ".claude-runtime.stderr.log"), "utf-8");
     const latestDebug = JSON.parse(
-      await fs.readFile(path.join(tmpDir, ".claude-runtime.debug.json"), "utf-8")
+      await fs.readFile(path.join(tmpDir, ".claude-runtime.debug.json"), "utf-8"),
     );
     const stepDebug = JSON.parse(
-      await fs.readFile(
-        path.join(tmpDir, ".claude-runtime.step-1.attempt-1.debug.json"),
-        "utf-8"
-      )
+      await fs.readFile(path.join(tmpDir, ".claude-runtime.step-1.attempt-1.debug.json"), "utf-8"),
     );
     expect(stdoutLog).toContain('"type":"result"');
     expect(stderrLog).toContain("sdk stderr line");
@@ -136,36 +138,38 @@ describe("ClaudeCodeRuntime", () => {
     await fs.writeFile(path.join(tmpDir, "CLAUDE.md"), "System prompt", "utf-8");
     await fs.writeFile(path.join(tmpDir, ".agent-task.md"), "Task prompt", "utf-8");
 
-    (mockQuery as any).mockImplementationOnce(() => (async function* () {
-      yield {
-        type: "message",
-        message: {
-          content: [
-            {
-              type: "tool_use",
-              name: "bash",
-              input: { command: "rm -rf /" },
-            },
-          ],
-        },
-      };
-      yield {
-        type: "result",
-        subtype: "success",
-        is_error: false,
-        duration_ms: 1,
-        duration_api_ms: 1,
-        num_turns: 1,
-        stop_reason: null,
-        total_cost_usd: 0,
-        usage: { input_tokens: 1, output_tokens: 1 },
-        modelUsage: {},
-        permission_denials: [],
-        result: "ok",
-        uuid: "00000000-0000-0000-0000-000000000011",
-        session_id: "sdk-session-guardrail",
-      };
-    })());
+    (mockQuery as any).mockImplementationOnce(() =>
+      (async function* () {
+        yield {
+          type: "message",
+          message: {
+            content: [
+              {
+                type: "tool_use",
+                name: "bash",
+                input: { command: "rm -rf /" },
+              },
+            ],
+          },
+        };
+        yield {
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          duration_ms: 1,
+          duration_api_ms: 1,
+          num_turns: 1,
+          stop_reason: null,
+          total_cost_usd: 0,
+          usage: { input_tokens: 1, output_tokens: 1 },
+          modelUsage: {},
+          permission_denials: [],
+          result: "ok",
+          uuid: "00000000-0000-0000-0000-000000000011",
+          session_id: "sdk-session-guardrail",
+        };
+      })(),
+    );
 
     const onActivity = vi.fn();
     const runtime = new ClaudeCodeRuntime();
@@ -178,7 +182,7 @@ describe("ClaudeCodeRuntime", () => {
       expect.objectContaining({
         type: "agent_guardrail_block",
         data: expect.objectContaining({ command: "rm -rf /" }),
-      })
+      }),
     );
   });
 
@@ -186,29 +190,31 @@ describe("ClaudeCodeRuntime", () => {
     await fs.writeFile(path.join(tmpDir, "CLAUDE.md"), "System prompt", "utf-8");
     await fs.writeFile(path.join(tmpDir, ".agent-task.md"), "Task prompt", "utf-8");
 
-    (mockQuery as any).mockImplementationOnce(() => (async function* () {
-      yield {
-        type: "tool_use",
-        tool_name: "Bash",
-        cmd: "rm -rf /tmp/guard",
-      };
-      yield {
-        type: "result",
-        subtype: "success",
-        is_error: false,
-        duration_ms: 1,
-        duration_api_ms: 1,
-        num_turns: 1,
-        stop_reason: null,
-        total_cost_usd: 0,
-        usage: { input_tokens: 1, output_tokens: 1 },
-        modelUsage: {},
-        permission_denials: [],
-        result: "ok",
-        uuid: "00000000-0000-0000-0000-000000000012",
-        session_id: "sdk-session-guardrail-top",
-      };
-    })());
+    (mockQuery as any).mockImplementationOnce(() =>
+      (async function* () {
+        yield {
+          type: "tool_use",
+          tool_name: "Bash",
+          cmd: "rm -rf /tmp/guard",
+        };
+        yield {
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          duration_ms: 1,
+          duration_api_ms: 1,
+          num_turns: 1,
+          stop_reason: null,
+          total_cost_usd: 0,
+          usage: { input_tokens: 1, output_tokens: 1 },
+          modelUsage: {},
+          permission_denials: [],
+          result: "ok",
+          uuid: "00000000-0000-0000-0000-000000000012",
+          session_id: "sdk-session-guardrail-top",
+        };
+      })(),
+    );
 
     const runtime = new ClaudeCodeRuntime();
     const ctx = makeContext(tmpDir);
@@ -221,36 +227,38 @@ describe("ClaudeCodeRuntime", () => {
     await fs.writeFile(path.join(tmpDir, "CLAUDE.md"), "System prompt", "utf-8");
     await fs.writeFile(path.join(tmpDir, ".agent-task.md"), "Task prompt", "utf-8");
 
-    (mockQuery as any).mockImplementationOnce(() => (async function* () {
-      yield {
-        type: "message",
-        message: {
-          content: [
-            {
-              type: "tool_use",
-              name: "Write",
-              input: { target_path: "README.md" },
-            },
-          ],
-        },
-      };
-      yield {
-        type: "result",
-        subtype: "success",
-        is_error: false,
-        duration_ms: 1,
-        duration_api_ms: 1,
-        num_turns: 1,
-        stop_reason: null,
-        total_cost_usd: 0,
-        usage: { input_tokens: 1, output_tokens: 1 },
-        modelUsage: {},
-        permission_denials: [],
-        result: "ok",
-        uuid: "00000000-0000-0000-0000-000000000013",
-        session_id: "sdk-session-guardrail-path",
-      };
-    })());
+    (mockQuery as any).mockImplementationOnce(() =>
+      (async function* () {
+        yield {
+          type: "message",
+          message: {
+            content: [
+              {
+                type: "tool_use",
+                name: "Write",
+                input: { target_path: "README.md" },
+              },
+            ],
+          },
+        };
+        yield {
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          duration_ms: 1,
+          duration_api_ms: 1,
+          num_turns: 1,
+          stop_reason: null,
+          total_cost_usd: 0,
+          usage: { input_tokens: 1, output_tokens: 1 },
+          modelUsage: {},
+          permission_denials: [],
+          result: "ok",
+          uuid: "00000000-0000-0000-0000-000000000013",
+          session_id: "sdk-session-guardrail-path",
+        };
+      })(),
+    );
 
     const runtime = new ClaudeCodeRuntime();
     const ctx = makeContext(tmpDir);
@@ -263,24 +271,26 @@ describe("ClaudeCodeRuntime", () => {
     await fs.writeFile(path.join(tmpDir, "CLAUDE.md"), "System prompt", "utf-8");
     await fs.writeFile(path.join(tmpDir, ".agent-task.md"), "Task prompt", "utf-8");
 
-    (mockQuery as any).mockImplementationOnce(() => (async function* () {
-      yield {
-        type: "result",
-        subtype: "success",
-        is_error: false,
-        duration_ms: 1,
-        duration_api_ms: 1,
-        num_turns: 1,
-        stop_reason: null,
-        total_cost_usd: 0,
-        usage: { input_tokens: 1, output_tokens: 1 },
-        modelUsage: {},
-        permission_denials: [],
-        result: "ok",
-        uuid: "00000000-0000-0000-0000-000000000001",
-        session_id: "sdk-session-456",
-      };
-    })());
+    (mockQuery as any).mockImplementationOnce(() =>
+      (async function* () {
+        yield {
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          duration_ms: 1,
+          duration_api_ms: 1,
+          num_turns: 1,
+          stop_reason: null,
+          total_cost_usd: 0,
+          usage: { input_tokens: 1, output_tokens: 1 },
+          modelUsage: {},
+          permission_denials: [],
+          result: "ok",
+          uuid: "00000000-0000-0000-0000-000000000001",
+          session_id: "sdk-session-456",
+        };
+      })(),
+    );
 
     const runtime = new ClaudeCodeRuntime();
     const result = await runtime.runStep({
@@ -304,12 +314,16 @@ describe("ClaudeCodeRuntime", () => {
     await fs.writeFile(path.join(tmpDir, "CLAUDE.md"), "System prompt", "utf-8");
     await fs.writeFile(path.join(tmpDir, ".agent-task.md"), "Task prompt", "utf-8");
 
-    (mockQuery as any).mockImplementationOnce(({ options }: any) => (async function* () {
-      await new Promise((_, reject) => {
-        const signal = options.abortController.signal as AbortSignal;
-        signal.addEventListener("abort", () => reject(new Error("aborted")));
-      });
-    })());
+    // Async generator mock required: the runtime consumes this with `for await`.
+    (mockQuery as any).mockImplementationOnce(({ options }: any) =>
+      // eslint-disable-next-line require-yield
+      (async function* () {
+        await new Promise((_, reject) => {
+          const signal = options.abortController.signal as AbortSignal;
+          signal.addEventListener("abort", () => reject(new Error("aborted")));
+        });
+      })(),
+    );
 
     const runtime = new ClaudeCodeRuntime();
     const ctx = makeContext(tmpDir);
@@ -354,7 +368,7 @@ describe("ClaudeCodeRuntime", () => {
     });
 
     const latestDebug = JSON.parse(
-      await fs.readFile(path.join(tmpDir, ".claude-runtime.debug.json"), "utf-8")
+      await fs.readFile(path.join(tmpDir, ".claude-runtime.debug.json"), "utf-8"),
     );
     expect(latestDebug.runtime_command).toBe("claude");
     expect(latestDebug.runtime_mode).toBe("local_process");
@@ -383,33 +397,35 @@ describe("ClaudeCodeRuntime", () => {
     await fs.writeFile(path.join(tmpDir, ".agent-task.md"), "Task prompt from file", "utf-8");
     const activities: Array<{ type: string; data: Record<string, unknown> }> = [];
 
-    (mockQuery as any).mockImplementationOnce(() => (async function* () {
-      yield {
-        type: "assistant",
-        content: [
-          { type: "thinking", text: "Planning command and edits" },
-          { type: "tool_use", name: "bash", input: { command: "npm test -- foo" } },
-          { type: "tool_use", name: "write_file", input: { path: "src/index.ts" } },
-          { type: "tool_use", name: "web_search", input: { query: "x" } },
-        ],
-      };
-      yield {
-        type: "result",
-        subtype: "success",
-        is_error: false,
-        duration_ms: 1,
-        duration_api_ms: 1,
-        num_turns: 1,
-        stop_reason: null,
-        total_cost_usd: 0,
-        usage: { input_tokens: 1, output_tokens: 1 },
-        modelUsage: {},
-        permission_denials: [],
-        result: "ok",
-        uuid: "00000000-0000-0000-0000-000000000002",
-        session_id: "sdk-session-activity-1",
-      };
-    })());
+    (mockQuery as any).mockImplementationOnce(() =>
+      (async function* () {
+        yield {
+          type: "assistant",
+          content: [
+            { type: "thinking", text: "Planning command and edits" },
+            { type: "tool_use", name: "bash", input: { command: "npm test -- foo" } },
+            { type: "tool_use", name: "write_file", input: { path: "src/index.ts" } },
+            { type: "tool_use", name: "web_search", input: { query: "x" } },
+          ],
+        };
+        yield {
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          duration_ms: 1,
+          duration_api_ms: 1,
+          num_turns: 1,
+          stop_reason: null,
+          total_cost_usd: 0,
+          usage: { input_tokens: 1, output_tokens: 1 },
+          modelUsage: {},
+          permission_denials: [],
+          result: "ok",
+          uuid: "00000000-0000-0000-0000-000000000002",
+          session_id: "sdk-session-activity-1",
+        };
+      })(),
+    );
 
     const runtime = new ClaudeCodeRuntime();
     await runtime.runStep({
@@ -457,7 +473,7 @@ describe("ClaudeCodeRuntime", () => {
           type: "agent_tool_call",
           data: expect.objectContaining({ tool_name: "Glob" }),
         }),
-      ])
+      ]),
     );
   });
 
@@ -482,10 +498,10 @@ describe("ClaudeCodeRuntime", () => {
         agent: "developer",
         runtime_provider: "claude-code",
         stream: "activity",
-      })
+      }),
     );
     const payload = postLog.mock.calls.at(-1)?.[0];
-    expect(payload.chunk).toContain("\"type\":\"agent_command_run\"");
+    expect(payload.chunk).toContain('"type":"agent_command_run"');
   });
 
   it("still posts sink log chunks when onActivity callback throws", async () => {

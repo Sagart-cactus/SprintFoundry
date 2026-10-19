@@ -6,9 +6,65 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
 jobs:
-  ci:
+  quality:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Lint and typecheck
+        run: pnpm lint
+
+      - name: Typecheck tests
+        run: pnpm typecheck:tests
+
+      - name: Format check
+        run: pnpm format:check
+
+      - name: Validate AGENTS.md commands
+        run: pnpm docs:validate
+
+      - name: Changed-file size and debt markers
+        env:
+          READINESS_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: pnpm check:changed-files
+
+      - name: Dead code and unused dependencies
+        run: pnpm dead-code:check
+
+      - name: Duplicate code
+        run: pnpm duplicates:check
+
+      - name: Module boundaries
+        run: pnpm boundaries:check
+
+      - name: Dependency version drift
+        run: pnpm versions:check
+
+  website:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -23,11 +79,35 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Typecheck
-        run: pnpm lint
+      - run: pnpm --filter @sprintfoundry/website typecheck
+
+      - run: pnpm --filter @sprintfoundry/website build
+
+      - name: Test with coverage thresholds
+        run: pnpm --filter @sprintfoundry/website test -- --coverage
+
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
 
       - name: Build
-        run: pnpm build
+        run: |
+          start=$(date +%s)
+          pnpm build
+          echo "### Build time: $(( $(date +%s) - start ))s" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Test
         env:
@@ -45,13 +125,46 @@ jobs:
           )"
           test_count="$(printf '%s\n' "$test_files" | sed '/^$/d' | wc -l | tr -d '[:space:]')"
           echo "Running ${test_count} test files with isolated Vitest processes..."
-          while IFS= read -r file; do
-            [ -z "$file" ] && continue
-            echo "==> ${file}"
+          timings="$(mktemp)"
+          failed=()
+          flaky=()
+          run_file() {
             pnpm vitest run \
               --pool=forks \
               --maxWorkers=1 \
               --no-file-parallelism \
               --reporter=dot \
-              "${file}"
+              "$1"
+          }
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            echo "==> ${file}"
+            start=$(date +%s)
+            if ! run_file "$file"; then
+              # A file that fails and then passes on an immediate retry is reported as flaky.
+              echo "::warning file=${file}::Retrying failed test file"
+              if run_file "$file"; then
+                flaky+=("$file")
+                echo "::warning file=${file}::Flaky test file (passed on retry)"
+              else
+                failed+=("$file")
+              fi
+            fi
+            printf '%s\t%s\n' "$(( $(date +%s) - start ))" "$file" >> "$timings"
           done <<< "$test_files"
+
+          {
+            echo "### Slowest test files"
+            echo "| Seconds | File |"
+            echo "| ---: | --- |"
+            sort -rn "$timings" | head -15 | awk -F'\t' '{ printf "| %s | `%s` |\n", $1, $2 }'
+            if [ "${#flaky[@]}" -gt 0 ]; then
+              echo "### Flaky test files"
+              printf -- '- `%s`\n' "${flaky[@]}"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${#failed[@]}" -gt 0 ]; then
+            printf 'Failed: %s\n' "${failed[@]}"
+            exit 1
+          fi

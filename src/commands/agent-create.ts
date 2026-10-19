@@ -66,10 +66,12 @@ const ROLE_META: Record<
 };
 
 function deriveAgentName(type: string): string {
-  return type
-    .split("-")
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ") + " Agent";
+  return (
+    type
+      .split("-")
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(" ") + " Agent"
+  );
 }
 
 function buildClaudeMd(answers: {
@@ -81,16 +83,11 @@ function buildClaudeMd(answers: {
   output_artifacts: string[];
   required_inputs: string[];
 }): string {
-  const { type, name, role, description, capabilities, output_artifacts, required_inputs } =
-    answers;
+  const { type: _type, name, role, description, capabilities, output_artifacts, required_inputs } = answers;
 
-  const artifactList = output_artifacts
-    .map((a) => `   - \`${a}\``)
-    .join("\n");
+  const artifactList = output_artifacts.map((a) => `   - \`${a}\``).join("\n");
 
-  const inputList = required_inputs
-    .map((i) => `   - \`${i}\``)
-    .join("\n");
+  const inputList = required_inputs.map((i) => `   - \`${i}\``).join("\n");
 
   const capabilityList = capabilities.map((c) => `- ${c}`).join("\n");
 
@@ -205,12 +202,7 @@ function buildAgentYaml(answers: {
   return header + body;
 }
 
-function printNextSteps(
-  type: string,
-  role: AgentRole,
-  agentYamlPath: string,
-  claudeMdPath: string
-): void {
+function printNextSteps(type: string, role: AgentRole, agentYamlPath: string, claudeMdPath: string): void {
   const meta = ROLE_META[role];
   console.log(`\n  Files written:\n`);
   console.log(`    ${agentYamlPath}`);
@@ -246,8 +238,7 @@ export async function runAgentCreate(configDir: string): Promise<void> {
   const type = await input({
     message: "Agent ID (kebab-case):",
     validate: (val) =>
-      /^[a-z0-9][a-z0-9-]*$/.test(val) ||
-      "Must be kebab-case (lowercase letters, numbers, hyphens)",
+      /^[a-z0-9][a-z0-9-]*$/.test(val) || "Must be kebab-case (lowercase letters, numbers, hyphens)",
   });
 
   const name = await input({
@@ -257,9 +248,7 @@ export async function runAgentCreate(configDir: string): Promise<void> {
 
   // Phase 2 — Role
   console.log("\n  Role & Inheritance\n");
-  console.log(
-    "  The role determines which model and runtime config this agent inherits by default.\n"
-  );
+  console.log("  The role determines which model and runtime config this agent inherits by default.\n");
 
   const role = (await select({
     message: "Closest matching role:",

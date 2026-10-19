@@ -1,0 +1,105 @@
+name: security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  codeql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+          queries: security-extended
+
+      - uses: github/codeql-action/analyze@v3
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan for verified secrets
+        uses: trufflesecurity/trufflehog@v3.88.0
+        with:
+          extra_args: --results=verified,unknown
+
+  dependency-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Audit production dependencies
+        run: pnpm audit --prod --audit-level high
+
+  dast:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Start website and monitor
+        run: |
+          pnpm --filter @sprintfoundry/website build
+          pnpm --filter @sprintfoundry/website preview --host 0.0.0.0 --port 4173 &
+          pnpm monitor &
+          for url in http://localhost:4173 http://localhost:4310/health; do
+            timeout 60 bash -c "until curl -fsS $url >/dev/null; do sleep 2; done"
+          done
+
+      - name: ZAP baseline scan (website)
+        uses: zaproxy/action-baseline@v0.14.0
+        with:
+          target: http://localhost:4173
+          allow_issue_writing: false
+          fail_action: false
+
+      - name: ZAP baseline scan (monitor)
+        uses: zaproxy/action-baseline@v0.14.0
+        with:
+          target: http://localhost:4310
+          allow_issue_writing: false
+          fail_action: false
+          artifact_name: zap_scan_monitor

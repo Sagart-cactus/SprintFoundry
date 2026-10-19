@@ -16,7 +16,9 @@ interface AgentSandboxCrdValidator {
 }
 
 function isTruthy(value: string | undefined): boolean {
-  const normalized = String(value ?? "").trim().toLowerCase();
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase();
   return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
@@ -29,7 +31,7 @@ function isHostedInsideAgentSandboxWholeRun(env: NodeJS.ProcessEnv): boolean {
 
 export function isAgentSandboxWholeRunHostingEnabled(
   platformConfig: PlatformConfig,
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   if (Object.prototype.hasOwnProperty.call(env, AGENT_SANDBOX_WHOLE_RUN_HOSTING_ENV)) {
     return isTruthy(env[AGENT_SANDBOX_WHOLE_RUN_HOSTING_ENV]);
@@ -54,7 +56,7 @@ export function normalizeAgentSandboxPlatformConfig(platformConfig: PlatformConf
 export async function validateAgentSandboxWholeRunHosting(
   platformConfig: PlatformConfig,
   env: NodeJS.ProcessEnv = process.env,
-  client?: AgentSandboxCrdValidator
+  client?: AgentSandboxCrdValidator,
 ): Promise<void> {
   normalizeAgentSandboxPlatformConfig(platformConfig);
   if (!isAgentSandboxWholeRunHostingEnabled(platformConfig, env)) {
@@ -68,7 +70,7 @@ export async function validateAgentSandboxWholeRunHosting(
   if (!agentSandbox?.enabled) {
     throw new Error(
       `SandboxClaim whole-run hosting is enabled, but k8s.agent_sandbox.enabled is false. ` +
-      `Enable k8s.agent_sandbox.enabled or unset ${AGENT_SANDBOX_WHOLE_RUN_HOSTING_ENV}.`
+        `Enable k8s.agent_sandbox.enabled or unset ${AGENT_SANDBOX_WHOLE_RUN_HOSTING_ENV}.`,
     );
   }
 
@@ -92,7 +94,7 @@ export async function validateAgentSandboxWholeRunHosting(
   if (missingCrds.length > 0) {
     throw new Error(
       `SandboxClaim whole-run hosting requires Agent Sandbox CRDs, but these were not found: ${missingCrds.join(", ")}. ` +
-      `Install the Agent Sandbox controller/CRDs or disable ${AGENT_SANDBOX_WHOLE_RUN_HOSTING_ENV}.`
+        `Install the Agent Sandbox controller/CRDs or disable ${AGENT_SANDBOX_WHOLE_RUN_HOSTING_ENV}.`,
     );
   }
 }
@@ -105,7 +107,8 @@ function createAgentSandboxCrdValidator(): AgentSandboxCrdValidator {
     throw new Error(
       `SandboxClaim whole-run hosting validation requires @kubernetes/client-node: ${
         error instanceof Error ? error.message : String(error)
-      }`
+      }`,
+      { cause: error },
     );
   }
 

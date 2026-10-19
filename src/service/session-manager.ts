@@ -18,7 +18,6 @@ import type { EventSinkClient } from "./event-sink-client.js";
 import { normalizeHostingMode, resolveHostingMode } from "./hosting-mode.js";
 
 const SESSIONS_DIR = path.join(os.homedir(), ".sprintfoundry", "sessions");
-const ARCHIVE_DIR = path.join(SESSIONS_DIR, "archive");
 const SESSIONS_DIR_ENV = "SPRINTFOUNDRY_SESSIONS_DIR";
 
 export class SessionManager {
@@ -40,13 +39,12 @@ export class SessionManager {
     await fs.mkdir(this.sessionsDir, { recursive: true });
     const existing = await this.readRaw(run.run_id);
 
-    const currentStep = run.steps.length > 0
-      ? Math.max(...run.steps.filter((s) => s.status === "running").map((s) => s.step_number), 0)
-      : 0;
+    const currentStep =
+      run.steps.length > 0
+        ? Math.max(...run.steps.filter((s) => s.status === "running").map((s) => s.step_number), 0)
+        : 0;
 
-    const totalSteps = run.validated_plan?.steps.length
-      ?? run.plan?.steps.length
-      ?? 0;
+    const totalSteps = run.validated_plan?.steps.length ?? run.plan?.steps.length ?? 0;
 
     const metadata: RunSessionMetadata = {
       run_id: run.run_id,
@@ -84,13 +82,11 @@ export class SessionManager {
     update: {
       terminal_workflow_state?: TerminalWorkflowState;
       durable_snapshot?: DurableSnapshotMetadata | null;
-    }
+    },
   ): Promise<RunSessionMetadata | null> {
     return this.patch(runId, (current) => ({
       ...current,
-      ...(update.terminal_workflow_state
-        ? { terminal_workflow_state: update.terminal_workflow_state }
-        : {}),
+      ...(update.terminal_workflow_state ? { terminal_workflow_state: update.terminal_workflow_state } : {}),
       ...(Object.prototype.hasOwnProperty.call(update, "durable_snapshot")
         ? { durable_snapshot: update.durable_snapshot ?? null }
         : {}),
@@ -136,14 +132,16 @@ export class SessionManager {
 
   async getLatestByStatus(
     statuses: RunStatus[],
-    options?: { projectId?: string }
+    options?: { projectId?: string },
   ): Promise<RunSessionMetadata | null> {
     const sessions = await this.list();
-    return sessions.find(
-      (session) =>
-        statuses.includes(session.status) &&
-        (!options?.projectId || session.project_id === options.projectId)
-    ) ?? null;
+    return (
+      sessions.find(
+        (session) =>
+          statuses.includes(session.status) &&
+          (!options?.projectId || session.project_id === options.projectId),
+      ) ?? null
+    );
   }
 
   /**
@@ -218,7 +216,7 @@ export class SessionManager {
 
   private async patch(
     runId: string,
-    updater: (current: RunSessionMetadata) => RunSessionMetadata
+    updater: (current: RunSessionMetadata) => RunSessionMetadata,
   ): Promise<RunSessionMetadata | null> {
     const current = await this.readRaw(runId);
     if (!current) return null;
@@ -236,7 +234,7 @@ export class SessionManager {
       console.warn(
         `[session-sink] Failed to upsert run ${session.run_id}: ${
           error instanceof Error ? error.message : String(error)
-        }`
+        }`,
       );
     }
   }
@@ -257,7 +255,7 @@ export class SessionManager {
 
   private resolveTerminalWorkflowState(
     status: RunStatus,
-    existing: RunSessionMetadata | null
+    existing: RunSessionMetadata | null,
   ): TerminalWorkflowState {
     if (status === "completed" || status === "failed" || status === "cancelled") {
       if (!existing?.terminal_workflow_state || existing.terminal_workflow_state === "running") {
@@ -268,15 +266,9 @@ export class SessionManager {
     return "running";
   }
 
-  private async reconcileFromWorkspaceEvents(
-    session: RunSessionMetadata
-  ): Promise<RunSessionMetadata> {
+  private async reconcileFromWorkspaceEvents(session: RunSessionMetadata): Promise<RunSessionMetadata> {
     // Terminal/cancelled states are authoritative.
-    if (
-      session.status === "completed" ||
-      session.status === "failed" ||
-      session.status === "cancelled"
-    ) {
+    if (session.status === "completed" || session.status === "failed" || session.status === "cancelled") {
       return session;
     }
     if (!session.workspace_path) return session;
@@ -364,7 +356,7 @@ export class SessionManager {
       hosting_mode: hostingMode ?? session.hosting_mode,
       updated_at: lastTimestamp ?? session.updated_at,
       completed_at:
-        (derived === "completed" || derived === "failed" || derived === "cancelled")
+        derived === "completed" || derived === "failed" || derived === "cancelled"
           ? (session.completed_at ?? lastTimestamp ?? null)
           : session.completed_at,
     };

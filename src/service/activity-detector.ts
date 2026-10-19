@@ -6,7 +6,7 @@
 
 import * as fs from "fs/promises";
 import * as path from "path";
-import type { ActivityState, ActivityDetection } from "../shared/types.js";
+import type { ActivityDetection } from "../shared/types.js";
 
 // Claude Code stores session JSONL in ~/.claude/projects/<project-hash>/
 const CLAUDE_DIR = ".claude";
@@ -85,10 +85,7 @@ async function findLatestRuntimeLog(workspacePath: string): Promise<RuntimeLogCa
  * Read the tail of a JSONL file (last N bytes) and parse lines.
  * More efficient than reading the entire file for large session logs.
  */
-export async function parseJsonlFileTail(
-  filePath: string,
-  maxBytes = 32_768
-): Promise<JsonlLine[]> {
+export async function parseJsonlFileTail(filePath: string, maxBytes = 32_768): Promise<JsonlLine[]> {
   try {
     const stat = await fs.stat(filePath);
     const fileSize = stat.size;
@@ -129,10 +126,7 @@ export async function parseJsonlFileTail(
 /**
  * Classify agent activity based on the last few JSONL events.
  */
-function classifyActivity(
-  lines: JsonlLine[],
-  thresholdMs: number
-): ActivityDetection {
+function classifyActivity(lines: JsonlLine[], thresholdMs: number): ActivityDetection {
   if (lines.length === 0) {
     return { state: "unknown", last_event_at: null, elapsed_ms: null, detail: "No JSONL data" };
   }
@@ -157,35 +151,65 @@ function classifyActivity(
   // Check for exit signals
   const lastType = lastLine.type;
   if (lastType === "exit" || lastType === "result" || lastLine.message?.stop_reason === "end_turn") {
-    return { state: "exited", last_event_at: lastTimestamp, elapsed_ms: elapsed, detail: `Last event: ${lastType}` };
+    return {
+      state: "exited",
+      last_event_at: lastTimestamp,
+      elapsed_ms: elapsed,
+      detail: `Last event: ${lastType}`,
+    };
   }
 
   // Check if the agent appears to be waiting for input
   if (lastType === "tool_use" || lastType === "tool_result") {
     if (elapsed > thresholdMs * 2) {
-      return { state: "blocked", last_event_at: lastTimestamp, elapsed_ms: elapsed, detail: "Tool call with no response" };
+      return {
+        state: "blocked",
+        last_event_at: lastTimestamp,
+        elapsed_ms: elapsed,
+        detail: "Tool call with no response",
+      };
     }
-    return { state: "active", last_event_at: lastTimestamp, elapsed_ms: elapsed, detail: `Processing: ${lastType}` };
+    return {
+      state: "active",
+      last_event_at: lastTimestamp,
+      elapsed_ms: elapsed,
+      detail: `Processing: ${lastType}`,
+    };
   }
 
   // Recent activity means active
   if (elapsed < thresholdMs) {
-    return { state: "active", last_event_at: lastTimestamp, elapsed_ms: elapsed, detail: `Last event: ${lastType ?? "unknown"}` };
+    return {
+      state: "active",
+      last_event_at: lastTimestamp,
+      elapsed_ms: elapsed,
+      detail: `Last event: ${lastType ?? "unknown"}`,
+    };
   }
 
   // Stale but not exited
   if (elapsed < thresholdMs * 3) {
-    return { state: "idle", last_event_at: lastTimestamp, elapsed_ms: elapsed, detail: `Idle for ${Math.round(elapsed / 1000)}s` };
+    return {
+      state: "idle",
+      last_event_at: lastTimestamp,
+      elapsed_ms: elapsed,
+      detail: `Idle for ${Math.round(elapsed / 1000)}s`,
+    };
   }
 
-  return { state: "blocked", last_event_at: lastTimestamp, elapsed_ms: elapsed, detail: `No activity for ${Math.round(elapsed / 1000)}s` };
+  return {
+    state: "blocked",
+    last_event_at: lastTimestamp,
+    elapsed_ms: elapsed,
+    detail: `No activity for ${Math.round(elapsed / 1000)}s`,
+  };
 }
 
 function classifyRuntimeLogActivity(
   lines: JsonlLine[],
   thresholdMs: number,
   mtimeMs: number,
-  sourcePath: string
+  sourcePath: string,
 ): ActivityDetection {
   const elapsed = Date.now() - mtimeMs;
   const last = lines.at(-1);
@@ -233,7 +257,7 @@ function classifyRuntimeLogActivity(
  */
 export async function getActivityState(
   workspacePath: string,
-  thresholdMs = 30_000
+  thresholdMs = 30_000,
 ): Promise<ActivityDetection> {
   const claudeDir = toClaudeProjectPath(workspacePath);
   const sessionFile = await findLatestSessionFile(claudeDir);
@@ -257,7 +281,7 @@ export async function getActivityState(
  * Returns null if no billing data found.
  */
 export async function getSessionCost(
-  workspacePath: string
+  workspacePath: string,
 ): Promise<{ total_cost_usd: number; total_tokens: number } | null> {
   const claudeDir = toClaudeProjectPath(workspacePath);
   const sessionFile = await findLatestSessionFile(claudeDir);

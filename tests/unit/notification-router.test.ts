@@ -5,7 +5,6 @@
 
 import { describe, it, expect } from "vitest";
 import { NotificationRouter, defaultRoutingConfig } from "../../src/service/notification-router.js";
-import type { NotifierPlugin, EventPriority } from "../../src/shared/plugin-types.js";
 
 describe("NotificationRouter — inferPriority", () => {
   const router = new NotificationRouter(new Map(), defaultRoutingConfig());

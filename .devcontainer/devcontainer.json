@@ -1,0 +1,19 @@
+{
+  "name": "SprintFoundry",
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:1-22-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
+  },
+  "forwardPorts": [3001, 3000, 3010, 4310, 4311, 4312, 4320, 5432, 6379, 9090],
+  "portsAttributes": {
+    "4310": { "label": "SprintFoundry monitor" },
+    "4312": { "label": "Website development server" },
+    "4320": { "label": "Dispatch API" }
+  },
+  "postCreateCommand": "corepack enable && pnpm install --frozen-lockfile",
+  "customizations": {
+    "vscode": {
+      "extensions": ["dbaeumer.vscode-eslint", "esbenp.prettier-vscode", "ms-vscode.vscode-typescript-next"]
+    }
+  }
+}

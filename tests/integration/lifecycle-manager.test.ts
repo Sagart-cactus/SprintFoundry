@@ -8,8 +8,8 @@ import { LifecycleManager, defaultLifecycleConfig } from "../../src/service/life
 import { SessionManager } from "../../src/service/session-manager.js";
 import { NotificationRouter } from "../../src/service/notification-router.js";
 import { createMockSCMPlugin, createRecordingNotifier } from "../helpers/plugin-mocks.js";
-import type { LifecycleConfig, LifecycleCallbacks } from "../../src/service/lifecycle-manager.js";
-import type { SCMPlugin, PRInfo } from "../../src/shared/plugin-types.js";
+import type { LifecycleConfig } from "../../src/service/lifecycle-manager.js";
+import type { SCMPlugin } from "../../src/shared/plugin-types.js";
 import { mkdtempSync, rmSync } from "fs";
 import * as path from "path";
 import * as os from "os";
@@ -25,10 +25,12 @@ beforeEach(() => {
   tmpDir = mkdtempSync(path.join(os.tmpdir(), "sf-lifecycle-integ-"));
   sessionManager = new SessionManager(tmpDir);
   notifier = createRecordingNotifier("console");
-  router = new NotificationRouter(
-    new Map([["console", notifier]]),
-    { urgent: ["console"], action: ["console"], warning: ["console"], info: ["console"] }
-  );
+  router = new NotificationRouter(new Map([["console", notifier]]), {
+    urgent: ["console"],
+    action: ["console"],
+    warning: ["console"],
+    info: ["console"],
+  });
   scm = createMockSCMPlugin();
   config = {
     ...defaultLifecycleConfig(),
@@ -38,7 +40,11 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* */ }
+  try {
+    rmSync(tmpDir, { recursive: true, force: true });
+  } catch {
+    /* */
+  }
 });
 
 describe("Lifecycle Manager — watch and unwatch", () => {
@@ -108,7 +114,12 @@ describe("Lifecycle Manager — CI failure reactions", () => {
     vi.mocked(scm.getCISummary).mockResolvedValue("failing");
     vi.mocked(scm.getReviewDecision).mockResolvedValue("pending");
 
-    lm.watch("run-manual-1", "feat/manual", "https://github.com/test/repo/pull/3", "https://github.com/test/repo");
+    lm.watch(
+      "run-manual-1",
+      "feat/manual",
+      "https://github.com/test/repo/pull/3",
+      "https://github.com/test/repo",
+    );
     await lm.check("run-manual-1");
 
     expect(notifier.messages.length).toBeGreaterThanOrEqual(1);
@@ -127,15 +138,18 @@ describe("Lifecycle Manager — review changes requested", () => {
       { id: 1, author: "reviewer", body: "Fix the error handling", created_at: new Date().toISOString() },
     ]);
 
-    lm.watch("run-review-1", "feat/review", "https://github.com/test/repo/pull/5", "https://github.com/test/repo");
+    lm.watch(
+      "run-review-1",
+      "feat/review",
+      "https://github.com/test/repo/pull/5",
+      "https://github.com/test/repo",
+    );
     await lm.check("run-review-1");
 
     expect(onChangesRequested).toHaveBeenCalledTimes(1);
-    expect(onChangesRequested).toHaveBeenCalledWith(
-      "run-review-1",
-      expect.any(Object),
-      ["Fix the error handling"]
-    );
+    expect(onChangesRequested).toHaveBeenCalledWith("run-review-1", expect.any(Object), [
+      "Fix the error handling",
+    ]);
   });
 
   it("escalates after exceeding review rework limit", async () => {
@@ -145,7 +159,12 @@ describe("Lifecycle Manager — review changes requested", () => {
     vi.mocked(scm.getCISummary).mockResolvedValue("passing");
     vi.mocked(scm.getReviewDecision).mockResolvedValue("changes_requested");
 
-    lm.watch("run-rev-esc", "feat/rev-esc", "https://github.com/test/repo/pull/6", "https://github.com/test/repo");
+    lm.watch(
+      "run-rev-esc",
+      "feat/rev-esc",
+      "https://github.com/test/repo/pull/6",
+      "https://github.com/test/repo",
+    );
     await lm.check("run-rev-esc");
 
     const urgentMessages = notifier.messages.filter((m) => m.priority === "urgent");
@@ -163,7 +182,12 @@ describe("Lifecycle Manager — approved and green (auto-merge)", () => {
     vi.mocked(scm.getCISummary).mockResolvedValue("passing");
     vi.mocked(scm.getReviewDecision).mockResolvedValue("approved");
 
-    lm.watch("run-merge-1", "feat/merge", "https://github.com/test/repo/pull/7", "https://github.com/test/repo");
+    lm.watch(
+      "run-merge-1",
+      "feat/merge",
+      "https://github.com/test/repo/pull/7",
+      "https://github.com/test/repo",
+    );
     await lm.check("run-merge-1");
 
     expect(onReadyToMerge).toHaveBeenCalledTimes(1);
@@ -178,7 +202,12 @@ describe("Lifecycle Manager — approved and green (auto-merge)", () => {
     vi.mocked(scm.getCISummary).mockResolvedValue("passing");
     vi.mocked(scm.getReviewDecision).mockResolvedValue("approved");
 
-    lm.watch("run-notify-merge", "feat/nm", "https://github.com/test/repo/pull/8", "https://github.com/test/repo");
+    lm.watch(
+      "run-notify-merge",
+      "feat/nm",
+      "https://github.com/test/repo/pull/8",
+      "https://github.com/test/repo",
+    );
     await lm.check("run-notify-merge");
 
     expect(notifier.messages.some((m) => m.message.includes("Ready to merge"))).toBe(true);
@@ -198,7 +227,12 @@ describe("Lifecycle Manager — approved and green (auto-merge)", () => {
       blockers: ["Branch protection requires 2 approvals"],
     });
 
-    lm.watch("run-blocked", "feat/blocked", "https://github.com/test/repo/pull/9", "https://github.com/test/repo");
+    lm.watch(
+      "run-blocked",
+      "feat/blocked",
+      "https://github.com/test/repo/pull/9",
+      "https://github.com/test/repo",
+    );
     await lm.check("run-blocked");
 
     expect(notifier.messages.some((m) => m.message.includes("not mergeable"))).toBe(true);
@@ -211,7 +245,12 @@ describe("Lifecycle Manager — merged/closed PR cleanup", () => {
 
     vi.mocked(scm.getPRState).mockResolvedValue("merged");
 
-    lm.watch("run-merged", "feat/merged", "https://github.com/test/repo/pull/10", "https://github.com/test/repo");
+    lm.watch(
+      "run-merged",
+      "feat/merged",
+      "https://github.com/test/repo/pull/10",
+      "https://github.com/test/repo",
+    );
     await lm.check("run-merged");
 
     expect(lm.watchCount).toBe(0);
@@ -223,7 +262,12 @@ describe("Lifecycle Manager — merged/closed PR cleanup", () => {
 
     vi.mocked(scm.getPRState).mockResolvedValue("closed");
 
-    lm.watch("run-closed", "feat/closed", "https://github.com/test/repo/pull/11", "https://github.com/test/repo");
+    lm.watch(
+      "run-closed",
+      "feat/closed",
+      "https://github.com/test/repo/pull/11",
+      "https://github.com/test/repo",
+    );
     await lm.check("run-closed");
 
     expect(lm.watchCount).toBe(0);
@@ -251,7 +295,12 @@ describe("Lifecycle Manager — polling", () => {
 
   it("skip check when no SCM plugin configured", async () => {
     const lm = new LifecycleManager(config, null, sessionManager, router);
-    lm.watch("run-no-scm", "feat/test", "https://github.com/test/repo/pull/1", "https://github.com/test/repo");
+    lm.watch(
+      "run-no-scm",
+      "feat/test",
+      "https://github.com/test/repo/pull/1",
+      "https://github.com/test/repo",
+    );
     // Should not throw
     await lm.pollAll();
     // No notifications sent (no SCM to check)

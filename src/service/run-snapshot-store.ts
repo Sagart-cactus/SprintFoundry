@@ -5,10 +5,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createRequire } from "node:module";
-import type {
-  DurableSnapshotMetadata,
-  RunSessionMetadata,
-} from "../shared/types.js";
+import type { DurableSnapshotMetadata, RunSessionMetadata } from "../shared/types.js";
 
 const require = createRequire(import.meta.url);
 const execFile = promisify(execFileCb);
@@ -143,8 +140,7 @@ function buildDefaultS3Factories(options: RunSnapshotStoreOptions): ResolvedS3Fa
   const endpoint = resolveSnapshotS3Endpoint(options.endpoint);
   const region = asString(options.region ?? process.env.SPRINTFOUNDRY_SNAPSHOT_S3_REGION) || "us-east-1";
   const forcePathStyle =
-    options.forcePathStyle ??
-    isTruthy(process.env.SPRINTFOUNDRY_SNAPSHOT_S3_FORCE_PATH_STYLE);
+    options.forcePathStyle ?? isTruthy(process.env.SPRINTFOUNDRY_SNAPSHOT_S3_FORCE_PATH_STYLE);
 
   const s3Client = new awsModule.S3Client({
     region,
@@ -173,7 +169,7 @@ export class RunSnapshotStore {
   async uploadRunSnapshot(
     identity: RunSnapshotIdentity,
     session: RunSessionMetadata,
-    workspacePath: string
+    workspacePath: string,
   ): Promise<RunSnapshotUploadResult> {
     const bucket = this.resolveBucket();
     if (!bucket) {
@@ -268,7 +264,7 @@ export class RunSnapshotStore {
           Key: archiveKey,
           Body: archiveBuffer,
           ContentType: "application/gzip",
-        })
+        }),
       );
       await s3.s3Client.send(
         s3.putCommandFactory({
@@ -276,7 +272,7 @@ export class RunSnapshotStore {
           Key: manifestKey,
           Body: Buffer.from(JSON.stringify(manifest, null, 2), "utf-8"),
           ContentType: "application/json",
-        })
+        }),
       );
       await s3.s3Client.send(
         s3.putCommandFactory({
@@ -284,7 +280,7 @@ export class RunSnapshotStore {
           Key: sessionKey,
           Body: Buffer.from(JSON.stringify(exportedSession, null, 2), "utf-8"),
           ContentType: "application/json",
-        })
+        }),
       );
 
       return {
@@ -297,7 +293,9 @@ export class RunSnapshotStore {
     }
   }
 
-  async readManifest(identity: Pick<RunSnapshotIdentity, "run_id" | "project_id" | "tenant_id">): Promise<RunSnapshotManifest> {
+  async readManifest(
+    identity: Pick<RunSnapshotIdentity, "run_id" | "project_id" | "tenant_id">,
+  ): Promise<RunSnapshotManifest> {
     const bucket = this.resolveBucket();
     if (!bucket) {
       throw new Error("Run snapshots are not configured: missing snapshot bucket");
@@ -309,7 +307,7 @@ export class RunSnapshotStore {
   }
 
   async readSessionRecord(
-    identity: Pick<RunSnapshotIdentity, "run_id" | "project_id" | "tenant_id">
+    identity: Pick<RunSnapshotIdentity, "run_id" | "project_id" | "tenant_id">,
   ): Promise<RunSessionMetadata> {
     const bucket = this.resolveBucket();
     if (!bucket) {
@@ -322,7 +320,7 @@ export class RunSnapshotStore {
 
   async writeSessionRecord(
     identity: Pick<RunSnapshotIdentity, "run_id" | "project_id" | "tenant_id">,
-    session: RunSessionMetadata
+    session: RunSessionMetadata,
   ): Promise<void> {
     const bucket = this.resolveBucket();
     if (!bucket) {
@@ -336,13 +334,13 @@ export class RunSnapshotStore {
         Key: manifest.session_key,
         Body: Buffer.from(JSON.stringify(session, null, 2), "utf-8"),
         ContentType: "application/json",
-      })
+      }),
     );
   }
 
   async restoreRunSnapshot(
     identity: Pick<RunSnapshotIdentity, "run_id" | "project_id" | "tenant_id">,
-    destinationPath: string
+    destinationPath: string,
   ): Promise<RunSnapshotRestoreResult> {
     const bucket = this.resolveBucket();
     if (!bucket) {
@@ -380,7 +378,7 @@ export class RunSnapshotStore {
         this.logger.warn(
           `[run-snapshot] Falling back to archived session payload for ${identity.run_id}: ${
             error instanceof Error ? error.message : String(error)
-          }`
+          }`,
         );
         const raw = await fs.readFile(uploadedSessionPath, "utf-8");
         session = JSON.parse(raw) as RunSessionMetadata;
@@ -391,7 +389,11 @@ export class RunSnapshotStore {
         session,
         workspacePath: destinationPath,
         runtimeHomePath,
-        compatibilityWarnings: await this.buildCompatibilityWarnings(destinationPath, runtimeHomePath, manifest),
+        compatibilityWarnings: await this.buildCompatibilityWarnings(
+          destinationPath,
+          runtimeHomePath,
+          manifest,
+        ),
       };
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
@@ -413,21 +415,23 @@ export class RunSnapshotStore {
     return buildDefaultS3Factories(this.options);
   }
 
-  private buildSnapshotPrefix(identity: Pick<RunSnapshotIdentity, "run_id" | "project_id" | "tenant_id">): string {
+  private buildSnapshotPrefix(
+    identity: Pick<RunSnapshotIdentity, "run_id" | "project_id" | "tenant_id">,
+  ): string {
     const tenantId = asString(identity.tenant_id) || "shared";
     return normalizeS3Key(
-      `tenants/${tenantId}/projects/${identity.project_id}/runs/${identity.run_id}/snapshot`
+      `tenants/${tenantId}/projects/${identity.project_id}/runs/${identity.run_id}/snapshot`,
     );
   }
 
   private async getObjectBody(bucket: string, key: string): Promise<Buffer> {
     const s3 = this.resolveS3();
-    const result = await s3.s3Client.send(
+    const result = (await s3.s3Client.send(
       s3.getCommandFactory({
         Bucket: bucket,
         Key: key,
-      })
-    ) as { Body?: unknown };
+      }),
+    )) as { Body?: unknown };
     return readS3Body(result.Body);
   }
 
@@ -435,7 +439,7 @@ export class RunSnapshotStore {
     const gitConfigPath = path.join(workspacePath, ".git", "config");
     const gitConfig = await fs.readFile(gitConfigPath, "utf-8").catch(() => "");
     if (gitConfig) {
-      const scrubbed = gitConfig.replace(/(https?:\/\/)([^@\s\/]+@)/gi, "$1");
+      const scrubbed = gitConfig.replace(/(https?:\/\/)([^@\s/]+@)/gi, "$1");
       await fs.writeFile(gitConfigPath, scrubbed, "utf-8");
     }
   }
@@ -453,8 +457,8 @@ export class RunSnapshotStore {
     for (let depth = 0; depth < 8; depth += 1) {
       const candidate = path.join(current, "home");
       if (
-        await this.pathExists(path.join(candidate, ".codex")) ||
-        await this.pathExists(path.join(candidate, ".claude"))
+        (await this.pathExists(path.join(candidate, ".codex"))) ||
+        (await this.pathExists(path.join(candidate, ".claude")))
       ) {
         return candidate;
       }
@@ -468,15 +472,17 @@ export class RunSnapshotStore {
   private async buildCompatibilityWarnings(
     workspacePath: string,
     runtimeHomePath: string | null,
-    manifest: RunSnapshotManifest
+    manifest: RunSnapshotManifest,
   ): Promise<string[]> {
     const warnings: string[] = [];
     if (!(await this.pathExists(path.join(workspacePath, ".sprintfoundry", "sessions.json")))) {
-      warnings.push("Restored workspace is missing .sprintfoundry/sessions.json; local hand-off metadata may be incomplete.");
+      warnings.push(
+        "Restored workspace is missing .sprintfoundry/sessions.json; local hand-off metadata may be incomplete.",
+      );
     }
     if (!runtimeHomePath) {
       warnings.push(
-        "No provider runtime home was restored. Provider-level continuation may be unavailable; use workspace inspection or SprintFoundry resume flows."
+        "No provider runtime home was restored. Provider-level continuation may be unavailable; use workspace inspection or SprintFoundry resume flows.",
       );
       return warnings;
     }
@@ -487,11 +493,13 @@ export class RunSnapshotStore {
     const hasClaudeHome = await this.pathExists(path.join(runtimeHomePath, ".claude"));
     if (!hasCodexHome && !hasClaudeHome) {
       warnings.push(
-        "Restored runtime home does not contain .codex or .claude state. Interactive provider continuation may require manual re-authentication."
+        "Restored runtime home does not contain .codex or .claude state. Interactive provider continuation may require manual re-authentication.",
       );
     }
     if (manifest.source_runtime_home_path && !hasCodexHome && !hasClaudeHome) {
-      warnings.push(`Snapshot declared runtime home ${manifest.source_runtime_home_path}, but no provider state was restored from it.`);
+      warnings.push(
+        `Snapshot declared runtime home ${manifest.source_runtime_home_path}, but no provider state was restored from it.`,
+      );
     }
     return warnings;
   }

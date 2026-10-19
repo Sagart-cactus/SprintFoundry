@@ -66,7 +66,11 @@ export interface DispatchControllerStartOptions {
   logger?: Pick<Console, "log" | "warn" | "error">;
   executeLocalRun?: (task: DispatchQueueItem) => Promise<void>;
   createK8sJob?: (manifest: K8sJobManifest, task: DispatchQueueItem, namespace: string) => Promise<void>;
-  createSandboxHost?: (resources: SandboxHostResources, task: DispatchQueueItem, namespace: string) => Promise<void>;
+  createSandboxHost?: (
+    resources: SandboxHostResources,
+    task: DispatchQueueItem,
+    namespace: string,
+  ) => Promise<void>;
   validatePlatformConfig?: (configDir: string) => Promise<void>;
   autoStartConsumer?: boolean;
   now?: () => number;
@@ -351,7 +355,9 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
 }
 
 function toLower(value: unknown): string {
-  return String(value ?? "").trim().toLowerCase();
+  return String(value ?? "")
+    .trim()
+    .toLowerCase();
 }
 
 function isProjectConfigFileName(name: string): boolean {
@@ -373,7 +379,10 @@ function interpolateEnvVars(raw: string, env: NodeJS.ProcessEnv = process.env): 
   return raw.replace(/\$\{(\w+)\}/g, (_match, envName) => env[envName] ?? "");
 }
 
-async function loadYamlFile(filePath: string, env: NodeJS.ProcessEnv = process.env): Promise<Record<string, unknown>> {
+async function loadYamlFile(
+  filePath: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<Record<string, unknown>> {
   const raw = await fs.readFile(filePath, "utf-8");
   const interpolated = interpolateEnvVars(raw, env);
   const parsed = parseYaml(interpolated);
@@ -409,7 +418,10 @@ export async function resolveMountedProjectSecretEnv(
 async function loadProjectYamlFile(filePath: string, configDir: string): Promise<Record<string, unknown>> {
   const raw = await fs.readFile(filePath, "utf-8");
   const initial = parseYaml(raw);
-  const projectId = typeof initial === "object" && initial !== null ? asString((initial as Record<string, unknown>).project_id) : "";
+  const projectId =
+    typeof initial === "object" && initial !== null
+      ? asString((initial as Record<string, unknown>).project_id)
+      : "";
   const projectEnv = await resolveMountedProjectSecretEnv(projectId, configDir);
   const interpolated = interpolateEnvVars(raw, { ...process.env, ...projectEnv });
   const parsed = parseYaml(interpolated);
@@ -423,10 +435,13 @@ async function validateDispatchPlatformConfig(configDir: string): Promise<void> 
   const platform = rawPlatform as unknown as PlatformConfig;
   normalizeAgentSandboxPlatformConfig(platform);
   await validateAgentSandboxWholeRunHosting(platform);
-  if (process.env.SPRINTFOUNDRY_K8S_MODE === "true" && !isAgentSandboxWholeRunHostingEnabled(platform, process.env)) {
+  if (
+    process.env.SPRINTFOUNDRY_K8S_MODE === "true" &&
+    !isAgentSandboxWholeRunHostingEnabled(platform, process.env)
+  ) {
     throw new Error(
       "Kubernetes dispatch requires k8s.agent_sandbox.whole_run_hosting_enabled=true. " +
-      "Legacy whole-run Job hosting has been removed."
+        "Legacy whole-run Job hosting has been removed.",
     );
   }
 }
@@ -440,7 +455,9 @@ interface DispatchAgentSandboxWholeRunConfig {
   templatePlural: string;
 }
 
-async function loadDispatchAgentSandboxWholeRunConfig(configDir: string): Promise<DispatchAgentSandboxWholeRunConfig> {
+async function loadDispatchAgentSandboxWholeRunConfig(
+  configDir: string,
+): Promise<DispatchAgentSandboxWholeRunConfig> {
   const platformPath = path.join(configDir, "platform.yaml");
   const rawPlatform = await loadYamlFile(platformPath).catch(() => ({}));
   const platform = rawPlatform as PlatformConfig;
@@ -469,7 +486,10 @@ function dedupeKey(projectId: string, delivery: string): string {
 }
 
 function normalizeK8sName(input: string, prefix: string): string {
-  const normalized = input.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
+  const normalized = input
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
   const value = `${prefix}-${normalized || "run"}`;
   return value.slice(0, 63).replace(/-+$/g, "");
 }
@@ -511,26 +531,13 @@ function resolveLinearPayloadStateName(payload: Record<string, unknown>): string
   const issue = isRecord(data.issue) ? data.issue : {};
   const state = isRecord(data.state) ? data.state : {};
   const issueState = isRecord(issue.state) ? issue.state : {};
-  return asString(
-    data.stateName ||
-    state.name ||
-    data.state ||
-    issueState.name ||
-    issue.state ||
-    "",
-  );
+  return asString(data.stateName || state.name || data.state || issueState.name || issue.state || "");
 }
 
 function resolveLinearUpdatedFromStateName(payload: Record<string, unknown>): string {
   const updatedFrom = isRecord(payload.updatedFrom) ? payload.updatedFrom : {};
   const state = isRecord(updatedFrom.state) ? updatedFrom.state : {};
-  return asString(
-    updatedFrom.stateName ||
-    state.name ||
-    updatedFrom.state ||
-    updatedFrom.stateId ||
-    "",
-  );
+  return asString(updatedFrom.stateName || state.name || updatedFrom.state || updatedFrom.stateId || "");
 }
 
 function hasLinearWorkflowStateTransition(payload: Record<string, unknown>): boolean {
@@ -622,7 +629,11 @@ function buildRedisClient(options: DispatchControllerStartOptions): DispatchRedi
   return redisModule.createClient({ url: redisUrl });
 }
 
-async function defaultLocalRunExecutor(task: DispatchQueueItem, configDir: string, logger: Pick<Console, "warn">): Promise<void> {
+async function defaultLocalRunExecutor(
+  task: DispatchQueueItem,
+  configDir: string,
+  logger: Pick<Console, "warn">,
+): Promise<void> {
   const cliArgs = ["run", "--source", task.source, "--config", configDir];
 
   if (task.source === "prompt") {
@@ -722,7 +733,7 @@ function buildWholeRunRunnerEnv(
     systemSecretName?: string;
     eventSinkUrl?: string;
     hostingMode: "k8s-job-whole-run" | "k8s-agent-sandbox";
-  }
+  },
 ): Array<
   | { name: string; value: string }
   | {
@@ -737,7 +748,8 @@ function buildWholeRunRunnerEnv(
     }
 > {
   const { projectSecretName, runtimeSecretName, systemSecretName, eventSinkUrl, hostingMode } = options;
-  const internalTokenSecretName = asString(runtimeSecretName) || asString(systemSecretName) || projectSecretName;
+  const internalTokenSecretName =
+    asString(runtimeSecretName) || asString(systemSecretName) || projectSecretName;
   return [
     { name: "SPRINTFOUNDRY_RUN_ID", value: task.run_id },
     { name: "SPRINTFOUNDRY_PROJECT_ID", value: task.project_id },
@@ -752,23 +764,32 @@ function buildWholeRunRunnerEnv(
     { name: "CODEX_HOME", value: "/workspace/home/.codex" },
     ...(eventSinkUrl ? [{ name: EVENT_SINK_URL_ENV, value: eventSinkUrl }] : []),
     ...(eventSinkUrl
-      ? [{
-          name: INTERNAL_API_TOKEN_ENV,
-          valueFrom: {
-            secretKeyRef: {
-              name: internalTokenSecretName,
-              key: INTERNAL_API_TOKEN_ENV,
-              optional: true,
+      ? [
+          {
+            name: INTERNAL_API_TOKEN_ENV,
+            valueFrom: {
+              secretKeyRef: {
+                name: internalTokenSecretName,
+                key: INTERNAL_API_TOKEN_ENV,
+                optional: true,
+              },
             },
           },
-        }]
+        ]
       : []),
     ...(asString(process.env[SKIP_PR_FINALIZATION_ENV])
       ? [{ name: SKIP_PR_FINALIZATION_ENV, value: asString(process.env[SKIP_PR_FINALIZATION_ENV]) }]
       : []),
     { name: "SPRINTFOUNDRY_OTEL_ENABLED", value: process.env.SPRINTFOUNDRY_OTEL_ENABLED ?? "0" },
-    { name: "OTEL_EXPORTER_OTLP_ENDPOINT", value: process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? "http://otel-collector.monitoring.svc.cluster.local:4318" },
-    { name: "OTEL_EXPORTER_OTLP_PROTOCOL", value: process.env.OTEL_EXPORTER_OTLP_PROTOCOL ?? "http/protobuf" },
+    {
+      name: "OTEL_EXPORTER_OTLP_ENDPOINT",
+      value:
+        process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? "http://otel-collector.monitoring.svc.cluster.local:4318",
+    },
+    {
+      name: "OTEL_EXPORTER_OTLP_PROTOCOL",
+      value: process.env.OTEL_EXPORTER_OTLP_PROTOCOL ?? "http/protobuf",
+    },
     { name: "OTEL_METRICS_EXPORTER", value: process.env.OTEL_METRICS_EXPORTER ?? "otlp" },
     { name: "OTEL_LOGS_EXPORTER", value: process.env.OTEL_LOGS_EXPORTER ?? "otlp" },
   ];
@@ -788,12 +809,15 @@ function buildWholeRunRunnerPodSpec(
     memoryLimit?: string;
     eventSinkUrl?: string;
     hostingMode: "k8s-job-whole-run" | "k8s-agent-sandbox";
-  }
+  },
 ): K8sJobManifest["spec"]["template"]["spec"] {
   const image = asString(options?.image) || "sprintfoundry-runner:latest";
-  const projectSecretName = asString(options?.projectSecretName) || `sprintfoundry-project-${task.project_id}-secrets`;
-  const runtimeSecretName = asString(options?.runtimeSecretName) || `sprintfoundry-project-${task.project_id}-runtime-secrets`;
-  const projectConfigMapName = asString(options?.projectConfigMapName) || `sprintfoundry-project-${task.project_id}-config`;
+  const projectSecretName =
+    asString(options?.projectSecretName) || `sprintfoundry-project-${task.project_id}-secrets`;
+  const runtimeSecretName =
+    asString(options?.runtimeSecretName) || `sprintfoundry-project-${task.project_id}-runtime-secrets`;
+  const projectConfigMapName =
+    asString(options?.projectConfigMapName) || `sprintfoundry-project-${task.project_id}-config`;
   const systemSecretName = asString(process.env[SYSTEM_SECRET_NAME_ENV]) || undefined;
   const workspacePvcName = makeRunWorkspacePvcName(task.run_id);
   const eventSinkUrl = asString(options?.eventSinkUrl) || asString(process.env[EVENT_SINK_URL_ENV]);
@@ -847,22 +871,25 @@ function buildWholeRunRunnerPodSpec(
   };
 }
 
-export function buildK8sJobManifest(task: DispatchQueueItem, options?: {
-  namespace?: string;
-  image?: string;
-  projectSecretName?: string;
-  runtimeSecretName?: string;
-  projectConfigMapName?: string;
-  serviceAccountName?: string;
-  ttlSecondsAfterFinished?: number;
-  cpuRequest?: string;
-  cpuLimit?: string;
-  memoryRequest?: string;
-  memoryLimit?: string;
-  workspaceSizeLimit?: string;
-  workspaceStorageClassName?: string;
-  eventSinkUrl?: string;
-}): K8sJobManifest {
+export function buildK8sJobManifest(
+  task: DispatchQueueItem,
+  options?: {
+    namespace?: string;
+    image?: string;
+    projectSecretName?: string;
+    runtimeSecretName?: string;
+    projectConfigMapName?: string;
+    serviceAccountName?: string;
+    ttlSecondsAfterFinished?: number;
+    cpuRequest?: string;
+    cpuLimit?: string;
+    memoryRequest?: string;
+    memoryLimit?: string;
+    workspaceSizeLimit?: string;
+    workspaceStorageClassName?: string;
+    eventSinkUrl?: string;
+  },
+): K8sJobManifest {
   const namespace = asString(options?.namespace) || "default";
   return {
     apiVersion: "batch/v1",
@@ -913,28 +940,29 @@ export function makeRunSandboxClaimName(runId: string): string {
 
 export function makeRunSandboxTemplateName(runId: string, templatePrefix?: string): string {
   const prefix = asString(templatePrefix);
-  const normalized = prefix && prefix !== DEFAULT_AGENT_SANDBOX_TEMPLATE_NAME
-    ? `${prefix}-${runId}`
-    : runId;
+  const normalized = prefix && prefix !== DEFAULT_AGENT_SANDBOX_TEMPLATE_NAME ? `${prefix}-${runId}` : runId;
   return normalizeK8sName(normalized, "sf-template");
 }
 
-export function buildSandboxTemplateManifest(task: DispatchQueueItem, options?: {
-  namespace?: string;
-  image?: string;
-  templateName?: string;
-  apiGroup?: string;
-  apiVersion?: string;
-  projectSecretName?: string;
-  runtimeSecretName?: string;
-  projectConfigMapName?: string;
-  serviceAccountName?: string;
-  cpuRequest?: string;
-  cpuLimit?: string;
-  memoryRequest?: string;
-  memoryLimit?: string;
-  eventSinkUrl?: string;
-}): SandboxTemplateManifest {
+export function buildSandboxTemplateManifest(
+  task: DispatchQueueItem,
+  options?: {
+    namespace?: string;
+    image?: string;
+    templateName?: string;
+    apiGroup?: string;
+    apiVersion?: string;
+    projectSecretName?: string;
+    runtimeSecretName?: string;
+    projectConfigMapName?: string;
+    serviceAccountName?: string;
+    cpuRequest?: string;
+    cpuLimit?: string;
+    memoryRequest?: string;
+    memoryLimit?: string;
+    eventSinkUrl?: string;
+  },
+): SandboxTemplateManifest {
   const namespace = asString(options?.namespace) || "default";
   const apiGroup = asString(options?.apiGroup) || DEFAULT_AGENT_SANDBOX_API_GROUP;
   const apiVersion = asString(options?.apiVersion) || DEFAULT_AGENT_SANDBOX_API_VERSION;
@@ -987,13 +1015,16 @@ export function buildSandboxTemplateManifest(task: DispatchQueueItem, options?: 
   };
 }
 
-export function buildSandboxClaimManifest(task: DispatchQueueItem, options?: {
-  namespace?: string;
-  templateName?: string;
-  apiGroup?: string;
-  apiVersion?: string;
-  claimPlural?: string;
-}): SandboxClaimManifest {
+export function buildSandboxClaimManifest(
+  task: DispatchQueueItem,
+  options?: {
+    namespace?: string;
+    templateName?: string;
+    apiGroup?: string;
+    apiVersion?: string;
+    claimPlural?: string;
+  },
+): SandboxClaimManifest {
   const namespace = asString(options?.namespace) || "default";
   const templateName = makeRunSandboxTemplateName(task.run_id, options?.templateName);
   const apiGroup = asString(options?.apiGroup) || DEFAULT_AGENT_SANDBOX_API_GROUP;
@@ -1030,11 +1061,14 @@ export function makeRunWorkspacePvcName(runId: string): string {
   return normalizeK8sName(runId, "sf-run-ws");
 }
 
-export function buildK8sWorkspacePvcManifest(task: DispatchQueueItem, options?: {
-  namespace?: string;
-  workspaceSizeLimit?: string;
-  workspaceStorageClassName?: string;
-}): K8sPersistentVolumeClaimManifest {
+export function buildK8sWorkspacePvcManifest(
+  task: DispatchQueueItem,
+  options?: {
+    namespace?: string;
+    workspaceSizeLimit?: string;
+    workspaceStorageClassName?: string;
+  },
+): K8sPersistentVolumeClaimManifest {
   const namespace = asString(options?.namespace) || "default";
   const storageSize = asString(options?.workspaceSizeLimit) || "10Gi";
   const storageClassName = asString(options?.workspaceStorageClassName) || "";
@@ -1089,7 +1123,7 @@ export function buildJobOwnerReference(job: {
 
 function withOwnerReference<T extends { metadata?: Record<string, unknown> }>(
   resource: T,
-  ownerReference: ReturnType<typeof buildJobOwnerReference>
+  ownerReference: ReturnType<typeof buildJobOwnerReference>,
 ): T {
   const metadata = (resource.metadata ?? {}) as Record<string, unknown>;
   const existingOwnerReferences = Array.isArray(metadata.ownerReferences)
@@ -1097,7 +1131,7 @@ function withOwnerReference<T extends { metadata?: Record<string, unknown> }>(
     : [];
   const nextOwnerReferences = [
     ...existingOwnerReferences.filter(
-      (ref) => !(ref.uid === ownerReference.uid && ref.name === ownerReference.name)
+      (ref) => !(ref.uid === ownerReference.uid && ref.name === ownerReference.name),
     ),
     ownerReference,
   ];
@@ -1112,24 +1146,30 @@ function withOwnerReference<T extends { metadata?: Record<string, unknown> }>(
 
 function hasOwnerReference(
   resource: { metadata?: Record<string, unknown> },
-  ownerReference: ReturnType<typeof buildJobOwnerReference>
+  ownerReference: ReturnType<typeof buildJobOwnerReference>,
 ): boolean {
   const metadata = (resource.metadata ?? {}) as Record<string, unknown>;
   const existingOwnerReferences = Array.isArray(metadata.ownerReferences)
     ? (metadata.ownerReferences as Array<Record<string, unknown>>)
     : [];
   return existingOwnerReferences.some(
-    (ref) => ref.uid === ownerReference.uid && ref.name === ownerReference.name
+    (ref) => ref.uid === ownerReference.uid && ref.name === ownerReference.name,
   );
 }
 
 function isK8sConflictError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   const bodyCode = Number((error as { body?: { code?: unknown } } | undefined)?.body?.code);
-  return bodyCode === 409 || /Conflict|409|object has been modified|Operation cannot be fulfilled/i.test(message);
+  return (
+    bodyCode === 409 || /Conflict|409|object has been modified|Operation cannot be fulfilled/i.test(message)
+  );
 }
 
-async function readNamespacedPersistentVolumeClaimCompat(coreApi: any, pvcName: string, namespace: string): Promise<any> {
+async function readNamespacedPersistentVolumeClaimCompat(
+  coreApi: any,
+  pvcName: string,
+  namespace: string,
+): Promise<any> {
   try {
     return await coreApi.readNamespacedPersistentVolumeClaim({ name: pvcName, namespace });
   } catch (error) {
@@ -1146,7 +1186,7 @@ async function replaceNamespacedPersistentVolumeClaimCompat(
   coreApi: any,
   pvcName: string,
   namespace: string,
-  body: unknown
+  body: unknown,
 ): Promise<void> {
   try {
     await coreApi.replaceNamespacedPersistentVolumeClaim({
@@ -1170,7 +1210,7 @@ export async function attachWorkspacePvcToJob(
   coreApi: any,
   namespace: string,
   pvcManifest: K8sPersistentVolumeClaimManifest,
-  ownerReference: ReturnType<typeof buildJobOwnerReference>
+  ownerReference: ReturnType<typeof buildJobOwnerReference>,
 ): Promise<void> {
   const pvcName = pvcManifest.metadata.name;
 
@@ -1214,13 +1254,18 @@ async function readJobUid(batchApi: any, namespace: string, jobName: string): Pr
   }
 }
 
-async function defaultCreateK8sJob(manifest: K8sJobManifest, _task: DispatchQueueItem, namespace: string): Promise<void> {
+async function defaultCreateK8sJob(
+  manifest: K8sJobManifest,
+  _task: DispatchQueueItem,
+  namespace: string,
+): Promise<void> {
   let k8sModule: any;
   try {
     k8sModule = require("@kubernetes/client-node");
   } catch (error) {
     throw new Error(
       `SPRINTFOUNDRY_K8S_MODE=true requires @kubernetes/client-node: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
     );
   }
 
@@ -1260,16 +1305,23 @@ async function defaultCreateK8sJob(manifest: K8sJobManifest, _task: DispatchQueu
   try {
     const createdJob = await batchApi.createNamespacedJob({ namespace, body: manifest });
     const jobBody = createdJob?.body ?? createdJob;
-    const uid = String(jobBody?.metadata?.uid ?? "").trim() || await readJobUid(batchApi, namespace, manifest.metadata.name);
+    const uid =
+      String(jobBody?.metadata?.uid ?? "").trim() ||
+      (await readJobUid(batchApi, namespace, manifest.metadata.name));
     if (uid) {
-      await attachWorkspacePvcToJob(coreApi, namespace, workspacePvc, buildJobOwnerReference({
-        apiVersion: manifest.apiVersion,
-        kind: manifest.kind,
-        metadata: {
-          name: manifest.metadata.name,
-          uid,
-        },
-      }));
+      await attachWorkspacePvcToJob(
+        coreApi,
+        namespace,
+        workspacePvc,
+        buildJobOwnerReference({
+          apiVersion: manifest.apiVersion,
+          kind: manifest.kind,
+          metadata: {
+            name: manifest.metadata.name,
+            uid,
+          },
+        }),
+      );
     }
     return;
   } catch (error) {
@@ -1282,26 +1334,38 @@ async function defaultCreateK8sJob(manifest: K8sJobManifest, _task: DispatchQueu
 
   const createdJob = await batchApi.createNamespacedJob(namespace, manifest);
   const jobBody = createdJob?.body ?? createdJob;
-  const uid = String(jobBody?.metadata?.uid ?? "").trim() || await readJobUid(batchApi, namespace, manifest.metadata.name);
+  const uid =
+    String(jobBody?.metadata?.uid ?? "").trim() ||
+    (await readJobUid(batchApi, namespace, manifest.metadata.name));
   if (uid) {
-    await attachWorkspacePvcToJob(coreApi, namespace, workspacePvc, buildJobOwnerReference({
-      apiVersion: manifest.apiVersion,
-      kind: manifest.kind,
-      metadata: {
-        name: manifest.metadata.name,
-        uid,
-      },
-    }));
+    await attachWorkspacePvcToJob(
+      coreApi,
+      namespace,
+      workspacePvc,
+      buildJobOwnerReference({
+        apiVersion: manifest.apiVersion,
+        kind: manifest.kind,
+        metadata: {
+          name: manifest.metadata.name,
+          uid,
+        },
+      }),
+    );
   }
 }
 
-async function defaultCreateSandboxHost(resources: SandboxHostResources, _task: DispatchQueueItem, namespace: string): Promise<void> {
+async function defaultCreateSandboxHost(
+  resources: SandboxHostResources,
+  _task: DispatchQueueItem,
+  namespace: string,
+): Promise<void> {
   let k8sModule: any;
   try {
     k8sModule = require("@kubernetes/client-node");
   } catch (error) {
     throw new Error(
       `SandboxClaim dispatch requires @kubernetes/client-node: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
     );
   }
 
@@ -1349,8 +1413,7 @@ async function defaultCreateSandboxHost(resources: SandboxHostResources, _task: 
 
   const [claimGroup, claimVersion] = String(claim.apiVersion).split("/", 2);
   const plural =
-    claim.metadata.annotations?.["sprintfoundry.io/claim-plural"] ||
-    DEFAULT_AGENT_SANDBOX_CLAIM_PLURAL;
+    claim.metadata.annotations?.["sprintfoundry.io/claim-plural"] || DEFAULT_AGENT_SANDBOX_CLAIM_PLURAL;
   await customObjectsApi.createNamespacedCustomObject({
     group: claimGroup,
     version: claimVersion,
@@ -1374,8 +1437,16 @@ class DispatchController implements DispatchControllerRuntime {
   private readonly now: () => number;
   private readonly idGenerator: () => string;
   private readonly executeLocalRun: (task: DispatchQueueItem) => Promise<void>;
-  private readonly createK8sJob: (manifest: K8sJobManifest, task: DispatchQueueItem, namespace: string) => Promise<void>;
-  private readonly createSandboxHost: (resources: SandboxHostResources, task: DispatchQueueItem, namespace: string) => Promise<void>;
+  private readonly createK8sJob: (
+    manifest: K8sJobManifest,
+    task: DispatchQueueItem,
+    namespace: string,
+  ) => Promise<void>;
+  private readonly createSandboxHost: (
+    resources: SandboxHostResources,
+    task: DispatchQueueItem,
+    namespace: string,
+  ) => Promise<void>;
   private readonly validatePlatformConfig: (configDir: string) => Promise<void>;
   private readonly readToken: string;
   private readonly writeToken: string;
@@ -1403,21 +1474,31 @@ class DispatchController implements DispatchControllerRuntime {
     this.redis = buildRedisClient(options);
     this.blockingRedis = this.redis.duplicate ? this.redis.duplicate() : this.redis;
     this.logger = options.logger ?? console;
-    this.queuePollIntervalMs = options.queuePollIntervalMs ?? parsePositiveInt(process.env.SPRINTFOUNDRY_DISPATCH_QUEUE_POLL_MS, 1000);
-    this.queueBlockTimeoutSeconds = options.queueBlockTimeoutSeconds ?? parsePositiveInt(process.env.SPRINTFOUNDRY_DISPATCH_QUEUE_BLOCK_SECONDS, 2);
-    this.dedupeTtlSeconds = options.dedupeTtlSeconds ?? parsePositiveInt(process.env.SPRINTFOUNDRY_DISPATCH_DEDUPE_TTL_SECONDS, 1800);
-    this.defaultMaxConcurrentRuns = options.defaultMaxConcurrentRuns ?? parsePositiveInt(process.env.SPRINTFOUNDRY_DISPATCH_MAX_CONCURRENT_RUNS, 10);
-    this.activeRunTtlSeconds = options.activeRunTtlSeconds ?? parsePositiveInt(process.env.SPRINTFOUNDRY_DISPATCH_ACTIVE_TTL_SECONDS, 3600);
+    this.queuePollIntervalMs =
+      options.queuePollIntervalMs ?? parsePositiveInt(process.env.SPRINTFOUNDRY_DISPATCH_QUEUE_POLL_MS, 1000);
+    this.queueBlockTimeoutSeconds =
+      options.queueBlockTimeoutSeconds ??
+      parsePositiveInt(process.env.SPRINTFOUNDRY_DISPATCH_QUEUE_BLOCK_SECONDS, 2);
+    this.dedupeTtlSeconds =
+      options.dedupeTtlSeconds ??
+      parsePositiveInt(process.env.SPRINTFOUNDRY_DISPATCH_DEDUPE_TTL_SECONDS, 1800);
+    this.defaultMaxConcurrentRuns =
+      options.defaultMaxConcurrentRuns ??
+      parsePositiveInt(process.env.SPRINTFOUNDRY_DISPATCH_MAX_CONCURRENT_RUNS, 10);
+    this.activeRunTtlSeconds =
+      options.activeRunTtlSeconds ??
+      parsePositiveInt(process.env.SPRINTFOUNDRY_DISPATCH_ACTIVE_TTL_SECONDS, 3600);
     this.k8sMode = options.k8sMode ?? process.env.SPRINTFOUNDRY_K8S_MODE === "true";
     this.now = options.now ?? (() => Date.now());
     this.idGenerator = options.idGenerator ?? (() => randomUUID().slice(0, 8));
     this.readToken = asString(options.readToken ?? process.env.SPRINTFOUNDRY_DISPATCH_READ_TOKEN);
     this.writeToken = asString(options.writeToken ?? process.env.SPRINTFOUNDRY_DISPATCH_WRITE_TOKEN);
-    this.runnerImage = asString(options.runnerImage ?? process.env.SPRINTFOUNDRY_RUNNER_IMAGE) || "sprintfoundry-runner:latest";
+    this.runnerImage =
+      asString(options.runnerImage ?? process.env.SPRINTFOUNDRY_RUNNER_IMAGE) ||
+      "sprintfoundry-runner:latest";
 
     this.executeLocalRun =
-      options.executeLocalRun ??
-      ((task) => defaultLocalRunExecutor(task, this.configDir, this.logger));
+      options.executeLocalRun ?? ((task) => defaultLocalRunExecutor(task, this.configDir, this.logger));
 
     this.createK8sJob = options.createK8sJob ?? defaultCreateK8sJob;
     this.createSandboxHost = options.createSandboxHost ?? defaultCreateSandboxHost;
@@ -1457,7 +1538,7 @@ class DispatchController implements DispatchControllerRuntime {
         if (attempt >= maxAttempts) break;
         this.logger.warn(
           `[dispatch] redis connect attempt ${attempt}/${maxAttempts} failed: ` +
-            `${error instanceof Error ? error.message : String(error)}`
+            `${error instanceof Error ? error.message : String(error)}`,
         );
         await sleep(retryDelayMs);
       }
@@ -1476,7 +1557,9 @@ class DispatchController implements DispatchControllerRuntime {
           await sleep(this.queuePollIntervalMs);
         }
       } catch (error) {
-        this.logger.error(`[dispatch] consumer error: ${error instanceof Error ? error.message : String(error)}`);
+        this.logger.error(
+          `[dispatch] consumer error: ${error instanceof Error ? error.message : String(error)}`,
+        );
         await sleep(this.queuePollIntervalMs);
       }
     }
@@ -1559,15 +1642,18 @@ class DispatchController implements DispatchControllerRuntime {
         projectArg: projectArgFromFileName(fileName),
         maxConcurrentRuns: resolveProjectConcurrentLimit(rawProject, this.defaultMaxConcurrentRuns),
         validConfig: isValidProjectConfig(rawProject),
-        eventSinkUrl: asString((isRecord(integrations.event_sink) ? integrations.event_sink.url : undefined) ?? ""),
+        eventSinkUrl: asString(
+          (isRecord(integrations.event_sink) ? integrations.event_sink.url : undefined) ?? "",
+        ),
         workflow,
         branchPrefix: asString(branchStrategy.prefix),
-        linearSource: sourceType === "linear"
-          ? {
-              api_key: asString(ticketSourceConfig.api_key),
-              api_url: asString(ticketSourceConfig.api_url),
-            }
-          : undefined,
+        linearSource:
+          sourceType === "linear"
+            ? {
+                api_key: asString(ticketSourceConfig.api_key),
+                api_url: asString(ticketSourceConfig.api_url),
+              }
+            : undefined,
       };
 
       if (sourceType === "github" || scmType === "github") {
@@ -1606,10 +1692,7 @@ class DispatchController implements DispatchControllerRuntime {
     const projects = await this.loadProjects();
     return (
       projects.find(
-        (project) =>
-          project.github &&
-          project.github.owner === ownerNorm &&
-          project.github.repo === repoNorm,
+        (project) => project.github && project.github.owner === ownerNorm && project.github.repo === repoNorm,
       ) ?? null
     );
   }
@@ -1654,30 +1737,31 @@ class DispatchController implements DispatchControllerRuntime {
   private buildLinearWorkflowTask(
     project: DispatchProjectConfig,
     payload: Record<string, unknown>,
-    ticketId: string
+    ticketId: string,
   ): DispatchQueueItem | null {
     if (!project.workflow) return null;
     if (!hasLinearWorkflowStateTransition(payload)) return null;
 
     const stateName = resolveLinearPayloadStateName(payload);
     const previousStateName = resolveLinearUpdatedFromStateName(payload);
-    const stage = resolveWorkflowStageForLinearTicket(
-      {
-        id: ticketId,
-        source: "linear",
-        title: ticketId,
-        description: "",
-        state: stateName,
-        labels: [],
-        priority: "p2",
-        acceptance_criteria: [],
-        linked_tickets: [],
-        comments: [],
-        author: "workflow",
-        raw: {},
-      },
-      project.workflow,
-    ) ?? (asString(payload.action) === "create" ? "developer" : null);
+    const stage =
+      resolveWorkflowStageForLinearTicket(
+        {
+          id: ticketId,
+          source: "linear",
+          title: ticketId,
+          description: "",
+          state: stateName,
+          labels: [],
+          priority: "p2",
+          acceptance_criteria: [],
+          linked_tickets: [],
+          comments: [],
+          author: "workflow",
+          raw: {},
+        },
+        project.workflow,
+      ) ?? (asString(payload.action) === "create" ? "developer" : null);
     if (!stage) return null;
 
     return {
@@ -1701,7 +1785,7 @@ class DispatchController implements DispatchControllerRuntime {
 
   private buildGitHubWorkflowTask(
     project: DispatchProjectConfig,
-    payload: Record<string, unknown>
+    payload: Record<string, unknown>,
   ): DispatchQueueItem | null {
     if (!project.workflow) return null;
     const pullRequest = isRecord(payload.pull_request) ? payload.pull_request : {};
@@ -1740,7 +1824,11 @@ class DispatchController implements DispatchControllerRuntime {
     await this.enqueueInternal(task);
   }
 
-  private async tryAcquireProjectSlot(projectId: string, runId: string, maxConcurrentRuns: number): Promise<boolean> {
+  private async tryAcquireProjectSlot(
+    projectId: string,
+    runId: string,
+    maxConcurrentRuns: number,
+  ): Promise<boolean> {
     const key = activeSetKey(projectId);
     const now = this.now();
     await this.redis.zRemRangeByScore(key, 0, now);
@@ -1761,12 +1849,14 @@ class DispatchController implements DispatchControllerRuntime {
   private async dispatchTask(task: DispatchQueueItem): Promise<void> {
     if (this.k8sMode) {
       const project = await this.findProjectById(task.project_id);
-      const { namespace, secretName, configMapName, runtimeSecretName } = describeProjectK8sContract(task.project_id);
+      const { namespace, secretName, configMapName, runtimeSecretName } = describeProjectK8sContract(
+        task.project_id,
+      );
       const eventSinkUrl = asString(process.env[EVENT_SINK_URL_ENV]) || asString(project?.eventSinkUrl);
       if (!this.agentSandboxWholeRunConfig.enabled) {
         throw new Error(
           "Kubernetes dispatch requires Agent Sandbox whole-run hosting. " +
-          "Enable k8s.agent_sandbox.whole_run_hosting_enabled; legacy Job hosting has been removed."
+            "Enable k8s.agent_sandbox.whole_run_hosting_enabled; legacy Job hosting has been removed.",
         );
       }
 
@@ -1824,11 +1914,17 @@ class DispatchController implements DispatchControllerRuntime {
 
     const project = projects.find((candidate) => candidate.projectId === task.project_id);
     if (!project || !project.validConfig) {
-      this.logger.warn(`[dispatch] skipping run ${task.run_id}: invalid or unknown project ${task.project_id}`);
+      this.logger.warn(
+        `[dispatch] skipping run ${task.run_id}: invalid or unknown project ${task.project_id}`,
+      );
       return true;
     }
 
-    const acquired = await this.tryAcquireProjectSlot(task.project_id, task.run_id, project.maxConcurrentRuns);
+    const acquired = await this.tryAcquireProjectSlot(
+      task.project_id,
+      task.run_id,
+      project.maxConcurrentRuns,
+    );
     if (!acquired) {
       await this.redis.lPush(queueKey(task.project_id), popped.element);
       return false;
@@ -1925,7 +2021,9 @@ class DispatchController implements DispatchControllerRuntime {
 
     const autoCfg = matched.github.autoCfg;
     if (!autoCfg.webhookSecret) {
-      res.status(403).json({ accepted: false, error: "Webhook secret not configured", project_id: matched.projectId });
+      res
+        .status(403)
+        .json({ accepted: false, error: "Webhook secret not configured", project_id: matched.projectId });
       return;
     }
 
@@ -1959,8 +2057,7 @@ class DispatchController implements DispatchControllerRuntime {
       }
 
       const pullRequest = isRecord(payload.pull_request) ? payload.pull_request : {};
-      const fallbackDelivery =
-        `${matched.projectId}:${event}:${action}:${task.ticket_id}:${asString(pullRequest.updated_at)}`;
+      const fallbackDelivery = `${matched.projectId}:${event}:${action}:${task.ticket_id}:${asString(pullRequest.updated_at)}`;
       const deliveryKey = delivery || fallbackDelivery;
       const dedupeTtl = Math.max(60, Math.floor(autoCfg.dedupeWindowMinutes * 60) || this.dedupeTtlSeconds);
 
@@ -2069,7 +2166,9 @@ class DispatchController implements DispatchControllerRuntime {
 
     const autoCfg = matched.linear.autoCfg;
     if (!autoCfg.webhookSecret) {
-      res.status(403).json({ accepted: false, error: "Webhook secret not configured", project_id: matched.projectId });
+      res
+        .status(403)
+        .json({ accepted: false, error: "Webhook secret not configured", project_id: matched.projectId });
       return;
     }
 
@@ -2248,7 +2347,9 @@ export async function registerDispatchRoutes(
   return controller;
 }
 
-export async function startDispatchControllerServer(options: DispatchControllerStartOptions = {}): Promise<DispatchServerRuntime> {
+export async function startDispatchControllerServer(
+  options: DispatchControllerStartOptions = {},
+): Promise<DispatchServerRuntime> {
   const host = asString(options.host ?? process.env.SPRINTFOUNDRY_DISPATCH_HOST) || "0.0.0.0";
   const port = options.port ?? parsePositiveInt(process.env.SPRINTFOUNDRY_DISPATCH_PORT, 4320);
 

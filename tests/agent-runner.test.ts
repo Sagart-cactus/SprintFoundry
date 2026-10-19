@@ -80,11 +80,7 @@ describe("AgentRunner", () => {
     // Create the workspace structure tests expect
     const agentDir = path.join(tmpDir, "src", "agents", "developer");
     await fs.mkdir(agentDir, { recursive: true });
-    await fs.writeFile(
-      path.join(agentDir, "CLAUDE.md"),
-      "# Developer Agent",
-      "utf-8"
-    );
+    await fs.writeFile(path.join(agentDir, "CLAUDE.md"), "# Developer Agent", "utf-8");
   });
 
   it("buildClaudeCliArgs includes -p, --output-format, --dangerously-skip-permissions", async () => {
@@ -105,7 +101,7 @@ describe("AgentRunner", () => {
 
     const args = (runner as any).buildClaudeCliArgs(
       "Do the task",
-      makeRunConfig({ cliFlags: { max_budget_usd: 5.0 } })
+      makeRunConfig({ cliFlags: { max_budget_usd: 5.0 } }),
     );
 
     expect(args).toContain("--max-budget-usd");
@@ -115,10 +111,7 @@ describe("AgentRunner", () => {
   it("buildClaudeCliArgs does NOT include --max-budget-usd when not set", () => {
     const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig());
 
-    const args = (runner as any).buildClaudeCliArgs(
-      "Do the task",
-      makeRunConfig({ cliFlags: {} })
-    );
+    const args = (runner as any).buildClaudeCliArgs("Do the task", makeRunConfig({ cliFlags: {} }));
 
     expect(args).not.toContain("--max-budget-usd");
   });
@@ -128,7 +121,7 @@ describe("AgentRunner", () => {
 
     const args = (runner as any).buildClaudeCliArgs(
       "Do the task",
-      makeRunConfig({ plugins: ["js-nextjs", "frontend-design"] })
+      makeRunConfig({ plugins: ["js-nextjs", "frontend-design"] }),
     );
 
     const pluginDirIndices = args
@@ -146,11 +139,7 @@ describe("AgentRunner", () => {
     const workspacePath = path.join(tmpDir, "workspace-valid");
     await fs.mkdir(workspacePath, { recursive: true });
     const result = makeResult();
-    await fs.writeFile(
-      path.join(workspacePath, ".agent-result.json"),
-      JSON.stringify(result),
-      "utf-8"
-    );
+    await fs.writeFile(path.join(workspacePath, ".agent-result.json"), JSON.stringify(result), "utf-8");
 
     const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig());
     const parsed = await (runner as any).readAgentResult(workspacePath);
@@ -190,12 +179,12 @@ describe("AgentRunner", () => {
               "+linear workflow kind smoke",
               "*** Add File: .agent-result.json",
               "+{",
-              "+  \"status\": \"complete\",",
-              "+  \"summary\": \"Added the smoke artifact\",",
-              "+  \"artifacts_created\": [\"kind-workflow-smoke.txt\"],",
-              "+  \"artifacts_modified\": [],",
-              "+  \"issues\": [],",
-              "+  \"metadata\": {}",
+              '+  "status": "complete",',
+              '+  "summary": "Added the smoke artifact",',
+              '+  "artifacts_created": ["kind-workflow-smoke.txt"],',
+              '+  "artifacts_modified": [],',
+              '+  "issues": [],',
+              '+  "metadata": {}',
               "+}",
               "*** End Patch",
             ].join("\n"),
@@ -203,7 +192,7 @@ describe("AgentRunner", () => {
         }),
         JSON.stringify({ type: "turn.completed", usage: { input_tokens: 1, output_tokens: 1 } }),
       ].join("\n"),
-      "utf-8"
+      "utf-8",
     );
 
     const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig());
@@ -212,19 +201,15 @@ describe("AgentRunner", () => {
     expect(parsed.status).toBe("complete");
     expect(parsed.summary).toBe("Added the smoke artifact");
     expect(parsed.metadata).toMatchObject({ recovered_from_codex_output: true });
-    await expect(
-      fs.readFile(path.join(workspacePath, "kind-workflow-smoke.txt"), "utf-8")
-    ).resolves.toBe("linear workflow kind smoke\n");
+    await expect(fs.readFile(path.join(workspacePath, "kind-workflow-smoke.txt"), "utf-8")).resolves.toBe(
+      "linear workflow kind smoke\n",
+    );
   });
 
   it("readAgentResult returns failure stub for invalid JSON", async () => {
     const workspacePath = path.join(tmpDir, "workspace-invalid");
     await fs.mkdir(workspacePath, { recursive: true });
-    await fs.writeFile(
-      path.join(workspacePath, ".agent-result.json"),
-      "not json {{{",
-      "utf-8"
-    );
+    await fs.writeFile(path.join(workspacePath, ".agent-result.json"), "not json {{{", "utf-8");
 
     const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig());
     const parsed = await (runner as any).readAgentResult(workspacePath);
@@ -238,7 +223,7 @@ describe("AgentRunner", () => {
     await fs.writeFile(
       path.join(workspacePath, ".agent-result.json"),
       JSON.stringify({ foo: "bar" }),
-      "utf-8"
+      "utf-8",
     );
 
     const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig());
@@ -258,14 +243,14 @@ describe("AgentRunner", () => {
       7,
       2,
       "code-review",
-      makeResult({ summary: "Snapshot saved" })
+      makeResult({ summary: "Snapshot saved" }),
     );
 
     const snapshotPath = path.join(
       workspacePath,
       ".sprintfoundry",
       "step-results",
-      "step-7.attempt-2.code-review.json"
+      "step-7.attempt-2.code-review.json",
     );
     const raw = await fs.readFile(snapshotPath, "utf-8");
     const parsed = JSON.parse(raw);
@@ -299,10 +284,10 @@ describe("AgentRunner", () => {
   it("estimateCost calculates correctly for known models", () => {
     const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig());
 
-    const cost = (runner as any).estimateCost(
-      1_000_000,
-      { provider: "anthropic", model: "claude-sonnet-4-5-20250929" }
-    );
+    const cost = (runner as any).estimateCost(1_000_000, {
+      provider: "anthropic",
+      model: "claude-sonnet-4-5-20250929",
+    });
 
     expect(cost).toBe(3.0); // $3 per 1M tokens
   });
@@ -310,10 +295,10 @@ describe("AgentRunner", () => {
   it("estimateCost uses default rate for unknown models", () => {
     const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig());
 
-    const cost = (runner as any).estimateCost(
-      1_000_000,
-      { provider: "anthropic", model: "claude-unknown-model" }
-    );
+    const cost = (runner as any).estimateCost(1_000_000, {
+      provider: "anthropic",
+      model: "claude-unknown-model",
+    });
 
     expect(cost).toBe(3.0); // default $3 per 1M
   });
@@ -364,14 +349,12 @@ describe("AgentRunner", () => {
           developer: { provider: "claude-code", mode: "local_process" },
         },
       }),
-      backend
+      backend,
     );
     (runner as any).prepareWorkspace = vi.fn().mockResolvedValue(undefined);
     (runner as any).readAgentResult = vi.fn().mockResolvedValue(makeResult());
 
-    const result = await runner.run(
-      makeRunConfig({ agent: "developer", plugins: ["js-nextjs"] })
-    );
+    const result = await runner.run(makeRunConfig({ agent: "developer", plugins: ["js-nextjs"] }));
 
     expect(backend.executeStep).toHaveBeenCalledTimes(1);
     expect((backend.executeStep as any).mock.calls[0][2]).toMatchObject({
@@ -386,12 +369,16 @@ describe("AgentRunner", () => {
 
   it("timeout kills the process", async () => {
     delete process.env.SPRINTFOUNDRY_USE_CONTAINERS;
-    (mockClaudeSdkQuery as any).mockImplementationOnce((params: any) => (async function* () {
-      await new Promise((_, reject) => {
-        const signal = params.options.abortController.signal as AbortSignal;
-        signal.addEventListener("abort", () => reject(new Error("aborted")));
-      });
-    })());
+    // Async generator mock required: the runtime consumes this with `for await`.
+    (mockClaudeSdkQuery as any).mockImplementationOnce((params: any) =>
+      // eslint-disable-next-line require-yield
+      (async function* () {
+        await new Promise((_, reject) => {
+          const signal = params.options.abortController.signal as AbortSignal;
+          signal.addEventListener("abort", () => reject(new Error("aborted")));
+        });
+      })(),
+    );
 
     const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig());
     const workspacePath = path.join(tmpDir, "workspace-timeout-sdk");
@@ -404,30 +391,32 @@ describe("AgentRunner", () => {
 
   it("run rejects when local claude exits with non-zero code", async () => {
     delete process.env.SPRINTFOUNDRY_USE_CONTAINERS;
-    (mockClaudeSdkQuery as any).mockReturnValueOnce((async function* () {
-      yield {
-        type: "result",
-        subtype: "error_during_execution",
-        is_error: true,
-        duration_ms: 1,
-        duration_api_ms: 1,
-        num_turns: 1,
-        stop_reason: null,
-        total_cost_usd: 0,
-        usage: {
-          input_tokens: 0,
-          output_tokens: 0,
-          cache_creation_input_tokens: 0,
-          cache_read_input_tokens: 0,
-          server_tool_use: { web_search_requests: 0 },
-        },
-        modelUsage: {},
-        permission_denials: [],
-        errors: ["simulated failure"],
-        uuid: "00000000-0000-0000-0000-000000000000",
-        session_id: "sdk-session-err",
-      };
-    })());
+    (mockClaudeSdkQuery as any).mockReturnValueOnce(
+      (async function* () {
+        yield {
+          type: "result",
+          subtype: "error_during_execution",
+          is_error: true,
+          duration_ms: 1,
+          duration_api_ms: 1,
+          num_turns: 1,
+          stop_reason: null,
+          total_cost_usd: 0,
+          usage: {
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+            server_tool_use: { web_search_requests: 0 },
+          },
+          modelUsage: {},
+          permission_denials: [],
+          errors: ["simulated failure"],
+          uuid: "00000000-0000-0000-0000-000000000000",
+          session_id: "sdk-session-err",
+        };
+      })(),
+    );
 
     const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig());
     const workspacePath = path.join(tmpDir, "workspace-local-error-sdk");
@@ -438,9 +427,7 @@ describe("AgentRunner", () => {
   it("run rejects when the execution backend returns a docker failure", async () => {
     const backend: ExecutionBackend = {
       prepareRunEnvironment: vi.fn(),
-      executeStep: vi.fn().mockRejectedValue(
-        new Error("Agent container developer exited with code 2")
-      ),
+      executeStep: vi.fn().mockRejectedValue(new Error("Agent container developer exited with code 2")),
       pauseRun: vi.fn(),
       resumeRun: vi.fn(),
       teardownRun: vi.fn(),
@@ -453,7 +440,7 @@ describe("AgentRunner", () => {
           developer: { provider: "claude-code", mode: "local_process" },
         },
       }),
-      backend
+      backend,
     );
     (runner as any).prepareWorkspace = vi.fn().mockResolvedValue(undefined);
 
@@ -486,7 +473,7 @@ describe("AgentRunner", () => {
         runtime_overrides: {
           developer: { provider: "codex", mode: "local_process" },
         },
-      })
+      }),
     );
     (runner as any).prepareWorkspace = vi.fn().mockResolvedValue({
       codexHomeDir: "/tmp/codex-home-test",
@@ -511,9 +498,7 @@ describe("AgentRunner", () => {
     expect((result.runtime_metadata as any)?.provider_metadata?.skills?.names).toEqual([
       "web-design-guidelines",
     ]);
-    expect((result.runtime_metadata as any)?.provider_metadata?.skills?.provider).toBe(
-      "codex"
-    );
+    expect((result.runtime_metadata as any)?.provider_metadata?.skills?.provider).toBe("codex");
   });
 
   it("delegates step execution to the configured execution backend", async () => {
@@ -531,11 +516,7 @@ describe("AgentRunner", () => {
       teardownRun: vi.fn(),
     };
 
-    const runner = new AgentRunner(
-      makePlatformConfig(),
-      makeProjectConfig(),
-      backend
-    );
+    const runner = new AgentRunner(makePlatformConfig(), makeProjectConfig(), backend);
     (runner as any).prepareWorkspace = vi.fn().mockResolvedValue(undefined);
     (runner as any).readAgentResult = vi.fn().mockResolvedValue(makeResult());
 
@@ -586,26 +567,18 @@ describe("AgentRunner", () => {
           },
         },
       }),
-      makeProjectConfig()
+      makeProjectConfig(),
     );
 
     const prep = await (runner as any).prepareWorkspace(
       makeRunConfig({ agent: "developer", workspacePath }),
-      { provider: "codex", mode: "local_process" }
+      { provider: "codex", mode: "local_process" },
     );
 
     expect(prep.codexHomeDir).toBe(path.join(workspacePath, ".codex-home"));
     expect(prep.codexSkillNames).toEqual(["web-design-guidelines"]);
     await expect(
-      fs.access(
-        path.join(
-          workspacePath,
-          ".codex-home",
-          "skills",
-          "web-design-guidelines",
-          "SKILL.md"
-        )
-      )
+      fs.access(path.join(workspacePath, ".codex-home", "skills", "web-design-guidelines", "SKILL.md")),
     ).resolves.toBeUndefined();
 
     const agentsMd = await fs.readFile(path.join(workspacePath, "AGENTS.md"), "utf-8");
@@ -650,7 +623,7 @@ describe("AgentRunner", () => {
             developer: ["develop-web-game", "phaser-arcade-platformer"],
           },
         },
-      })
+      }),
     );
 
     const prep = await (runner as any).prepareWorkspace(
@@ -671,13 +644,10 @@ describe("AgentRunner", () => {
           raw: {},
         },
       }),
-      { provider: "codex", mode: "local_process" }
+      { provider: "codex", mode: "local_process" },
     );
 
-    expect(prep.codexSkillNames).toEqual([
-      "develop-web-game",
-      "phaser-arcade-platformer",
-    ]);
+    expect(prep.codexSkillNames).toEqual(["develop-web-game", "phaser-arcade-platformer"]);
     expect(prep.baseSkillNames).toEqual(["develop-web-game"]);
     expect(prep.labelSkillNames).toEqual(["phaser-arcade-platformer"]);
     expect(prep.skillResolutionMode).toBe("dynamic_label_merge");
@@ -729,7 +699,7 @@ describe("AgentRunner", () => {
             qa: ["playwright"],
           },
         },
-      })
+      }),
     );
     (runner as any).readAgentResult = vi.fn().mockResolvedValue(makeResult());
     const workspacePath = path.join(tmpDir, "workspace-dynamic-warn-only");
@@ -752,7 +722,7 @@ describe("AgentRunner", () => {
           author: "test-user",
           raw: {},
         },
-      })
+      }),
     );
 
     expect(runStepSpy).toHaveBeenCalledTimes(1);
@@ -763,14 +733,12 @@ describe("AgentRunner", () => {
       label_skills: [],
       resolution_mode: "dynamic_label_merge",
       provider: "codex",
-      rejected_skills: [
-        { skill: "playwright", reason: "not_allowed_for_agent:developer" },
-      ],
+      rejected_skills: [{ skill: "playwright", reason: "not_allowed_for_agent:developer" }],
     });
     expect(
-      ((result.runtime_metadata as any)?.provider_metadata?.skills?.warnings ?? []).some(
-        (warning: string) => warning.includes("playwright")
-      )
+      ((result.runtime_metadata as any)?.provider_metadata?.skills?.warnings ?? []).some((warning: string) =>
+        warning.includes("playwright"),
+      ),
     ).toBe(true);
   });
 
@@ -818,7 +786,7 @@ describe("AgentRunner", () => {
         runtime_overrides: {
           developer: { provider: "codex", mode: "local_process" },
         },
-      })
+      }),
     );
     (runner as any).prepareWorkspace = vi.fn().mockResolvedValue(undefined);
     (runner as any).readAgentResult = vi.fn().mockResolvedValue(makeResult());

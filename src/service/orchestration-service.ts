@@ -19,7 +19,6 @@ import type {
   BudgetConfig,
   PlatformRule,
   AgentType,
-  AgentRole,
   HumanReview,
   TaskEvent,
   EventType,
@@ -47,23 +46,14 @@ import type { PlannerRuntime } from "./runtime/types.js";
 import { PlannerFactory } from "./runtime/planner-factory.js";
 import type { RuntimeActivityEvent } from "./runtime/types.js";
 import type { PluginRegistry } from "./plugin-registry.js";
-import type {
-  WorkspacePlugin,
-  TrackerPlugin,
-  NotifierPlugin,
-  SCMPlugin,
-} from "../shared/plugin-types.js";
+import type { WorkspacePlugin, TrackerPlugin, NotifierPlugin, SCMPlugin } from "../shared/plugin-types.js";
 import { SessionManager } from "./session-manager.js";
 import { LifecycleManager, defaultLifecycleConfig } from "./lifecycle-manager.js";
 import { NotificationRouter, defaultRoutingConfig } from "./notification-router.js";
 import { MetricsService } from "./metrics-service.js";
 import { trace, type Span } from "@opentelemetry/api";
 import { resolveHostingMode } from "./hosting-mode.js";
-import type {
-  ExecutionBackend,
-  RunEnvironmentHandle,
-  SandboxTeardownReason,
-} from "./execution/index.js";
+import type { ExecutionBackend, RunEnvironmentHandle, SandboxTeardownReason } from "./execution/index.js";
 import { hasFailingChecks, runPreflight } from "./preflight.js";
 import {
   buildWorkflowStageTask,
@@ -79,7 +69,9 @@ const SKIP_PR_FINALIZATION_ENV = "SPRINTFOUNDRY_SKIP_PR_FINALIZATION";
 const EVENT_SINK_URL_ENV = "SPRINTFOUNDRY_EVENT_SINK_URL";
 
 function isTruthy(value: string | undefined): boolean {
-  const normalized = String(value ?? "").trim().toLowerCase();
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase();
   return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
@@ -142,7 +134,7 @@ export class OrchestrationService {
     private platformConfig: PlatformConfig,
     private projectConfig: ProjectConfig,
     registry?: PluginRegistry,
-    private executionBackend?: ExecutionBackend
+    private executionBackend?: ExecutionBackend,
   ) {
     this.registry = registry ?? null;
     this.metricsService = new MetricsService(process.env.SPRINTFOUNDRY_OTEL_ENABLED === "1");
@@ -151,11 +143,11 @@ export class OrchestrationService {
     this.agentRunner = new AgentRunner(platformConfig, projectConfig, executionBackend);
     this.plannerRuntime = new PlannerFactory().create(platformConfig, projectConfig);
     const eventSinkUrl =
-      process.env[EVENT_SINK_URL_ENV]?.trim() ||
-      projectConfig.integrations.event_sink?.url?.trim() ||
-      "";
+      process.env[EVENT_SINK_URL_ENV]?.trim() || projectConfig.integrations.event_sink?.url?.trim() || "";
     const internalApiToken = process.env.SPRINTFOUNDRY_INTERNAL_API_TOKEN?.trim();
-    const eventSinkClient = eventSinkUrl ? new EventSinkClient(eventSinkUrl, globalThis.fetch, internalApiToken) : undefined;
+    const eventSinkClient = eventSinkUrl
+      ? new EventSinkClient(eventSinkUrl, globalThis.fetch, internalApiToken)
+      : undefined;
     this.eventSinkClient = eventSinkClient;
     this.events = new EventStore(platformConfig.events_dir, eventSinkClient);
     this.workspace = new WorkspaceManager(projectConfig);
@@ -176,13 +168,13 @@ export class OrchestrationService {
       }
       this.notificationRouter = new NotificationRouter(
         notifierPlugins,
-        lifecycleConfig.notification_routing ?? defaultRoutingConfig()
+        lifecycleConfig.notification_routing ?? defaultRoutingConfig(),
       );
       this.lifecycleManager = new LifecycleManager(
         lifecycleConfig,
         scmPlugin,
         this.sessionManager,
-        this.notificationRouter
+        this.notificationRouter,
       );
     }
   }
@@ -192,36 +184,50 @@ export class OrchestrationService {
   private persistSession(run: TaskRun, extra?: { workspace_path?: string; branch?: string }): void {
     if (extra?.workspace_path) {
       this.persistRunState(run, extra.workspace_path).catch((err) => {
-        console.warn(`[session] Failed to persist run state ${run.run_id}: ${err instanceof Error ? err.message : String(err)}`);
+        console.warn(
+          `[session] Failed to persist run state ${run.run_id}: ${err instanceof Error ? err.message : String(err)}`,
+        );
       });
     }
     this.sessionManager.persist(run, extra).catch((err) => {
-      console.warn(`[session] Failed to persist session ${run.run_id}: ${err instanceof Error ? err.message : String(err)}`);
+      console.warn(
+        `[session] Failed to persist session ${run.run_id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
     });
   }
 
-  private async persistSessionBlocking(run: TaskRun, extra?: { workspace_path?: string; branch?: string }): Promise<void> {
+  private async persistSessionBlocking(
+    run: TaskRun,
+    extra?: { workspace_path?: string; branch?: string },
+  ): Promise<void> {
     try {
       await this.sessionManager.persist(run, extra);
     } catch (err) {
-      console.warn(`[session] Failed to persist session ${run.run_id}: ${err instanceof Error ? err.message : String(err)}`);
+      console.warn(
+        `[session] Failed to persist session ${run.run_id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 
   private async uploadArtifactsIfConfigured(run: TaskRun, workspacePath: string): Promise<void> {
     try {
-      const summary = await this.artifactUploader.uploadRunArtifacts({
-        run_id: run.run_id,
-        project_id: run.project_id,
-        tenant_id: run.tenant_id,
-      }, workspacePath);
+      const summary = await this.artifactUploader.uploadRunArtifacts(
+        {
+          run_id: run.run_id,
+          project_id: run.project_id,
+          tenant_id: run.tenant_id,
+        },
+        workspacePath,
+      );
       if (!summary.skipped && summary.attempted > summary.uploaded) {
         console.warn(
-          `[artifacts] Partial upload for run ${run.run_id}: uploaded ${summary.uploaded}/${summary.attempted} to s3://${summary.bucket}/${summary.prefix}`
+          `[artifacts] Partial upload for run ${run.run_id}: uploaded ${summary.uploaded}/${summary.attempted} to s3://${summary.bucket}/${summary.prefix}`,
         );
       }
     } catch (err) {
-      console.warn(`[artifacts] Upload skipped for run ${run.run_id}: ${err instanceof Error ? err.message : String(err)}`);
+      console.warn(
+        `[artifacts] Upload skipped for run ${run.run_id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 
@@ -232,12 +238,7 @@ export class OrchestrationService {
 
     const branch = run.branch ?? run.ticket?.id ?? run.run_id;
 
-    this.lifecycleManager.watch(
-      run.run_id,
-      branch,
-      run.pr_url,
-      this.projectConfig.repo.url
-    );
+    this.lifecycleManager.watch(run.run_id, branch, run.pr_url, this.projectConfig.repo.url);
     this.lifecycleManager.start();
   }
 
@@ -316,11 +317,7 @@ export class OrchestrationService {
     return workflowConfig.agents[workflowContext.stage] || opts?.agent;
   }
 
-  private async updateTicketStatus(
-    ticket: TicketDetails,
-    status: string,
-    prUrl?: string
-  ): Promise<void> {
+  private async updateTicketStatus(ticket: TicketDetails, status: string, prUrl?: string): Promise<void> {
     const tracker = this.getTrackerPlugin();
     if (tracker) {
       await tracker.updateStatus(ticket, status, prUrl);
@@ -342,7 +339,7 @@ export class OrchestrationService {
     workspacePath: string,
     runId: string,
     stepNumber: number,
-    agent: AgentType
+    agent: AgentType,
   ): Promise<boolean> {
     const wsPlugin = this.getWorkspacePlugin();
     if (wsPlugin) {
@@ -351,7 +348,9 @@ export class OrchestrationService {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (!message.includes("Workspace not initialized")) throw error;
-        console.warn("[workspace] Plugin workspace state unavailable for checkpoint commit. Falling back to git manager.");
+        console.warn(
+          "[workspace] Plugin workspace state unavailable for checkpoint commit. Falling back to git manager.",
+        );
       }
     }
     return this.git.commitStepCheckpoint(workspacePath, runId, stepNumber, agent);
@@ -365,7 +364,9 @@ export class OrchestrationService {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (!message.includes("Workspace not initialized")) throw error;
-        console.warn("[workspace] Plugin workspace state unavailable for PR creation. Falling back to git manager.");
+        console.warn(
+          "[workspace] Plugin workspace state unavailable for PR creation. Falling back to git manager.",
+        );
       }
     }
     return this.git.createPullRequest(workspacePath, run);
@@ -389,10 +390,18 @@ export class OrchestrationService {
         const prUrl = await this.createPullRequest(workspacePath, run);
         run.pr_url = prUrl;
         await this.emitEvent(run.run_id, "pr.created", { prUrl });
-        this.metricsService.recordGitOperation({ operation: "pr_create", status: "success", durationMs: Date.now() - gitStart });
+        this.metricsService.recordGitOperation({
+          operation: "pr_create",
+          status: "success",
+          durationMs: Date.now() - gitStart,
+        });
         this.metricsService.recordPrCreated({ project_id: this.projectConfig.project_id, status: "success" });
       } catch (prErr) {
-        this.metricsService.recordGitOperation({ operation: "pr_create", status: "error", durationMs: Date.now() - gitStart });
+        this.metricsService.recordGitOperation({
+          operation: "pr_create",
+          status: "error",
+          durationMs: Date.now() - gitStart,
+        });
         this.metricsService.recordPrCreated({ project_id: this.projectConfig.project_id, status: "error" });
         throw prErr;
       }
@@ -401,9 +410,7 @@ export class OrchestrationService {
     await this.updateTicketStatus(run.ticket, "in_review", run.pr_url ?? undefined);
     await this.emitEvent(run.run_id, "ticket.updated", { status: "in_review" });
 
-    await this.sendNotification(
-      `Task ${run.ticket.id} completed. PR: ${run.pr_url ?? "n/a"}`
-    );
+    await this.sendNotification(`Task ${run.ticket.id} completed. PR: ${run.pr_url ?? "n/a"}`);
     this.persistSession(run, { workspace_path: workspacePath });
 
     // Start lifecycle monitoring for this PR (non-blocking)
@@ -413,7 +420,7 @@ export class OrchestrationService {
   private async finalizeWorkflowRun(
     run: TaskRun,
     workspacePath: string,
-    workflowConfig: NormalizedTicketWorkflowConfig
+    workflowConfig: NormalizedTicketWorkflowConfig,
   ): Promise<void> {
     const stage = run.workflow_stage;
     if (!stage) return;
@@ -477,7 +484,7 @@ export class OrchestrationService {
     ticketId: string,
     source: "linear" | "github" | "jira" | "prompt",
     promptText?: string,
-    opts?: HandleTaskOptions
+    opts?: HandleTaskOptions,
   ): Promise<TaskRun> {
     return this.tracer.startActiveSpan(
       "task.run",
@@ -488,14 +495,11 @@ export class OrchestrationService {
         } finally {
           span.end();
         }
-      }
+      },
     );
   }
 
-  async resumeTask(
-    runId: string,
-    options?: ResumeTaskOptions
-  ): Promise<TaskRun> {
+  async resumeTask(runId: string, options?: ResumeTaskOptions): Promise<TaskRun> {
     return this.tracer.startActiveSpan(
       "task.resume",
       { attributes: { project_id: this.projectConfig.project_id, run_id: runId } },
@@ -505,14 +509,14 @@ export class OrchestrationService {
         } finally {
           span.end();
         }
-      }
+      },
     );
   }
 
   private async resumeTaskBody(
     runId: string,
     options: ResumeTaskOptions | undefined,
-    span: Span
+    span: Span,
   ): Promise<TaskRun> {
     const session = await this.sessionManager.get(runId);
     if (!session) {
@@ -523,10 +527,13 @@ export class OrchestrationService {
     }
 
     const workspacePath = session.workspace_path;
-    const run = (await this.loadRunState(workspacePath, runId))
-      ?? (await this.rebuildRunStateFromEvents(workspacePath, session));
+    const run =
+      (await this.loadRunState(workspacePath, runId)) ??
+      (await this.rebuildRunStateFromEvents(workspacePath, session));
     if (!run) {
-      throw new Error(`Run state not found for run: ${runId}. Expected ${path.join(workspacePath, RUN_STATE_DIR, RUN_STATE_FILE)}`);
+      throw new Error(
+        `Run state not found for run: ${runId}. Expected ${path.join(workspacePath, RUN_STATE_DIR, RUN_STATE_FILE)}`,
+      );
     }
 
     // Session status is authoritative for terminal cancel/fail actions such as `sprintfoundry cancel`.
@@ -609,7 +616,7 @@ export class OrchestrationService {
     source: "linear" | "github" | "jira" | "prompt",
     promptText: string | undefined,
     opts: HandleTaskOptions | undefined,
-    span: Span
+    span: Span,
   ): Promise<TaskRun> {
     // 1. Create the run
     const run = this.createRun(ticketId);
@@ -619,7 +626,11 @@ export class OrchestrationService {
     const triggerSource = process.env.SPRINTFOUNDRY_TRIGGER_SOURCE ?? null;
     span.setAttribute("run_id", run.run_id);
     const runStartMs = Date.now();
-    this.metricsService.recordRunStarted({ project_id: this.projectConfig.project_id, source, run_id: run.run_id });
+    this.metricsService.recordRunStarted({
+      project_id: this.projectConfig.project_id,
+      source,
+      run_id: run.run_id,
+    });
 
     try {
       if (!opts?.dryRun) {
@@ -630,9 +641,10 @@ export class OrchestrationService {
       }
 
       // 2. Fetch ticket details (or create from prompt)
-      const ticket = source === "prompt"
-        ? this.createTicketFromPrompt(ticketId, promptText!)
-        : await this.fetchTicket(ticketId, source);
+      const ticket =
+        source === "prompt"
+          ? this.createTicketFromPrompt(ticketId, promptText!)
+          : await this.fetchTicket(ticketId, source);
 
       run.ticket = ticket;
       run.workflow_stage = workflowContext?.stage ?? null;
@@ -666,7 +678,7 @@ export class OrchestrationService {
                 : "existing"
               : undefined,
             workflowStage: workflowContext?.stage ?? null,
-          }
+          },
         );
         workspacePath = workspace.path;
         run.branch = workspace.branch;
@@ -704,7 +716,7 @@ export class OrchestrationService {
         const stack = await this.detectProjectStack(workspacePath);
         console.log(
           `[orchestrator] Stack detected: ${stack.stack}${stack.package_manager ? `/${stack.package_manager}` : ""}` +
-          (stack.pre_commit_hooks !== "none" ? ` (pre-commit: ${stack.pre_commit_hooks})` : "")
+            (stack.pre_commit_hooks !== "none" ? ` (pre-commit: ${stack.pre_commit_hooks})` : ""),
         );
         await this.emitEvent(run.run_id, "task.stack_detected", { stack });
       }
@@ -725,7 +737,14 @@ export class OrchestrationService {
           console.log(`[orchestrator] Dry-run mode — skipping direct agent execution.`);
           return run;
         }
-        return await this.runDirectAgent(run, directAgent, ticket, workspacePath, workflowContext, opts?.agentFile);
+        return await this.runDirectAgent(
+          run,
+          directAgent,
+          ticket,
+          workspacePath,
+          workflowContext,
+          opts?.agentFile,
+        );
       }
 
       // 4. Get plan from orchestrator agent
@@ -736,10 +755,12 @@ export class OrchestrationService {
         ticket,
         this.platformConfig.agent_definitions,
         this.getMergedRules(),
-        workspacePath
+        workspacePath,
       );
       run.plan = plan;
-      console.log(`[orchestrator] Plan generated: ${plan.steps.length} steps, classification=${plan.classification}`);
+      console.log(
+        `[orchestrator] Plan generated: ${plan.steps.length} steps, classification=${plan.classification}`,
+      );
       for (const step of plan.steps) {
         console.log(`  Step ${step.step_number}: ${step.agent} — ${step.task.slice(0, 80)}`);
       }
@@ -749,7 +770,9 @@ export class OrchestrationService {
       console.log(`[orchestrator] Validating plan against rules...`);
       const validatedPlan = this.validator.validate(plan, ticket);
       run.validated_plan = validatedPlan;
-      console.log(`[orchestrator] Plan validated: ${validatedPlan.steps.length} steps (${validatedPlan.steps.length - plan.steps.length} injected by rules)`);
+      console.log(
+        `[orchestrator] Plan validated: ${validatedPlan.steps.length} steps (${validatedPlan.steps.length - plan.steps.length} injected by rules)`,
+      );
       await this.emitEvent(run.run_id, "task.plan_validated", {
         original_steps: plan.steps.length,
         validated_steps: validatedPlan.steps.length,
@@ -797,12 +820,10 @@ export class OrchestrationService {
         durationMs: Date.now() - runStartMs,
         planSteps: run.validated_plan?.steps.length ?? run.plan?.steps.length,
       });
-      await this.sendNotification(
-        `Task ${run.ticket?.id ?? ticketId} failed: ${run.error}`
-      );
+      await this.sendNotification(`Task ${run.ticket?.id ?? ticketId} failed: ${run.error}`);
       this.persistSession(
         run,
-        workspacePath ? { workspace_path: workspacePath, branch: run.branch ?? undefined } : undefined
+        workspacePath ? { workspace_path: workspacePath, branch: run.branch ?? undefined } : undefined,
       );
       return run;
     } finally {
@@ -821,7 +842,7 @@ export class OrchestrationService {
     ticket: TicketDetails,
     workspacePath: string,
     workflowContext?: WorkflowStageContext | null,
-    agentFile?: string
+    agentFile?: string,
   ): Promise<TaskRun> {
     const plan = await this.prepareDirectAgentPlan(run, agentId, ticket, workflowContext, agentFile);
     run.status = "executing";
@@ -840,7 +861,7 @@ export class OrchestrationService {
     agentId: string,
     ticket: TicketDetails,
     workflowContext?: WorkflowStageContext | null,
-    agentFile?: string
+    agentFile?: string,
   ): Promise<ExecutionPlan> {
     if (agentFile) {
       try {
@@ -851,7 +872,10 @@ export class OrchestrationService {
           this.platformConfig.agent_definitions.push(def);
         }
       } catch (err) {
-        throw new Error(`Failed to load agent file "${agentFile}": ${err instanceof Error ? err.message : String(err)}`);
+        throw new Error(
+          `Failed to load agent file "${agentFile}": ${err instanceof Error ? err.message : String(err)}`,
+          { cause: err },
+        );
       }
     }
 
@@ -862,10 +886,12 @@ export class OrchestrationService {
     }
 
     console.log(`[orchestrator] Direct mode: running agent '${agentId}' (role: ${agentDef.role})`);
-    const branch = run.branch ?? resolveWorkflowBranchName(ticket, this.projectConfig.branch_strategy, workflowContext ?? undefined);
+    const branch =
+      run.branch ??
+      resolveWorkflowBranchName(ticket, this.projectConfig.branch_strategy, workflowContext ?? undefined);
     const task = workflowContext
       ? buildWorkflowStageTask(ticket, workflowContext, branch)
-      : (ticket.description || ticket.title);
+      : ticket.description || ticket.title;
 
     const plan: ExecutionPlan = {
       plan_id: `direct-${Date.now()}`,
@@ -898,14 +924,14 @@ export class OrchestrationService {
     run: TaskRun,
     plan: ExecutionPlan,
     workspacePath: string,
-    options?: ExecutePlanOptions
+    options?: ExecutePlanOptions,
   ): Promise<void> {
     const runEnvironment = await this.prepareRunEnvironment(run, plan, workspacePath);
     const planStepNumbers = new Set(plan.steps.map((s) => s.step_number));
     const completed = new Set<number>(
       options?.initialCompletedSteps
         ? Array.from(options.initialCompletedSteps).filter((stepNum) => planStepNumbers.has(stepNum))
-        : []
+        : [],
     );
     const reworkCounts = new Map<number, number>();
 
@@ -913,9 +939,7 @@ export class OrchestrationService {
       while (completed.size < plan.steps.length) {
         // Find steps that are ready to execute (all dependencies met)
         const ready = plan.steps.filter(
-          (s) =>
-            !completed.has(s.step_number) &&
-            s.depends_on.every((d) => completed.has(d))
+          (s) => !completed.has(s.step_number) && s.depends_on.every((d) => completed.has(d)),
         );
 
         if (ready.length === 0) {
@@ -930,18 +954,20 @@ export class OrchestrationService {
 
         if (parallelGroup.length > 1) {
           console.log(
-            `[parallel] Running steps ${parallelGroup.map((step) => step.step_number).join(", ")} concurrently.`
+            `[parallel] Running steps ${parallelGroup.map((step) => step.step_number).join(", ")} concurrently.`,
           );
           // Phase 1: Execute in parallel, collecting rework signals instead of handling them inline.
           // This prevents multiple parallel steps from each spawning an independent developer rework call.
-          const reworkSignals: Array<{ step: PlanStep; agentResult: AgentResult; currentRework: number }> = [];
+          const reworkSignals: Array<{ step: PlanStep; agentResult: AgentResult; currentRework: number }> =
+            [];
 
           // Use sub-worktree isolation when the workspace plugin supports it.
           // Each parallel step gets its own worktree so file changes can't conflict.
           const wsPlugin = this.getWorkspacePlugin();
-          const useSubWorktrees = wsPlugin?.supportsSubWorktrees === true
-            && typeof wsPlugin.createSubWorktree === "function"
-            && typeof wsPlugin.mergeSubWorktree === "function";
+          const useSubWorktrees =
+            wsPlugin?.supportsSubWorktrees === true &&
+            typeof wsPlugin.createSubWorktree === "function" &&
+            typeof wsPlugin.mergeSubWorktree === "function";
 
           const results = await Promise.all(
             parallelGroup.map(async (step) => {
@@ -963,7 +989,7 @@ export class OrchestrationService {
                   reworkCounts,
                   reworkSignals,
                   undefined,
-                  operatorPrompt
+                  operatorPrompt,
                 );
                 if (useSubWorktrees && result === "completed") {
                   await wsPlugin!.mergeSubWorktree!(workspacePath, stepWorkspace, step.step_number);
@@ -976,11 +1002,15 @@ export class OrchestrationService {
               } catch (err) {
                 // Clean up sub-worktree on unexpected error
                 if (useSubWorktrees && stepWorkspace !== workspacePath) {
-                  try { await wsPlugin!.removeSubWorktree?.(stepWorkspace); } catch { /* best effort */ }
+                  try {
+                    await wsPlugin!.removeSubWorktree?.(stepWorkspace);
+                  } catch {
+                    /* best effort */
+                  }
                 }
                 throw err;
               }
-            })
+            }),
           );
 
           // Hard failures take precedence
@@ -1000,7 +1030,7 @@ export class OrchestrationService {
             if (reworkSignals.some((s) => s.currentRework >= maxRework)) {
               run.status = "failed";
               await this.sendNotification(
-                `Parallel group exceeded max rework cycles (${maxRework}). Escalating.`
+                `Parallel group exceeded max rework cycles (${maxRework}). Escalating.`,
               );
               this.persistSession(run, { workspace_path: workspacePath });
               return;
@@ -1014,7 +1044,10 @@ export class OrchestrationService {
                     .join("; ");
 
             const primarySignal = reworkSignals[0];
-            const mergedAgentResult: AgentResult = { ...primarySignal.agentResult, rework_reason: mergedReason };
+            const mergedAgentResult: AgentResult = {
+              ...primarySignal.agentResult,
+              rework_reason: mergedReason,
+            };
 
             for (const signal of reworkSignals) {
               reworkCounts.set(signal.step.step_number, signal.currentRework + 1);
@@ -1027,7 +1060,10 @@ export class OrchestrationService {
             }
 
             const previousReworkResults = run.steps
-              .filter((s) => s.step_number === primarySignal.step.step_number && s.status === "needs_rework" && s.result)
+              .filter(
+                (s) =>
+                  s.step_number === primarySignal.step.step_number && s.status === "needs_rework" && s.result,
+              )
               .map((s) => s.result!);
 
             const reworkPlan = await this.plannerRuntime.planRework(
@@ -1037,7 +1073,7 @@ export class OrchestrationService {
               workspacePath,
               run.steps,
               primarySignal.currentRework + 1,
-              previousReworkResults
+              previousReworkResults,
             );
             await this.announceReworkPlan(
               run,
@@ -1046,7 +1082,7 @@ export class OrchestrationService {
               reworkPlan,
               primarySignal.currentRework + 1,
               maxRework,
-              budget
+              budget,
             );
 
             for (const reworkStep of reworkPlan.steps) {
@@ -1057,7 +1093,7 @@ export class OrchestrationService {
                 runEnvironment,
                 reworkCounts,
                 undefined,
-                "rework_plan"
+                "rework_plan",
               );
               if (reworkResult === "failed") {
                 run.status = "failed";
@@ -1077,7 +1113,7 @@ export class OrchestrationService {
             }
           }
           console.log(
-            `[parallel] Group completed: ${parallelGroup.map((step) => step.step_number).join(", ")}.`
+            `[parallel] Group completed: ${parallelGroup.map((step) => step.step_number).join(", ")}.`,
           );
         } else {
           // Execute sequentially
@@ -1094,7 +1130,7 @@ export class OrchestrationService {
             reworkCounts,
             undefined,
             undefined,
-            operatorPrompt
+            operatorPrompt,
           );
 
           if (result === "completed") {
@@ -1109,7 +1145,7 @@ export class OrchestrationService {
         const budgetApproved = await this.maybeRequireBudgetConfirmation(
           run,
           this.resolveBudget(run.ticket),
-          workspacePath
+          workspacePath,
         );
         if (!budgetApproved) {
           this.persistSession(run, { workspace_path: workspacePath });
@@ -1118,23 +1154,16 @@ export class OrchestrationService {
 
         // Check for human gates after completed steps
         for (const stepNum of completed) {
-          const gate = plan.human_gates.find(
-            (g) => g.after_step === stepNum && g.required
-          );
+          const gate = plan.human_gates.find((g) => g.after_step === stepNum && g.required);
           if (gate) {
             // Remove from completed to prevent re-triggering
-            const alreadyReviewed = run.steps.find(
-              (s) => s.step_number === stepNum
-            )?.result?.metadata?.["human_reviewed"];
+            const alreadyReviewed = run.steps.find((s) => s.step_number === stepNum)?.result?.metadata?.[
+              "human_reviewed"
+            ];
 
             if (!alreadyReviewed) {
               run.status = "waiting_human_review";
-              const approved = await this.requestHumanReview(
-                run,
-                stepNum,
-                gate.reason,
-                workspacePath
-              );
+              const approved = await this.requestHumanReview(run, stepNum, gate.reason, workspacePath);
 
               if (!approved) {
                 run.status = "failed";
@@ -1148,7 +1177,7 @@ export class OrchestrationService {
                 return;
               }
               const reviewedStep = run.steps.find(
-                (s) => s.step_number === stepNum && s.status === "completed"
+                (s) => s.step_number === stepNum && s.status === "completed",
               );
               if (reviewedStep?.result) {
                 reviewedStep.result.metadata = {
@@ -1187,7 +1216,7 @@ export class OrchestrationService {
     reworkCounts: Map<number, number>,
     parallelReworkSignals?: Array<{ step: PlanStep; agentResult: AgentResult; currentRework: number }>,
     resumeReason?: string,
-    operatorPrompt?: string
+    operatorPrompt?: string,
   ): Promise<"completed" | "failed" | "rework"> {
     return this.tracer.startActiveSpan(
       "agent.step",
@@ -1202,12 +1231,12 @@ export class OrchestrationService {
             reworkCounts,
             parallelReworkSignals,
             resumeReason,
-            operatorPrompt
+            operatorPrompt,
           );
         } finally {
           span.end();
         }
-      }
+      },
     );
   }
 
@@ -1219,7 +1248,7 @@ export class OrchestrationService {
     reworkCounts: Map<number, number>,
     parallelReworkSignals?: Array<{ step: PlanStep; agentResult: AgentResult; currentRework: number }>,
     resumeReason?: string,
-    operatorPrompt?: string
+    operatorPrompt?: string,
   ): Promise<"completed" | "failed" | "rework"> {
     const budget = this.resolveBudget(run.ticket);
     const maxRework = budget.max_rework_cycles ?? this.platformConfig.defaults.max_rework_cycles;
@@ -1283,12 +1312,18 @@ export class OrchestrationService {
     await this.persistRunState(run, workspacePath);
     await this.persistSessionBlocking(run, { workspace_path: workspacePath });
     const stepStartMs = Date.now();
-    this.metricsService.recordStepStarted({ run_id: run.run_id, step_id: String(step.step_number), agent: step.agent, provider: runtime.provider, mode: runtime.mode });
+    this.metricsService.recordStepStarted({
+      run_id: run.run_id,
+      step_id: String(step.step_number),
+      agent: step.agent,
+      provider: runtime.provider,
+      mode: runtime.mode,
+    });
 
     const apiKey = this.resolveApiKey(modelConfig.provider, runtime);
 
     console.log(
-      `[step ${step.step_number}] Debug auth: provider=${modelConfig.provider}, model=${modelConfig.model}, runtime=${runtime.provider}/${runtime.mode}, api_key_present=${apiKey.length > 0}`
+      `[step ${step.step_number}] Debug auth: provider=${modelConfig.provider}, model=${modelConfig.model}, runtime=${runtime.provider}/${runtime.mode}, api_key_present=${apiKey.length > 0}`,
     );
 
     // Check total task budget (tokens)
@@ -1299,7 +1334,11 @@ export class OrchestrationService {
         total_used: run.total_tokens_used,
         limit: budget.per_task_total_tokens,
       });
-      this.metricsService.recordTokenLimitExceeded({ agent: step.agent, provider: runtime.provider, reason: "per_task_total_tokens" });
+      this.metricsService.recordTokenLimitExceeded({
+        agent: step.agent,
+        provider: runtime.provider,
+        reason: "per_task_total_tokens",
+      });
       return "failed";
     }
 
@@ -1312,7 +1351,11 @@ export class OrchestrationService {
         cost_limit: budget.per_task_max_cost_usd,
         reason: "per_task_max_cost_usd exceeded",
       });
-      this.metricsService.recordTokenLimitExceeded({ agent: step.agent, provider: runtime.provider, reason: "per_task_max_cost_usd" });
+      this.metricsService.recordTokenLimitExceeded({
+        agent: step.agent,
+        provider: runtime.provider,
+        reason: "per_task_max_cost_usd",
+      });
       return "failed";
     }
 
@@ -1334,11 +1377,11 @@ export class OrchestrationService {
 
     try {
       // Resolve plugin paths for this agent
-      const agentDef = this.platformConfig.agent_definitions.find(
-        (d) => d.type === step.agent
-      );
+      const agentDef = this.platformConfig.agent_definitions.find((d) => d.type === step.agent);
 
-      console.log(`[step ${step.step_number}] Spawning agent ${step.agent} (runtime: ${runtime.provider}/${runtime.mode})...`);
+      console.log(
+        `[step ${step.step_number}] Spawning agent ${step.agent} (runtime: ${runtime.provider}/${runtime.mode})...`,
+      );
 
       // Spawn the agent container and run
       let runtimeActivityCount = 0;
@@ -1374,13 +1417,14 @@ export class OrchestrationService {
               });
               switch (activity.type) {
                 case "agent_tool_call": {
-                  const toolName = typeof activity.data.tool_name === "string" ? activity.data.tool_name : "unknown";
+                  const toolName =
+                    typeof activity.data.tool_name === "string" ? activity.data.tool_name : "unknown";
                   this.metricsService.recordToolCall({ agent: step.agent, tool_name: toolName });
                   break;
                 }
                 case "agent_file_edit": {
                   const filePath = typeof activity.data.path === "string" ? activity.data.path : "";
-                  const ext = filePath.includes(".") ? filePath.split(".").pop() ?? "unknown" : "unknown";
+                  const ext = filePath.includes(".") ? (filePath.split(".").pop() ?? "unknown") : "unknown";
                   this.metricsService.recordFileEdit({ agent: step.agent, extension: ext });
                   break;
                 }
@@ -1399,7 +1443,9 @@ export class OrchestrationService {
         }
       })();
 
-      console.log(`[step ${step.step_number}] Agent ${step.agent} finished: status=${result.agentResult.status}, tokens=${result.tokens_used}, cost=$${result.cost_usd.toFixed(2)}, duration=${result.duration_seconds.toFixed(1)}s`);
+      console.log(
+        `[step ${step.step_number}] Agent ${step.agent} finished: status=${result.agentResult.status}, tokens=${result.tokens_used}, cost=$${result.cost_usd.toFixed(2)}, duration=${result.duration_seconds.toFixed(1)}s`,
+      );
       if (result.agentResult.summary) {
         console.log(`[step ${step.step_number}] Summary: ${result.agentResult.summary.slice(0, 120)}`);
       }
@@ -1416,7 +1462,7 @@ export class OrchestrationService {
           step.step_number,
           currentRework + 1,
           step.agent,
-          runtime.provider
+          runtime.provider,
         );
       }
       finalResumeTelemetry = {
@@ -1449,7 +1495,7 @@ export class OrchestrationService {
         result.container_id,
         resumeReason,
         finalResumeTelemetry,
-        tokenSavings
+        tokenSavings,
       );
 
       // Update run totals
@@ -1464,7 +1510,7 @@ export class OrchestrationService {
             workspacePath,
             run.run_id,
             step.step_number,
-            step.agent
+            step.agent,
           );
           if (committed) {
             await this.emitEvent(run.run_id, "step.committed", {
@@ -1519,9 +1565,7 @@ export class OrchestrationService {
         });
 
         // Run quality gate after developer-role steps
-        const agentRole = this.platformConfig.agent_definitions.find(
-          (d) => d.type === step.agent
-        )?.role;
+        const agentRole = this.platformConfig.agent_definitions.find((d) => d.type === step.agent)?.role;
         if (agentRole === "developer") {
           const gateResult = await this.runQualityGate(workspacePath, step);
           if (!gateResult.passed) {
@@ -1537,7 +1581,10 @@ export class OrchestrationService {
               reason: "quality_gate_failed",
               failures: gateResult.failures,
             });
-            this.metricsService.recordReworkTriggered({ project_id: this.projectConfig.project_id, agent: step.agent });
+            this.metricsService.recordReworkTriggered({
+              project_id: this.projectConfig.project_id,
+              agent: step.agent,
+            });
 
             if (currentRework >= maxRework) {
               stepExec.status = "failed";
@@ -1546,7 +1593,7 @@ export class OrchestrationService {
 
             reworkCounts.set(step.step_number, currentRework + 1);
             console.log(
-              `[rework] Quality gate failed for step ${step.step_number}; retrying ${step.agent} (${currentRework + 1}/${maxRework}).`
+              `[rework] Quality gate failed for step ${step.step_number}; retrying ${step.agent} (${currentRework + 1}/${maxRework}).`,
             );
             return this.executeStep(
               run,
@@ -1556,7 +1603,7 @@ export class OrchestrationService {
               reworkCounts,
               undefined,
               "quality_gate_retry",
-              operatorPrompt
+              operatorPrompt,
             );
           }
         }
@@ -1583,7 +1630,7 @@ export class OrchestrationService {
         if (currentRework >= maxRework) {
           stepExec.status = "failed";
           await this.sendNotification(
-            `Step ${step.step_number} (${step.agent}) exceeded max rework cycles (${maxRework}). Escalating.`
+            `Step ${step.step_number} (${step.agent}) exceeded max rework cycles (${maxRework}). Escalating.`,
           );
           await this.emitEvent(run.run_id, "step.failed", {
             step: step.step_number,
@@ -1602,15 +1649,14 @@ export class OrchestrationService {
           reason: result.agentResult.rework_reason,
           rework_count: currentRework + 1,
         });
-        this.metricsService.recordReworkTriggered({ project_id: this.projectConfig.project_id, agent: step.agent });
+        this.metricsService.recordReworkTriggered({
+          project_id: this.projectConfig.project_id,
+          agent: step.agent,
+        });
 
         // Gather previous rework results for this step
         const previousReworkResults = run.steps
-          .filter(
-            (s) => s.step_number === step.step_number &&
-            s.status === "needs_rework" &&
-            s.result
-          )
+          .filter((s) => s.step_number === step.step_number && s.status === "needs_rework" && s.result)
           .map((s) => s.result!);
 
         // Ask orchestrator agent how to handle the rework (with full context)
@@ -1621,7 +1667,7 @@ export class OrchestrationService {
           workspacePath,
           run.steps,
           currentRework + 1,
-          previousReworkResults
+          previousReworkResults,
         );
         await this.announceReworkPlan(
           run,
@@ -1630,7 +1676,7 @@ export class OrchestrationService {
           reworkPlan,
           currentRework + 1,
           maxRework,
-          budget
+          budget,
         );
 
         // Execute the rework step(s) then retry this step
@@ -1642,7 +1688,7 @@ export class OrchestrationService {
             runEnvironment,
             reworkCounts,
             undefined,
-            "rework_plan"
+            "rework_plan",
           );
           if (reworkResult === "failed") return "failed";
         }
@@ -1656,7 +1702,7 @@ export class OrchestrationService {
           reworkCounts,
           undefined,
           "rework_retry",
-          operatorPrompt
+          operatorPrompt,
         );
       }
 
@@ -1717,7 +1763,7 @@ export class OrchestrationService {
       resume_failed: boolean;
       resume_fallback: boolean;
     },
-    tokenSavings?: Record<string, number>
+    tokenSavings?: Record<string, number>,
   ): Promise<void> {
     if (!this.isResumableRuntime(runtime)) return;
     const sessionId = runtimeId.trim();
@@ -1735,9 +1781,7 @@ export class OrchestrationService {
       resume_failed: resumeTelemetry?.resume_failed,
       resume_fallback: resumeTelemetry?.resume_fallback,
       token_savings_cached_input_tokens:
-        typeof tokenSavings?.cached_input_tokens === "number"
-          ? tokenSavings.cached_input_tokens
-          : undefined,
+        typeof tokenSavings?.cached_input_tokens === "number" ? tokenSavings.cached_input_tokens : undefined,
       updated_at: new Date().toISOString(),
     });
   }
@@ -1754,9 +1798,7 @@ export class OrchestrationService {
     return true;
   }
 
-  private extractResumeTelemetry(
-    error: unknown
-  ): Partial<{
+  private extractResumeTelemetry(error: unknown): Partial<{
     resume_used: boolean;
     resume_failed: boolean;
     resume_fallback: boolean;
@@ -1768,14 +1810,11 @@ export class OrchestrationService {
       resume_fallback: unknown;
     }>;
     return {
-      resume_used:
-        typeof withTelemetry.resume_used === "boolean" ? withTelemetry.resume_used : undefined,
+      resume_used: typeof withTelemetry.resume_used === "boolean" ? withTelemetry.resume_used : undefined,
       resume_failed:
         typeof withTelemetry.resume_failed === "boolean" ? withTelemetry.resume_failed : undefined,
       resume_fallback:
-        typeof withTelemetry.resume_fallback === "boolean"
-          ? withTelemetry.resume_fallback
-          : undefined,
+        typeof withTelemetry.resume_fallback === "boolean" ? withTelemetry.resume_fallback : undefined,
     };
   }
 
@@ -1845,7 +1884,7 @@ export class OrchestrationService {
     run: TaskRun,
     afterStep: number,
     reason: string,
-    workspacePath: string
+    workspacePath: string,
   ): Promise<boolean> {
     const review: HumanReview = {
       review_id: `review-${Date.now()}`,
@@ -1858,7 +1897,7 @@ export class OrchestrationService {
 
     await this.emitEvent(run.run_id, "human_gate.requested", { review });
     await this.sendNotification(
-      `Human review requested for task ${run.ticket.id} after step ${afterStep}: ${reason}`
+      `Human review requested for task ${run.ticket.id} after step ${afterStep}: ${reason}`,
     );
 
     const gateOpenMs = Date.now();
@@ -1867,14 +1906,22 @@ export class OrchestrationService {
 
     if (decision.status === "approved") {
       await this.emitEvent(run.run_id, "human_gate.approved", { review: decision });
-      this.metricsService.recordHumanGateDecision({ project_id: this.projectConfig.project_id, decision: "approved", waitMs: gateWaitMs });
+      this.metricsService.recordHumanGateDecision({
+        project_id: this.projectConfig.project_id,
+        decision: "approved",
+        waitMs: gateWaitMs,
+      });
       return true;
     } else {
       await this.emitEvent(run.run_id, "human_gate.rejected", {
         review: decision,
         feedback: decision.reviewer_feedback,
       });
-      this.metricsService.recordHumanGateDecision({ project_id: this.projectConfig.project_id, decision: "rejected", waitMs: gateWaitMs });
+      this.metricsService.recordHumanGateDecision({
+        project_id: this.projectConfig.project_id,
+        decision: "rejected",
+        waitMs: gateWaitMs,
+      });
       return false;
     }
   }
@@ -1886,9 +1933,10 @@ export class OrchestrationService {
       return;
     }
 
-    const hasPackageJson = await fs
-      .access(path.join(workspacePath, "package.json"))
-      .then(() => true, () => false);
+    const hasPackageJson = await fs.access(path.join(workspacePath, "package.json")).then(
+      () => true,
+      () => false,
+    );
     if (!hasPackageJson) return;
 
     const registry = this.resolveNpmRegistry(workspacePath);
@@ -1914,7 +1962,8 @@ export class OrchestrationService {
           `Failure: ${message}`,
           `How to fix: allow outbound DNS/HTTPS to your npm registry (default: registry.npmjs.org), or set NPM_CONFIG_REGISTRY to a reachable mirror/proxy.`,
           `To bypass this check (not recommended): set SPRINTFOUNDRY_SKIP_REGISTRY_PREFLIGHT=true.`,
-        ].join(" ")
+        ].join(" "),
+        { cause: error },
       );
     } finally {
       clearTimeout(timeout);
@@ -1947,7 +1996,7 @@ export class OrchestrationService {
     run: TaskRun,
     budget: BudgetConfig,
     step: PlanStep,
-    remainingSteps: number
+    remainingSteps: number,
   ): Promise<void> {
     if (!(budget.per_task_max_cost_usd > 0)) return;
     const spentRatio = run.total_cost_usd / budget.per_task_max_cost_usd;
@@ -1979,7 +2028,7 @@ export class OrchestrationService {
   private async maybeRequireBudgetConfirmation(
     run: TaskRun,
     budget: BudgetConfig,
-    workspacePath: string
+    workspacePath: string,
   ): Promise<boolean> {
     const threshold = budget.confirm_threshold_usd ?? 0;
     if (!(threshold > 0) || run.total_cost_usd < threshold || this.budgetConsentRequested.has(run.run_id)) {
@@ -1992,7 +2041,7 @@ export class OrchestrationService {
       run,
       run.steps.at(-1)?.step_number ?? 0,
       `Budget confirmation required: spend crossed $${threshold.toFixed(2)}.`,
-      workspacePath
+      workspacePath,
     );
     if (!approved) {
       run.status = "failed";
@@ -2029,7 +2078,7 @@ export class OrchestrationService {
     reworkPlan: Pick<ExecutionPlan, "steps">,
     currentCycle: number,
     maxRework: number,
-    budget: BudgetConfig
+    budget: BudgetConfig,
   ): Promise<void> {
     const issueCount = reason
       .split(";")
@@ -2037,7 +2086,7 @@ export class OrchestrationService {
       .filter(Boolean).length;
     const remainingBudget = this.calculateRemainingBudgetUsd(run, budget);
     console.log(
-      `[rework] ${currentStep.agent} triggered rework cycle ${currentCycle}/${maxRework}: ${reason}`
+      `[rework] ${currentStep.agent} triggered rework cycle ${currentCycle}/${maxRework}: ${reason}`,
     );
     console.log(`[rework] Plan: ${this.describeStepSequence(reworkPlan.steps)}`);
     if (remainingBudget != null) {
@@ -2060,7 +2109,10 @@ export class OrchestrationService {
     });
   }
 
-  private async runServicePreflight(options?: { includePlanner?: boolean; agentIds?: string[] }): Promise<void> {
+  private async runServicePreflight(options?: {
+    includePlanner?: boolean;
+    agentIds?: string[];
+  }): Promise<void> {
     const result = await runPreflight(this.platformConfig, this.projectConfig, options);
     const failing = result.checks.filter((check) => check.severity === "fail");
     if (!hasFailingChecks(result)) {
@@ -2102,18 +2154,25 @@ export class OrchestrationService {
 
   async detectProjectStack(workspacePath: string): Promise<ProjectStack> {
     const check = (f: string) =>
-      fs.access(path.join(workspacePath, f)).then(() => true, () => false);
+      fs.access(path.join(workspacePath, f)).then(
+        () => true,
+        () => false,
+      );
 
     let stack: ProjectStack["stack"] = "unknown";
     let package_manager: string | undefined;
     const detected_from: string[] = [];
 
     if (await check("go.mod")) {
-      stack = "go"; detected_from.push("go.mod");
+      stack = "go";
+      detected_from.push("go.mod");
     } else if (await check("Cargo.toml")) {
-      stack = "rust"; detected_from.push("Cargo.toml");
+      stack = "rust";
+      detected_from.push("Cargo.toml");
     } else if (
-      await check("pyproject.toml") || await check("requirements.txt") || await check("setup.py")
+      (await check("pyproject.toml")) ||
+      (await check("requirements.txt")) ||
+      (await check("setup.py"))
     ) {
       stack = "python";
       detected_from.push("pyproject.toml/requirements.txt/setup.py");
@@ -2122,13 +2181,21 @@ export class OrchestrationService {
       else if (await check("Pipfile.lock")) package_manager = "pipenv";
       else package_manager = "pip";
     } else if (await check("Gemfile")) {
-      stack = "ruby"; detected_from.push("Gemfile");
+      stack = "ruby";
+      detected_from.push("Gemfile");
     } else if (await check("mix.exs")) {
-      stack = "elixir"; detected_from.push("mix.exs");
-    } else if (await check("pom.xml") || await check("build.gradle") || await check("build.gradle.kts")) {
-      stack = "jvm"; detected_from.push("pom.xml/build.gradle");
+      stack = "elixir";
+      detected_from.push("mix.exs");
+    } else if (
+      (await check("pom.xml")) ||
+      (await check("build.gradle")) ||
+      (await check("build.gradle.kts"))
+    ) {
+      stack = "jvm";
+      detected_from.push("pom.xml/build.gradle");
     } else if (await check("package.json")) {
-      stack = "node"; detected_from.push("package.json");
+      stack = "node";
+      detected_from.push("package.json");
       if (await check("pnpm-lock.yaml")) package_manager = "pnpm";
       else if (await check("yarn.lock")) package_manager = "yarn";
       else if (await check("bun.lockb")) package_manager = "bun";
@@ -2138,7 +2205,7 @@ export class OrchestrationService {
     // Detect pre-commit hooks
     let pre_commit_hooks: ProjectStack["pre_commit_hooks"] = "none";
     if (await check(".husky/pre-commit")) pre_commit_hooks = "husky";
-    else if (await check(".lefthook.yml") || await check("lefthook.yml")) pre_commit_hooks = "lefthook";
+    else if ((await check(".lefthook.yml")) || (await check("lefthook.yml"))) pre_commit_hooks = "lefthook";
     else if (await check(".pre-commit-config.yaml")) pre_commit_hooks = "pre-commit";
 
     // Detect monorepo
@@ -2161,18 +2228,14 @@ export class OrchestrationService {
     // Write to .agent-context/stack.json — available to planner + all agents
     const contextDir = path.join(workspacePath, ".agent-context");
     await fs.mkdir(contextDir, { recursive: true });
-    await fs.writeFile(
-      path.join(contextDir, "stack.json"),
-      JSON.stringify(stackInfo, null, 2),
-      "utf-8"
-    );
+    await fs.writeFile(path.join(contextDir, "stack.json"), JSON.stringify(stackInfo, null, 2), "utf-8");
 
     return stackInfo;
   }
 
   private deriveStackCommands(
     stack: string,
-    pm?: string
+    pm?: string,
   ): Partial<Pick<ProjectStack, "install_cmd" | "build_cmd" | "test_cmd" | "lint_cmd" | "typecheck_cmd">> {
     switch (stack) {
       case "node": {
@@ -2226,13 +2289,19 @@ export class OrchestrationService {
 
   async runQualityGate(
     workspacePath: string,
-    step: PlanStep
+    _step: PlanStep,
   ): Promise<{ passed: boolean; failures: string[] }> {
     const failures: string[] = [];
 
     // Detect stack from workspace
-    const hasPackageJson = await fs.access(path.join(workspacePath, "package.json")).then(() => true, () => false);
-    const hasGoMod = await fs.access(path.join(workspacePath, "go.mod")).then(() => true, () => false);
+    const hasPackageJson = await fs.access(path.join(workspacePath, "package.json")).then(
+      () => true,
+      () => false,
+    );
+    const hasGoMod = await fs.access(path.join(workspacePath, "go.mod")).then(
+      () => true,
+      () => false,
+    );
 
     const run = (cmd: string): boolean => {
       try {
@@ -2295,7 +2364,7 @@ export class OrchestrationService {
   private async prepareRunEnvironment(
     run: TaskRun,
     plan: ExecutionPlan,
-    workspacePath: string
+    workspacePath: string,
   ): Promise<RunEnvironmentHandle> {
     const existing = this.getRunEnvironment(run);
     const prepared = existing
@@ -2308,14 +2377,22 @@ export class OrchestrationService {
       this.recordSandboxProvisioningMetrics(prepared);
     }
     if (existing) {
-      await this.emitEvent(run.run_id, "sandbox.resumed", this.buildSandboxEventData(run, {
-        checkpoint_generation: prepared.checkpoint_generation,
-      }));
+      await this.emitEvent(
+        run.run_id,
+        "sandbox.resumed",
+        this.buildSandboxEventData(run, {
+          checkpoint_generation: prepared.checkpoint_generation,
+        }),
+      );
     } else {
-      await this.emitEvent(run.run_id, "sandbox.created", this.buildSandboxEventData(run, {
-        workspace_path: prepared.workspace_path,
-        checkpoint_generation: prepared.checkpoint_generation,
-      }));
+      await this.emitEvent(
+        run.run_id,
+        "sandbox.created",
+        this.buildSandboxEventData(run, {
+          workspace_path: prepared.workspace_path,
+          checkpoint_generation: prepared.checkpoint_generation,
+        }),
+      );
     }
     this.persistSession(run, { workspace_path: workspacePath });
     return prepared;
@@ -2343,7 +2420,7 @@ export class OrchestrationService {
   private async createRunEnvironment(
     run: TaskRun,
     plan: ExecutionPlan,
-    workspacePath: string
+    workspacePath: string,
   ): Promise<RunEnvironmentHandle> {
     if (!this.executionBackend) {
       return this.createFallbackRunEnvironment(run, workspacePath);
@@ -2352,9 +2429,7 @@ export class OrchestrationService {
     return this.executionBackend.prepareRunEnvironment(run, plan, workspacePath);
   }
 
-  private async resumeRunEnvironment(
-    handle: RunEnvironmentHandle
-  ): Promise<RunEnvironmentHandle> {
+  private async resumeRunEnvironment(handle: RunEnvironmentHandle): Promise<RunEnvironmentHandle> {
     if (!this.executionBackend) {
       return handle;
     }
@@ -2365,7 +2440,7 @@ export class OrchestrationService {
   private async teardownRunEnvironment(
     run: TaskRun,
     handle: RunEnvironmentHandle,
-    workspacePath: string
+    workspacePath: string,
   ): Promise<void> {
     const reason = this.resolveTeardownReason(run.status);
     if (this.executionBackend) {
@@ -2376,9 +2451,13 @@ export class OrchestrationService {
         console.warn(`[execution-backend] Failed to teardown sandbox ${handle.sandbox_id}: ${message}`);
       }
     }
-    await this.emitEvent(run.run_id, "sandbox.destroyed", this.buildSandboxEventData(run, {
-      reason,
-    }));
+    await this.emitEvent(
+      run.run_id,
+      "sandbox.destroyed",
+      this.buildSandboxEventData(run, {
+        reason,
+      }),
+    );
     this.persistSession(run, { workspace_path: workspacePath });
   }
 
@@ -2405,14 +2484,12 @@ export class OrchestrationService {
     run.checkpoint_generation = handle.checkpoint_generation;
   }
 
-  private buildSandboxEventData(
-    run: TaskRun,
-    extra?: Record<string, unknown>
-  ): Record<string, unknown> {
+  private buildSandboxEventData(run: TaskRun, extra?: Record<string, unknown>): Record<string, unknown> {
     const handle = this.getRunEnvironment(run);
-    const metadata = handle?.metadata && typeof handle.metadata === "object"
-      ? handle.metadata as Record<string, unknown>
-      : {};
+    const metadata =
+      handle?.metadata && typeof handle.metadata === "object"
+        ? (handle.metadata as Record<string, unknown>)
+        : {};
     return {
       sandbox_id: handle?.sandbox_id ?? run.sandbox_id,
       execution_backend: handle?.execution_backend ?? run.execution_backend,
@@ -2423,7 +2500,8 @@ export class OrchestrationService {
       isolation_level: handle?.isolation_level ?? run.isolation_level,
       claim_name: typeof metadata.claim_name === "string" ? metadata.claim_name : undefined,
       template_name: typeof metadata.template_name === "string" ? metadata.template_name : undefined,
-      bound_sandbox_name: typeof metadata.bound_sandbox_name === "string" ? metadata.bound_sandbox_name : undefined,
+      bound_sandbox_name:
+        typeof metadata.bound_sandbox_name === "string" ? metadata.bound_sandbox_name : undefined,
       sandbox_namespace: typeof metadata.namespace === "string" ? metadata.namespace : undefined,
       ...(extra ?? {}),
     };
@@ -2479,7 +2557,7 @@ export class OrchestrationService {
 
   private async rebuildRunStateFromEvents(
     workspacePath: string,
-    session: RunSessionMetadata
+    session: RunSessionMetadata,
   ): Promise<TaskRun | null> {
     const eventsPath = path.join(workspacePath, ".events.jsonl");
     const raw = await fs.readFile(eventsPath, "utf-8").catch(() => "");
@@ -2503,8 +2581,9 @@ export class OrchestrationService {
     const latestTicketEvent = [...events]
       .reverse()
       .find((event) => event.event_type === "task.created" && event.data.ticket);
-    const ticket = (latestTicketEvent?.data.ticket as TicketDetails | undefined)
-      ?? this.createTicketFromPrompt(session.ticket_id, session.ticket_title);
+    const ticket =
+      (latestTicketEvent?.data.ticket as TicketDetails | undefined) ??
+      this.createTicketFromPrompt(session.ticket_id, session.ticket_title);
 
     const latestPlanEvent = [...events]
       .reverse()
@@ -2515,11 +2594,12 @@ export class OrchestrationService {
     const stepExecutions: StepExecution[] = [];
     let recoveredRunEnvironment: RunEnvironmentHandle | null = null;
     for (const event of events) {
-      if (
-        event.event_type === "sandbox.created" ||
-        event.event_type === "sandbox.resumed"
-      ) {
-        recoveredRunEnvironment = this.rebuildRunEnvironmentFromEvent(session, event, recoveredRunEnvironment);
+      if (event.event_type === "sandbox.created" || event.event_type === "sandbox.resumed") {
+        recoveredRunEnvironment = this.rebuildRunEnvironmentFromEvent(
+          session,
+          event,
+          recoveredRunEnvironment,
+        );
       }
 
       if (event.event_type === "step.started") {
@@ -2614,7 +2694,7 @@ export class OrchestrationService {
   private rebuildRunEnvironmentFromEvent(
     session: RunSessionMetadata,
     event: TaskEvent,
-    previous: RunEnvironmentHandle | null
+    previous: RunEnvironmentHandle | null,
   ): RunEnvironmentHandle {
     return {
       run_id: session.run_id,
@@ -2642,7 +2722,7 @@ export class OrchestrationService {
       checkpoint_generation:
         typeof event.data.checkpoint_generation === "number"
           ? event.data.checkpoint_generation
-          : previous?.checkpoint_generation ?? 0,
+          : (previous?.checkpoint_generation ?? 0),
       metadata: {
         ...(previous?.metadata ?? {}),
         recovered_from_events: true,
@@ -2652,7 +2732,9 @@ export class OrchestrationService {
 
   private resolveResumeStep(run: TaskRun, plan: ExecutionPlan, requestedStep?: number): number {
     const planSteps = new Set(plan.steps.map((step) => step.step_number));
-    const failedHistory = run.steps.filter((step) => step.status === "failed" || step.status === "needs_rework");
+    const failedHistory = run.steps.filter(
+      (step) => step.status === "failed" || step.status === "needs_rework",
+    );
 
     if (requestedStep !== undefined) {
       if (!Number.isInteger(requestedStep) || requestedStep <= 0) {
@@ -2667,20 +2749,14 @@ export class OrchestrationService {
       return requestedStep;
     }
 
-    const latestFailed = [...failedHistory]
-      .reverse()
-      .find((step) => planSteps.has(step.step_number));
+    const latestFailed = [...failedHistory].reverse().find((step) => planSteps.has(step.step_number));
     if (!latestFailed) {
       throw new Error(`Run ${run.run_id} has no failed plan step to resume.`);
     }
     return latestFailed.step_number;
   }
 
-  private buildInitialCompletedSteps(
-    run: TaskRun,
-    plan: ExecutionPlan,
-    resumeFromStep: number
-  ): Set<number> {
+  private buildInitialCompletedSteps(run: TaskRun, plan: ExecutionPlan, resumeFromStep: number): Set<number> {
     const completed = new Set<number>();
     const allowed = new Set(plan.steps.map((step) => step.step_number));
     for (let i = run.steps.length - 1; i >= 0; i -= 1) {
@@ -2694,7 +2770,7 @@ export class OrchestrationService {
     return completed;
   }
 
-  private createRun(ticketId: string): TaskRun {
+  private createRun(_ticketId: string): TaskRun {
     const presetRunId = String(process.env.SPRINTFOUNDRY_RUN_ID ?? "").trim();
     return {
       run_id: presetRunId || `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -2741,9 +2817,7 @@ export class OrchestrationService {
       return this.platformConfig.defaults.model_per_agent[agent];
     }
     // Role-based fallback: find the agent's role and look up by role name
-    const agentDef = this.platformConfig.agent_definitions.find(
-      (d) => d.type === agent
-    );
+    const agentDef = this.platformConfig.agent_definitions.find((d) => d.type === agent);
     if (agentDef?.role && this.platformConfig.defaults.model_per_agent[agentDef.role]) {
       return this.platformConfig.defaults.model_per_agent[agentDef.role];
     }
@@ -2772,15 +2846,13 @@ export class OrchestrationService {
 
   private evaluateRuleConditionForTicket(
     condition: PlatformRule["condition"],
-    ticket: TicketDetails
+    ticket: TicketDetails,
   ): boolean {
     switch (condition.type) {
       case "always":
         return true;
       case "label_contains":
-        return ticket.labels.some((l) =>
-          l.toLowerCase().includes(condition.value.toLowerCase())
-        );
+        return ticket.labels.some((l) => l.toLowerCase().includes(condition.value.toLowerCase()));
       case "priority_is":
         return condition.values.includes(ticket.priority);
       default:
@@ -2790,14 +2862,10 @@ export class OrchestrationService {
 
   private resolveApiKey(provider: string, runtime?: RuntimeConfig): string {
     const resolvedProvider =
-      runtime?.provider === "codex"
-        ? "openai"
-        : runtime?.provider === "claude-code"
-          ? "anthropic"
-          : provider;
+      runtime?.provider === "codex" ? "openai" : runtime?.provider === "claude-code" ? "anthropic" : provider;
     const keys = this.projectConfig.api_keys;
     const key = keys[resolvedProvider as keyof typeof keys];
-    const resolved = typeof key === "string" ? key : key?.[0]?.key ?? "";
+    const resolved = typeof key === "string" ? key : (key?.[0]?.key ?? "");
     if (!resolved && runtime?.mode !== "local_process") {
       throw new Error(`No API key configured for provider: ${resolvedProvider}`);
     }
@@ -2823,20 +2891,15 @@ export class OrchestrationService {
   }
 
   private getMergedRules() {
-    return [
-      ...this.platformConfig.rules,
-      ...this.projectConfig.rules,
-    ];
+    return [...this.platformConfig.rules, ...this.projectConfig.rules];
   }
 
   private findParallelGroup(
     ready: PlanStep[],
-    groups: Array<number[] | { step_numbers?: number[]; steps?: number[] }>
+    groups: Array<number[] | { step_numbers?: number[]; steps?: number[] }>,
   ): PlanStep[] {
     for (const group of groups) {
-      const stepNumbers = Array.isArray(group)
-        ? group
-        : (group?.step_numbers ?? group?.steps ?? []);
+      const stepNumbers = Array.isArray(group) ? group : (group?.step_numbers ?? group?.steps ?? []);
       const matching = ready.filter((s) => stepNumbers.includes(s.step_number));
       if (matching.length > 1) return matching;
     }
@@ -2859,23 +2922,22 @@ export class OrchestrationService {
     }
     return step.depends_on
       .map((stepNumber) => latestByStep.get(stepNumber))
-      .filter((entry): entry is { step_number: number; agent: AgentType; result: AgentResult } => Boolean(entry));
+      .filter((entry): entry is { step_number: number; agent: AgentType; result: AgentResult } =>
+        Boolean(entry),
+      );
   }
 
-  private buildReviewSummary(run: TaskRun, afterStep: number): string {
-    const completedSteps = run.steps.filter(s => s.status === "completed");
+  private buildReviewSummary(run: TaskRun, _afterStep: number): string {
+    const completedSteps = run.steps.filter((s) => s.status === "completed");
     return completedSteps
-      .map(s => `Step ${s.step_number} (${s.agent}): ${s.result?.summary ?? "completed"}`)
+      .map((s) => `Step ${s.step_number} (${s.agent}): ${s.result?.summary ?? "completed"}`)
       .join("\n");
   }
 
   private getReviewArtifacts(run: TaskRun, afterStep: number): string[] {
     return run.steps
-      .filter(s => s.step_number <= afterStep && s.result)
-      .flatMap(s => [
-        ...(s.result?.artifacts_created ?? []),
-        ...(s.result?.artifacts_modified ?? []),
-      ]);
+      .filter((s) => s.step_number <= afterStep && s.result)
+      .flatMap((s) => [...(s.result?.artifacts_created ?? []), ...(s.result?.artifacts_modified ?? [])]);
   }
 
   private getReviewDir(workspacePath: string): string {
@@ -2890,10 +2952,7 @@ export class OrchestrationService {
     return path.join(this.getReviewDir(workspacePath), `${reviewId}.decision.json`);
   }
 
-  private async waitForReviewDecision(
-    review: HumanReview,
-    workspacePath: string
-  ): Promise<HumanReview> {
+  private async waitForReviewDecision(review: HumanReview, workspacePath: string): Promise<HumanReview> {
     const reviewDir = this.getReviewDir(workspacePath);
     const pendingPath = this.getPendingReviewPath(workspacePath, review.review_id);
     const decisionPath = this.getDecisionPath(workspacePath, review.review_id);
@@ -2901,8 +2960,7 @@ export class OrchestrationService {
     await fs.mkdir(reviewDir, { recursive: true });
     await fs.writeFile(pendingPath, JSON.stringify(review, null, 2), "utf-8");
 
-    const timeoutMs =
-      this.platformConfig.defaults.timeouts.human_gate_timeout_hours * 60 * 60 * 1000;
+    const timeoutMs = this.platformConfig.defaults.timeouts.human_gate_timeout_hours * 60 * 60 * 1000;
     const pollIntervalMs = 1_000;
     const start = Date.now();
 
@@ -2943,7 +3001,7 @@ export class OrchestrationService {
   private async upsertStepResultToSink(
     runId: string,
     step: StepExecution,
-    stepAttempt: number
+    stepAttempt: number,
   ): Promise<void> {
     if (!this.eventSinkClient) return;
     if (!(step.started_at instanceof Date) || !(step.completed_at instanceof Date)) return;
@@ -2975,7 +3033,7 @@ export class OrchestrationService {
       console.warn(
         `[event-sink] Failed to upsert step result run=${runId} step=${step.step_number} attempt=${stepAttempt}: ${
           error instanceof Error ? error.message : String(error)
-        }`
+        }`,
       );
     }
   }
@@ -2986,14 +3044,14 @@ export class OrchestrationService {
     stepNumber: number,
     stepAttempt: number,
     agent: AgentType,
-    runtimeProvider: RuntimeConfig["provider"]
+    runtimeProvider: RuntimeConfig["provider"],
   ): Promise<void> {
     if (!this.eventSinkClient) return;
 
     const runtimeLogPrefix = this.runtimeLogFilePrefix(runtimeProvider);
     const stdoutPath = path.join(
       workspacePath,
-      `.${runtimeLogPrefix}-runtime.step-${stepNumber}.attempt-${stepAttempt}.stdout.log`
+      `.${runtimeLogPrefix}-runtime.step-${stepNumber}.attempt-${stepAttempt}.stdout.log`,
     );
     const raw = await fs.readFile(stdoutPath, "utf-8").catch(() => "");
     if (!raw.trim()) return;
@@ -3021,7 +3079,7 @@ export class OrchestrationService {
         console.warn(
           `[event-sink] Failed fallback activity log run=${runId} step=${stepNumber} attempt=${stepAttempt}: ${
             error instanceof Error ? error.message : String(error)
-          }`
+          }`,
         );
         break;
       }

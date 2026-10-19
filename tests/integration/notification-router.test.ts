@@ -3,10 +3,10 @@
  * Priority routing, multi-channel delivery, failure handling.
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { NotificationRouter, defaultRoutingConfig } from "../../src/service/notification-router.js";
 import { createMockNotifierPlugin, createRecordingNotifier } from "../helpers/plugin-mocks.js";
-import type { NotifierPlugin, EventPriority } from "../../src/shared/plugin-types.js";
+import type { NotifierPlugin } from "../../src/shared/plugin-types.js";
 
 describe("Notification Router — priority routing", () => {
   it("routes urgent messages to urgent-configured channels", async () => {

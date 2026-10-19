@@ -11,7 +11,7 @@
  *  - Heartbeats keep the connection alive
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import http from "node:http";
 import { spawn, ChildProcess } from "node:child_process";
 import path from "node:path";
@@ -68,7 +68,11 @@ function collectSSE(
   url: string,
   timeoutMs: number,
   minMessages = 1,
-): Promise<{ raw: string; messages: Array<{ event?: string; data: string }>; headers: http.IncomingHttpHeaders }> {
+): Promise<{
+  raw: string;
+  messages: Array<{ event?: string; data: string }>;
+  headers: http.IncomingHttpHeaders;
+}> {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       req.destroy();
@@ -161,7 +165,9 @@ afterAll(() => {
   serverProcess?.kill();
   try {
     rmSync(tmpRunsRoot, { recursive: true, force: true });
-  } catch { /* best effort */ }
+  } catch {
+    /* best effort */
+  }
 });
 
 describe("GET /api/events/stream — SSE endpoint", () => {
@@ -184,10 +190,7 @@ describe("GET /api/events/stream — SSE endpoint", () => {
 
   it("sends periodic 'runs' summary events", async () => {
     // Set up a fixture run so the summary has content
-    setupFixtureRun("test-project", "run-001", [
-      makeEvent("task.created"),
-      makeEvent("task.plan_generated"),
-    ]);
+    setupFixtureRun("test-project", "run-001", [makeEvent("task.created"), makeEvent("task.plan_generated")]);
 
     // Allow extra headroom under full-suite load.
     const { messages } = await collectSSE(withAccessToken(`${BASE}/api/events/stream`), 12000, 2);
@@ -199,9 +202,7 @@ describe("GET /api/events/stream — SSE endpoint", () => {
   }, 15000);
 
   it("streams new events when JSONL file is appended", async () => {
-    const { eventsPath } = setupFixtureRun("test-project", "run-sse-append", [
-      makeEvent("task.created"),
-    ]);
+    const { eventsPath } = setupFixtureRun("test-project", "run-sse-append", [makeEvent("task.created")]);
 
     // Start SSE connection for this specific run
     const ssePromise = collectSSE(
@@ -237,10 +238,7 @@ describe("GET /api/events/stream — SSE endpoint", () => {
   });
 
   it("handles project+run params for targeted watching", async () => {
-    setupFixtureRun("targeted-proj", "run-targeted", [
-      makeEvent("task.created"),
-      makeEvent("step.started"),
-    ]);
+    setupFixtureRun("targeted-proj", "run-targeted", [makeEvent("task.created"), makeEvent("step.started")]);
 
     const { messages } = await collectSSE(
       withAccessToken(`${BASE}/api/events/stream?project=targeted-proj&run=run-targeted`),

@@ -1,0 +1,38 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directories:
+      - "/"
+      - "/website"
+      - "/monitor/v4"
+      - "/monitor/v5"
+    schedule:
+      interval: weekly
+    # Wait before adopting new releases so compromised or yanked versions are caught first.
+    cooldown:
+      default-days: 3
+      semver-major-days: 14
+    open-pull-requests-limit: 10
+    labels: ["dependencies"]
+    groups:
+      dev-tooling:
+        dependency-type: development
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 3
+    labels: ["dependencies", "ci"]
+
+  - package-ecosystem: docker
+    directories:
+      - "/"
+      - "/containers"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    labels: ["dependencies", "docker"]

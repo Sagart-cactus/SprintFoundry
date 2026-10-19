@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import { createMockSCMPlugin } from "../helpers/plugin-mocks.js";
-import type { SCMPlugin, PRInfo, CIStatus, ReviewDecision, MergeReadiness } from "../../src/shared/plugin-types.js";
+import type { PRInfo } from "../../src/shared/plugin-types.js";
 
 const defaultPR: PRInfo = {
   number: 42,
@@ -18,7 +18,10 @@ const defaultPR: PRInfo = {
 describe("SCM Plugin — PR detection", () => {
   it("detects an existing PR for a branch", async () => {
     const scm = createMockSCMPlugin({ defaultPR });
-    const pr = await scm.detectPR("feat/test", { url: "https://github.com/test/repo", default_branch: "main" });
+    const pr = await scm.detectPR("feat/test", {
+      url: "https://github.com/test/repo",
+      default_branch: "main",
+    });
     expect(pr).not.toBeNull();
     expect(pr!.number).toBe(42);
     expect(pr!.branch).toBe("feat/test");
@@ -26,7 +29,10 @@ describe("SCM Plugin — PR detection", () => {
 
   it("returns null when no PR exists", async () => {
     const scm = createMockSCMPlugin({ defaultPR: null });
-    const pr = await scm.detectPR("feat/orphan", { url: "https://github.com/test/repo", default_branch: "main" });
+    const pr = await scm.detectPR("feat/orphan", {
+      url: "https://github.com/test/repo",
+      default_branch: "main",
+    });
     expect(pr).toBeNull();
   });
 });
@@ -102,7 +108,14 @@ describe("SCM Plugin — review decisions", () => {
     const scm = createMockSCMPlugin();
     vi.mocked(scm.getPendingComments).mockResolvedValueOnce([
       { id: 1, author: "reviewer1", body: "Fix error handling", created_at: new Date().toISOString() },
-      { id: 2, author: "reviewer2", body: "Add tests", path: "src/main.ts", line: 42, created_at: new Date().toISOString() },
+      {
+        id: 2,
+        author: "reviewer2",
+        body: "Add tests",
+        path: "src/main.ts",
+        line: 42,
+        created_at: new Date().toISOString(),
+      },
     ]);
 
     const comments = await scm.getPendingComments(defaultPR);
@@ -164,7 +177,10 @@ describe("SCM Plugin — composite scenarios", () => {
     const scm = createMockSCMPlugin();
 
     // 1. Detect PR
-    const pr = await scm.detectPR("feat/lifecycle", { url: "https://github.com/test/repo", default_branch: "main" });
+    const pr = await scm.detectPR("feat/lifecycle", {
+      url: "https://github.com/test/repo",
+      default_branch: "main",
+    });
     expect(pr).not.toBeNull();
 
     // 2. Check CI
@@ -187,12 +203,15 @@ describe("SCM Plugin — composite scenarios", () => {
   it("blocked lifecycle: detect -> CI failing -> wait", async () => {
     const scm = createMockSCMPlugin({ defaultCIStatus: "failing" });
 
-    const pr = await scm.detectPR("feat/blocked", { url: "https://github.com/test/repo", default_branch: "main" });
+    const pr = await scm.detectPR("feat/blocked", {
+      url: "https://github.com/test/repo",
+      default_branch: "main",
+    });
     const ci = await scm.getCISummary(pr!);
     expect(ci).toBe("failing");
 
     // Should not attempt merge when CI failing
-    const merge = await scm.getMergeability(pr!);
+    await scm.getMergeability(pr!);
     // Default mergeability is still true (mock), but a real implementation would check CI
     // This tests that the interface methods work as expected
     expect(scm.getCISummary).toHaveBeenCalledTimes(1);

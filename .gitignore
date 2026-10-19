@@ -1,7 +1,16 @@
 node_modules/
 dist/
+build/
+target/
+.gradle/
+*.class
 .DS_Store
 .env
+.env.*
+!.env.example
+!.env.*.example
+.idea/
+.vscode/
 .claude/
 config/project.yaml
 .agentsdlc/
@@ -46,7 +55,8 @@ video/
 .agent-result.json
 .agent-profile.md
 artifacts/
-AGENTS.md
+**/AGENTS.md
+!/AGENTS.md
 !docs/agents.md
 config/project-sprintfoundry-codex-all.yaml
 issues/

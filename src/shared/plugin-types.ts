@@ -9,7 +9,6 @@ import type {
   TicketWorkflowStage,
   EventPriority,
   RepoConfig,
-  TaskEvent,
   TaskRun,
   TaskSource,
   TicketDetails,
@@ -53,7 +52,7 @@ export interface WorkspacePlugin {
     repoConfig: RepoConfig,
     branchStrategy: BranchStrategy,
     ticket: TicketDetails,
-    options?: WorkspaceCreateOptions
+    options?: WorkspaceCreateOptions,
   ): Promise<WorkspaceInfo>;
 
   /** Remove a workspace directory. */
@@ -68,10 +67,7 @@ export interface WorkspacePlugin {
   ): Promise<boolean>;
 
   /** Commit remaining changes, push, and create a pull request. Returns the PR URL. */
-  createPullRequest(
-    workspacePath: string,
-    run: TaskRun,
-  ): Promise<string>;
+  createPullRequest(workspacePath: string, run: TaskRun): Promise<string>;
 
   /** Get the workspace path for a run (without creating it). */
   getPath(runId: string): string;
@@ -103,11 +99,7 @@ export interface TrackerPlugin {
   fetch(ticketId: string, source: TaskSource): Promise<TicketDetails>;
 
   /** Update the ticket status (e.g., "in_review") and optionally attach a PR URL. */
-  updateStatus(
-    ticket: TicketDetails,
-    status: string,
-    prUrl?: string
-  ): Promise<void>;
+  updateStatus(ticket: TicketDetails, status: string, prUrl?: string): Promise<void>;
 }
 
 // ----- SCM Plugin (post-PR lifecycle) -----

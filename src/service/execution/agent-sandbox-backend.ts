@@ -30,7 +30,7 @@ export class AgentSandboxExecutionBackend implements ExecutionBackend {
     private readonly platformConfig: PlatformConfig,
     private readonly projectConfig: ProjectConfig,
     client?: AgentSandboxClient,
-    localBackend: LocalExecutionDelegate = new LocalExecutionBackend()
+    localBackend: LocalExecutionDelegate = new LocalExecutionBackend(),
   ) {
     this.namespace = this.platformConfig.k8s?.namespace?.trim() || "default";
     this.client = client ?? null;
@@ -40,7 +40,7 @@ export class AgentSandboxExecutionBackend implements ExecutionBackend {
   async prepareRunEnvironment(
     run: TaskRun,
     _plan: ExecutionPlan,
-    workspacePath: string
+    workspacePath: string,
   ): Promise<RunEnvironmentHandle> {
     const client = this.getClient();
     const provisioningTimingMs: Record<string, number> = {};
@@ -63,7 +63,10 @@ export class AgentSandboxExecutionBackend implements ExecutionBackend {
       tenant_id: run.tenant_id,
       sandbox_id: binding.sandboxName || claimName,
       execution_backend: "agent-sandbox",
-      hosting_mode: resolveHostingMode({ explicitHostingMode: run.hosting_mode, executionBackend: "agent-sandbox" }),
+      hosting_mode: resolveHostingMode({
+        explicitHostingMode: run.hosting_mode,
+        executionBackend: "agent-sandbox",
+      }),
       workspace_path: workspacePath,
       checkpoint_generation: 0,
       metadata: {
@@ -87,7 +90,7 @@ export class AgentSandboxExecutionBackend implements ExecutionBackend {
   async executeStep(
     handle: RunEnvironmentHandle,
     step: PlanStep,
-    config: AgentRunConfig
+    config: AgentRunConfig,
   ): Promise<AgentRunResult> {
     return this.withWholeRunHostEnv(handle, async () => {
       const localHandle: RunEnvironmentHandle = {
@@ -100,7 +103,7 @@ export class AgentSandboxExecutionBackend implements ExecutionBackend {
 
   async pauseRun(handle: RunEnvironmentHandle): Promise<void> {
     console.warn(
-      `[execution-backend] AgentSandboxExecutionBackend pause is not implemented for ${handle.sandbox_id}`
+      `[execution-backend] AgentSandboxExecutionBackend pause is not implemented for ${handle.sandbox_id}`,
     );
   }
 
@@ -126,10 +129,7 @@ export class AgentSandboxExecutionBackend implements ExecutionBackend {
     };
   }
 
-  async teardownRun(
-    handle: RunEnvironmentHandle,
-    _reason: SandboxTeardownReason
-  ): Promise<void> {
+  async teardownRun(handle: RunEnvironmentHandle, _reason: SandboxTeardownReason): Promise<void> {
     const claimName = String(handle.metadata["claim_name"] ?? "");
     if (!claimName) return;
     await this.getClient().deleteSandboxClaim(this.namespace, claimName);
@@ -138,10 +138,12 @@ export class AgentSandboxExecutionBackend implements ExecutionBackend {
   private buildSandboxClaimManifest(
     run: TaskRun,
     claimName: string,
-    templateName: string
+    templateName: string,
   ): Record<string, unknown> {
-    const apiGroup = this.platformConfig.k8s?.agent_sandbox?.api_group?.trim() || DEFAULT_AGENT_SANDBOX_API_GROUP;
-    const apiVersion = this.platformConfig.k8s?.agent_sandbox?.api_version?.trim() || DEFAULT_AGENT_SANDBOX_API_VERSION;
+    const apiGroup =
+      this.platformConfig.k8s?.agent_sandbox?.api_group?.trim() || DEFAULT_AGENT_SANDBOX_API_GROUP;
+    const apiVersion =
+      this.platformConfig.k8s?.agent_sandbox?.api_version?.trim() || DEFAULT_AGENT_SANDBOX_API_VERSION;
     return {
       apiVersion: `${apiGroup}/${apiVersion}`,
       kind: "SandboxClaim",
@@ -169,16 +171,20 @@ export class AgentSandboxExecutionBackend implements ExecutionBackend {
       k8sModule = require("@kubernetes/client-node");
     } catch (error) {
       throw new Error(
-        `AgentSandboxExecutionBackend requires @kubernetes/client-node: ${error instanceof Error ? error.message : String(error)}`
+        `AgentSandboxExecutionBackend requires @kubernetes/client-node: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
       );
     }
 
     const kc = new k8sModule.KubeConfig();
     kc.loadFromDefault();
     const customObjectsApi = kc.makeApiClient(k8sModule.CustomObjectsApi);
-    const apiGroup = this.platformConfig.k8s?.agent_sandbox?.api_group?.trim() || DEFAULT_AGENT_SANDBOX_API_GROUP;
-    const apiVersion = this.platformConfig.k8s?.agent_sandbox?.api_version?.trim() || DEFAULT_AGENT_SANDBOX_API_VERSION;
-    const claimPlural = this.platformConfig.k8s?.agent_sandbox?.claim_plural?.trim() || DEFAULT_AGENT_SANDBOX_CLAIM_PLURAL;
+    const apiGroup =
+      this.platformConfig.k8s?.agent_sandbox?.api_group?.trim() || DEFAULT_AGENT_SANDBOX_API_GROUP;
+    const apiVersion =
+      this.platformConfig.k8s?.agent_sandbox?.api_version?.trim() || DEFAULT_AGENT_SANDBOX_API_VERSION;
+    const claimPlural =
+      this.platformConfig.k8s?.agent_sandbox?.claim_plural?.trim() || DEFAULT_AGENT_SANDBOX_CLAIM_PLURAL;
 
     return {
       createSandboxClaim: async (namespace, manifest) => {
@@ -194,13 +200,13 @@ export class AgentSandboxExecutionBackend implements ExecutionBackend {
         const deadline = Date.now() + 60_000;
         let lastLoggedSeconds = -1;
         while (Date.now() < deadline) {
-          const result = await customObjectsApi.getNamespacedCustomObject({
+          const result = (await customObjectsApi.getNamespacedCustomObject({
             group: apiGroup,
             version: apiVersion,
             namespace,
             plural: claimPlural,
             name: claimName,
-          }) as Record<string, unknown>;
+          })) as Record<string, unknown>;
           const body = (result["body"] ?? result) as Record<string, unknown>;
           const status = body["status"];
           if (status && typeof status === "object") {
@@ -213,8 +219,8 @@ export class AgentSandboxExecutionBackend implements ExecutionBackend {
               (sandbox && typeof sandbox === "object"
                 ? String(
                     (sandbox as Record<string, unknown>)["name"] ??
-                    (sandbox as Record<string, unknown>)["Name"] ??
-                    ""
+                      (sandbox as Record<string, unknown>)["Name"] ??
+                      "",
                   ).trim()
                 : "");
             if (sandboxName) {
@@ -225,13 +231,13 @@ export class AgentSandboxExecutionBackend implements ExecutionBackend {
           if (elapsedSeconds >= 0 && elapsedSeconds % 10 === 0 && elapsedSeconds !== lastLoggedSeconds) {
             lastLoggedSeconds = elapsedSeconds;
             console.log(
-              `[sandbox] Waiting for SandboxClaim '${claimName}' to bind... (${elapsedSeconds}s elapsed)`
+              `[sandbox] Waiting for SandboxClaim '${claimName}' to bind... (${elapsedSeconds}s elapsed)`,
             );
           }
           await new Promise((resolve) => setTimeout(resolve, 1_000));
         }
         throw new Error(
-          `SandboxClaim '${claimName}' failed to bind after 60s. Check that the Agent Sandbox controller is running and required CRDs are installed.`
+          `SandboxClaim '${claimName}' failed to bind after 60s. Check that the Agent Sandbox controller is running and required CRDs are installed.`,
         );
       },
       deleteSandboxClaim: async (namespace, claimName) => {
@@ -261,11 +267,13 @@ export class AgentSandboxExecutionBackend implements ExecutionBackend {
 
   private buildWholeRunHostEnv(): Record<string, string> {
     const runsRoot = String(process.env.SPRINTFOUNDRY_RUNS_ROOT ?? "/workspace").trim() || "/workspace";
-    const sessionsDir = String(
-      process.env.SPRINTFOUNDRY_SESSIONS_DIR ?? path.join(runsRoot, ".sprintfoundry", "sessions")
-    ).trim() || path.join(runsRoot, ".sprintfoundry", "sessions");
+    const sessionsDir =
+      String(
+        process.env.SPRINTFOUNDRY_SESSIONS_DIR ?? path.join(runsRoot, ".sprintfoundry", "sessions"),
+      ).trim() || path.join(runsRoot, ".sprintfoundry", "sessions");
     const homeDir = String(process.env.HOME ?? "/workspace/home").trim() || "/workspace/home";
-    const codexHome = String(process.env.CODEX_HOME ?? path.join(homeDir, ".codex")).trim() || path.join(homeDir, ".codex");
+    const codexHome =
+      String(process.env.CODEX_HOME ?? path.join(homeDir, ".codex")).trim() || path.join(homeDir, ".codex");
 
     return {
       SPRINTFOUNDRY_EXECUTION_BACKEND: "local",
@@ -277,10 +285,7 @@ export class AgentSandboxExecutionBackend implements ExecutionBackend {
     };
   }
 
-  private async withWholeRunHostEnv<T>(
-    handle: RunEnvironmentHandle,
-    action: () => Promise<T>
-  ): Promise<T> {
+  private async withWholeRunHostEnv<T>(handle: RunEnvironmentHandle, action: () => Promise<T>): Promise<T> {
     const hostEnv = (
       handle.metadata["host_env"] && typeof handle.metadata["host_env"] === "object"
         ? handle.metadata["host_env"]
