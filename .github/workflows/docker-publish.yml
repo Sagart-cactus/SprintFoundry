@@ -25,7 +25,7 @@ jobs:
           - image: sprintfoundry-event-api
             dockerfile: Dockerfile.distributed
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Normalize image owner
         id: image-owner
@@ -73,7 +73,7 @@ jobs:
     outputs:
       image-ref: ${{ steps.base-ref.outputs.image }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Normalize image owner
         id: image-owner
@@ -140,7 +140,7 @@ jobs:
           - go-developer
           - go-qa
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Normalize image owner
         id: image-owner
