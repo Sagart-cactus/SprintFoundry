@@ -296,6 +296,11 @@ export class CodexRuntime implements AgentRuntime {
 
     const env = this.buildRuntimeEnv(config);
 
+    // Codex v0.110+ reads credentials from ~/.codex/config.toml, not OPENAI_API_KEY env var.
+    if (config.apiKey) {
+      await writeCodexConfigToml(config.apiKey, config.codexHomeDir);
+    }
+
     const stepPrefix = `.codex-runtime.step-${config.stepNumber}.attempt-${config.stepAttempt}`;
     const legacyDebugPath = path.join(config.workspacePath, ".codex-runtime.debug.json");
     const stepDebugPath = path.join(config.workspacePath, `${stepPrefix}.debug.json`);
