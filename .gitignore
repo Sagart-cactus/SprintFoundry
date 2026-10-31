@@ -1,4 +1,6 @@
 node_modules/
+# pnpm-lock.yaml is the only dependency lockfile for this workspace.
+package-lock.json
 dist/
 build/
 target/

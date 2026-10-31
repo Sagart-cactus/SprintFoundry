@@ -1,11 +1,8 @@
 version: 2
 updates:
   - package-ecosystem: npm
-    directories:
-      - "/"
-      - "/website"
-      - "/monitor/v4"
-      - "/monitor/v5"
+    # pnpm discovers all workspaces from this root and updates their shared lockfile.
+    directory: "/"
     schedule:
       interval: weekly
     # Wait before adopting new releases so compromised or yanked versions are caught first.

@@ -37,10 +37,27 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Scan for verified secrets
-        uses: trufflesecurity/trufflehog@v3.88.0
+      - uses: actions/setup-node@v4
         with:
-          extra_args: --results=verified,unknown
+          node-version: 20
+
+      - name: Scan history for verified and unknown secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          results="$(mktemp)"
+          trap 'rm -f "$results"' EXIT
+          status=0
+          docker run --rm -v "$PWD:/repo:ro" \
+            ghcr.io/trufflesecurity/trufflehog:3.99.7 \
+            git file:///repo --branch HEAD \
+            --results=verified,unknown --json --fail --fail-on-scan-errors --no-update \
+            > "$results" || status=$?
+          if [ "$status" -ne 0 ] && [ "$status" -ne 183 ]; then
+            echo "::error::Secret scanner failed (exit $status)"
+            exit "$status"
+          fi
+          node scripts/check-secret-scan.mjs "$results"
 
   dependency-audit:
     runs-on: ubuntu-latest
