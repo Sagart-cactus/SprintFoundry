@@ -44,8 +44,7 @@ function getAgentChoices(stack: string): { name: string; value: string; checked:
   const jsDefaults = ["product", "architect", "developer", "code-review", "qa", "security"];
   const goDefaults = ["product", "architect", "go-developer", "code-review", "go-qa", "security"];
   const pythonDefaults = ["product", "architect", "developer", "code-review", "qa", "security"];
-  const defaults =
-    stack === "go" ? goDefaults : stack === "python" ? pythonDefaults : jsDefaults;
+  const defaults = stack === "go" ? goDefaults : stack === "python" ? pythonDefaults : jsDefaults;
 
   return allAgents.map((a) => ({ ...a, checked: defaults.includes(a.value) }));
 }
@@ -60,10 +59,7 @@ function parseRepoOwnerAndName(url: string): { owner: string; repo: string } | n
   return null;
 }
 
-async function askTicketConfig(
-  source: string,
-  repoUrl: string
-): Promise<Record<string, string>> {
+async function askTicketConfig(source: string, repoUrl: string): Promise<Record<string, string>> {
   const parsed = parseRepoOwnerAndName(repoUrl);
 
   switch (source) {
@@ -136,7 +132,7 @@ async function gatherAnswers(): Promise<ProjectAnswers> {
   // Phase 3: Run Profile
   console.log("\n  Run Profile\n");
 
-  const runProfile = await select({
+  const runProfile = (await select({
     message: "Where will you run SprintFoundry?",
     choices: [
       {
@@ -156,15 +152,14 @@ async function gatherAnswers(): Promise<ProjectAnswers> {
       },
     ],
     default: "local",
-  }) as ProjectAnswers["runProfile"];
+  })) as ProjectAnswers["runProfile"];
 
   // Phase 3: Repository
   console.log("\n  Repository\n");
 
   const repoUrl = await input({
     message: "Repository URL (SSH or HTTPS):",
-    validate: (val) =>
-      val.length > 0 || "Repository URL is required",
+    validate: (val) => val.length > 0 || "Repository URL is required",
   });
 
   const defaultBranch = await input({
@@ -190,7 +185,9 @@ async function gatherAnswers(): Promise<ProjectAnswers> {
   // Phase 5: API Keys
   console.log("\n  API Keys\n");
 
-  console.log("  If you're logged in to Claude Code or Codex, SprintFoundry will use that session automatically.");
+  console.log(
+    "  If you're logged in to Claude Code or Codex, SprintFoundry will use that session automatically.",
+  );
   console.log("  Otherwise, set the SPRINTFOUNDRY_ANTHROPIC_KEY env var.\n");
 
   const apiProviders = await checkbox({
@@ -214,7 +211,7 @@ async function gatherAnswers(): Promise<ProjectAnswers> {
     ],
   });
 
-  let finalPrefix = branchPrefix;
+  let finalPrefix: string = branchPrefix;
   if (branchPrefix === "__custom__") {
     finalPrefix = await input({
       message: "Custom branch prefix:",
@@ -390,7 +387,9 @@ function printNextSteps(answers: ProjectAnswers, filePath: string): void {
     console.log(`     ${runCommand}`);
   } else if (answers.runProfile === "k8s-whole-run") {
     console.log("  3. Onboard the project namespace and config:");
-    console.log(`     ./scripts/onboard-project.sh --project-id ${answers.projectId} --config-file ${filePath} --dry-run`);
+    console.log(
+      `     ./scripts/onboard-project.sh --project-id ${answers.projectId} --config-file ${filePath} --dry-run`,
+    );
     console.log("");
     console.log("  4. Run a Kubernetes readiness check:");
     console.log("     sprintfoundry doctor --profile k8s");
