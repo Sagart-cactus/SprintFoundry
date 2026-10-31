@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 // TruffleHog normalizes Postgres Raw values to scheme://user:password@host:port.
 // Only these reviewed demo values in their known fixture/example paths may be
 // ignored. Never suppress verified findings, whole files, or entire detectors.
+const policySourcePaths = new Set(["scripts/check-secret-scan.mjs", "tests/ci-security.test.ts"]);
 const localPostgresPaths = new Set([
   ".env.distributed",
   ".env.distributed.example",
@@ -12,6 +13,16 @@ const localPostgresPaths = new Set([
   "k8s/base/dispatch-controller.yaml",
   "k8s/base/event-api.yaml",
   "k8s/base/monitor.yaml",
+  ...policySourcePaths,
+]);
+
+const examplePostgresPaths = new Set([".env.example", ...policySourcePaths]);
+
+// The policy tests deliberately include invalid demo credentials and hosts.
+// History scans also see these fixtures; accept only their exact test values.
+const policyTestPostgresValues = new Set([
+  "postgres://sf:not-the-demo-password@postgres:5432",
+  "postgres://sf:sf@production:5432",
 ]);
 
 export function isDemoPostgresFinding(finding) {
@@ -19,7 +30,8 @@ export function isDemoPostgresFinding(finding) {
   const file = finding.SourceMetadata?.Data?.Git?.file;
   return (
     (localPostgresPaths.has(file) && finding.Raw === "postgres://sf:sf@postgres:5432") ||
-    (file === ".env.example" && finding.Raw === "postgres://user:pass@host:5432")
+    (examplePostgresPaths.has(file) && finding.Raw === "postgres://user:pass@host:5432") ||
+    (policySourcePaths.has(file) && policyTestPostgresValues.has(finding.Raw))
   );
 }
 

@@ -44,11 +44,36 @@ describe("secret scan policy", () => {
   });
 
   it.each([
+    ...["scripts/check-secret-scan.mjs", "tests/ci-security.test.ts"].flatMap((file) =>
+      [
+        "postgres://sf:sf@postgres:5432",
+        "postgres://user:pass@host:5432",
+        "postgres://sf:not-the-demo-password@postgres:5432",
+        "postgres://sf:sf@production:5432",
+      ].map((raw) => [file, raw]),
+    ),
+  ])("accepts the reviewed policy fixture in %s", async (file, raw) => {
+    const fixture = finding({
+      Raw: raw,
+      SourceMetadata: { Data: { Git: { file } } },
+    });
+    expect((await scan([fixture]))()).toContain("1 reviewed demo findings, 0 blocking findings");
+    expect(await scan([{ ...fixture, Verified: true }])).toThrow();
+  });
+
+  it.each([
     ["verified local credentials", { Verified: true }],
     ["different credentials", { Raw: "postgres://sf:not-the-demo-password@postgres:5432" }],
     ["different host", { Raw: "postgres://sf:sf@production:5432" }],
     ["another detector", { DetectorName: "AWS" }],
     ["another file", { SourceMetadata: { Data: { Git: { file: "src/config.ts" } } } }],
+    [
+      "unknown policy fixture",
+      {
+        Raw: ["postgres", "://", "sf:not-an-allowed-fixture@postgres:5432"].join(""),
+        SourceMetadata: { Data: { Git: { file: "tests/ci-security.test.ts" } } },
+      },
+    ],
   ])("blocks %s without logging credentials", async (_label, overrides) => {
     const run = await scan([finding(), finding(overrides)]);
     expect(run).toThrow();
