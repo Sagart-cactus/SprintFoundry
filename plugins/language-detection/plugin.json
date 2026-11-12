@@ -1,0 +1,5 @@
+{
+  "name": "language-detection",
+  "description": "Stack and package-manager detection skill. Identifies project language, runtime, and toolchain before any build or install commands run. Used by all agents as a fallback when .agent-context/stack.json is absent.",
+  "version": "0.1.0"
+}
