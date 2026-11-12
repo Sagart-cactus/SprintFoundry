@@ -2,7 +2,7 @@
 # All agent containers inherit from this image.
 # Provides Claude Code CLI, Node.js, and common utilities.
 
-FROM node:22-slim AS base
+FROM node:25-slim AS base
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
