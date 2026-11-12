@@ -10,7 +10,7 @@
 
 ## Setup
 
-Requirements: Node.js 20 or newer, pnpm 9, and Git. Docker is needed only for
+Requirements: Node.js 22.19.0 or newer, pnpm 9, and Git. Docker is needed only for
 the distributed local stack.
 
 ```bash

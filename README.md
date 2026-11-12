@@ -299,7 +299,7 @@ stack: js # skip auto-detection
 
 `sprintfoundry doctor` checks all system dependencies before you run:
 
-- Node.js version (>=20 required)
+- Node.js version (>=22.19.0 required)
 - Git, npm availability
 - Monitor assets
 - Runs-root writability
