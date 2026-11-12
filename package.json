@@ -101,7 +101,7 @@
     "knip": "^6",
     "lint-staged": "^17.6.0",
     "prettier": "^3",
-    "syncpack": "^13",
+    "syncpack": "^15",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
     "typescript-eslint": "^8",
