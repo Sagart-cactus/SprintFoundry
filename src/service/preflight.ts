@@ -167,13 +167,13 @@ export async function runPreflight(
   const profile = options?.profile ?? resolvePreflightProfile(platform, project);
   const checks: PreflightCheck[] = [];
 
-  const nodeMajor = Number.parseInt(process.version.slice(1).split(".")[0] ?? "0", 10);
+  const [nodeMajor = 0, nodeMinor = 0] = process.version.slice(1).split(".").map(Number);
   add(
     checks,
-    nodeMajor >= 20 ? "pass" : "fail",
+    nodeMajor > 22 || (nodeMajor === 22 && nodeMinor >= 19) ? "pass" : "fail",
     "Node.js",
-    `${process.version} (required: >=20)`,
-    "Install Node.js 20 or newer.",
+    `${process.version} (required: >=22.19.0)`,
+    "Install Node.js 22.19.0 or newer.",
   );
 
   const git = await run("git", ["--version"]);

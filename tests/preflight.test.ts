@@ -24,6 +24,7 @@ import { resolvePreflightProfile, runPreflight } from "../src/service/preflight.
 
 describe("runPreflight", () => {
   const originalEnv = { ...process.env };
+  const originalVersion = process.version;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -55,7 +56,24 @@ describe("runPreflight", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
+    Object.defineProperty(process, "version", { value: originalVersion });
     process.env = { ...originalEnv };
+  });
+
+  it.each([
+    ["v20.20.2", "fail"],
+    ["v22.18.0", "fail"],
+    ["v22.19.0", "pass"],
+    ["v22.20.0", "pass"],
+    ["v24.0.0", "pass"],
+  ])("checks the Node floor for %s", async (version, severity) => {
+    Object.defineProperty(process, "version", { value: version });
+    const result = await runPreflight(makePlatformConfig(), makeProjectConfig());
+    expect(result.checks.find((check) => check.label === "Node.js")).toMatchObject({
+      severity,
+      detail: `${version} (required: >=22.19.0)`,
+    });
   });
 
   it("keeps local profile when k8s hosting is merely configured but not selected", () => {
@@ -85,7 +103,9 @@ describe("runPreflight", () => {
         },
         planner_runtime: { provider: "codex", mode: "local_sdk" },
       },
-      agent_definitions: [makePlatformConfig().agent_definitions.find((agent) => agent.type === "developer")!],
+      agent_definitions: [
+        makePlatformConfig().agent_definitions.find((agent) => agent.type === "developer")!,
+      ],
       k8s: {
         agent_sandbox: {
           enabled: true,
