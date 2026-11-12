@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
 # ─── Stage 1: builder ─────────────────────────────────────────────────────────
-FROM node:22-slim AS builder
+FROM node:25-slim AS builder
 
 ENV PNPM_HOME=/pnpm \
     PATH=/pnpm:$PATH
@@ -19,7 +19,7 @@ COPY scripts/copy-assets.mjs ./scripts/copy-assets.mjs
 RUN pnpm exec tsc && node scripts/copy-assets.mjs
 
 # ─── Stage 2: runner ──────────────────────────────────────────────────────────
-FROM node:22-slim AS runner
+FROM node:25-slim AS runner
 
 ENV NODE_ENV=production \
     PNPM_HOME=/pnpm \
