@@ -92,7 +92,7 @@
     "@eslint/js": "^10.0.1",
     "@types/node": "^26.6.5",
     "@vitest/coverage-v8": "~4.0.18",
-    "dependency-cruiser": "^16",
+    "dependency-cruiser": "^18",
     "eslint": "^10.13.0",
     "globals": "^17",
     "html-validate": "^10",
