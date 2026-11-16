@@ -43,7 +43,7 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ steps.image-owner.outputs.value }}/${{ matrix.image }}
           tags: |
@@ -95,7 +95,7 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ steps.image-owner.outputs.value }}/sprintfoundry-agent-base
           tags: |
@@ -176,7 +176,7 @@ jobs:
       - name: Extract metadata
         if: github.event_name != 'pull_request'
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ steps.image-owner.outputs.value }}/sprintfoundry-agent-${{ matrix.agent }}
           tags: |
