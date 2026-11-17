@@ -292,12 +292,12 @@ function RunHeader({ run, plan, statusInfo, completedSteps, totalSteps, totalTok
                 href={run.ticket_url}
                 target="_blank"
                 rel="noreferrer"
-                className="flex-shrink-0 text-2xs font-mono font-bold px-2 py-1 rounded bg-surface-container-high text-on-surface-variant label-technical hover:text-primary transition-colors"
+                className="shrink-0 text-2xs font-mono font-bold px-2 py-1 rounded bg-surface-container-high text-on-surface-variant label-technical hover:text-primary transition-colors"
               >
                 {run.ticket_id || sourceLabel(run.ticket_source)}
               </a>
             ) : (
-              <span className="flex-shrink-0 text-2xs font-mono font-bold px-2 py-1 rounded bg-surface-container-high text-on-surface-variant label-technical">
+              <span className="shrink-0 text-2xs font-mono font-bold px-2 py-1 rounded bg-surface-container-high text-on-surface-variant label-technical">
                 {run.ticket_id || sourceLabel(run.ticket_source)}
               </span>
             )
@@ -307,14 +307,14 @@ function RunHeader({ run, plan, statusInfo, completedSteps, totalSteps, totalTok
           </h2>
           <StatusPill status={run.status} statusInfo={statusInfo} />
           {run.resumed && (
-            <span className="text-2xs px-1.5 py-px rounded bg-primary/20 text-primary font-medium flex-shrink-0">
+            <span className="text-2xs px-1.5 py-px rounded bg-primary/20 text-primary font-medium shrink-0">
               Resumed{run.resumed_count > 1 ? ` x${run.resumed_count}` : ''}
             </span>
           )}
         </div>
 
         {/* Center: Project + Branch */}
-        <div className="flex items-center gap-3 text-2xs text-on-surface-variant flex-shrink-0">
+        <div className="flex items-center gap-3 text-2xs text-on-surface-variant shrink-0">
           <span className="flex items-center gap-1">
             <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
               <rect x="2" y="2" width="12" height="12" rx="2" />
@@ -334,7 +334,7 @@ function RunHeader({ run, plan, statusInfo, completedSteps, totalSteps, totalTok
         </div>
 
         {/* Right: PR + Duration + Tokens + Handoff */}
-        <div className="flex items-center gap-3 flex-shrink-0">
+        <div className="flex items-center gap-3 shrink-0">
           {run.pr_url && (
             <a
               href={run.pr_url}
@@ -448,7 +448,7 @@ function RunHeader({ run, plan, statusInfo, completedSteps, totalSteps, totalTok
 function StatusPill({ status, statusInfo }) {
   return (
     <span
-      className="flex items-center gap-1.5 text-2xs font-bold px-2 py-0.5 rounded flex-shrink-0 label-technical"
+      className="flex items-center gap-1.5 text-2xs font-bold px-2 py-0.5 rounded shrink-0 label-technical"
       style={{
         backgroundColor: `var(--sf-status-${statusInfo.key}, var(--sf-status-pending))`,
         color: 'var(--sf-on-primary)',
@@ -466,7 +466,7 @@ function StatusPill({ status, statusInfo }) {
 
 function StepPipeline({ steps, selectedStep, onSelectStep, stepModels, projectId, runId, runStatus }) {
   return (
-    <div className="w-16 flex-shrink-0 bg-surface-container-low rounded py-3 flex flex-col items-center gap-1">
+    <div className="w-16 shrink-0 bg-surface-container-low rounded py-3 flex flex-col items-center gap-1">
       {steps.map((step, i) => {
         const color = agentColor(step.agent)
         const abbrev = agentAbbrev(step.agent)
@@ -684,7 +684,7 @@ function OutputStream({ log }) {
   }, [log])
 
   return (
-    <div className="h-40 bg-surface-container rounded overflow-hidden flex flex-col flex-shrink-0">
+    <div className="h-40 bg-surface-container rounded overflow-hidden flex flex-col shrink-0">
       <div className="flex items-center justify-between px-4 py-2 border-b border-outline-variant">
         <span className="label-technical text-2xs text-on-surface-variant">Output Stream</span>
         <span className="label-technical text-2xs text-on-surface-variant">STDOUT</span>
@@ -761,17 +761,17 @@ function EventFeed({ events, feedRef }) {
           significant.map((event, i) => (
             <div key={`${event.timestamp}-${i}`} className="flex items-center gap-2 py-1.5 px-2.5 rounded hover:bg-surface-container-high/50 transition-colors">
               <EventDot eventType={event.event_type} />
-              <span className="text-2xs font-mono text-on-surface-variant tabular-nums flex-shrink-0 w-14">
+              <span className="text-2xs font-mono text-on-surface-variant tabular-nums shrink-0 w-14">
                 {formatEventTime(event.timestamp)}
               </span>
               <span className="text-2xs font-medium text-on-surface truncate">{eventLabel(event.event_type)}</span>
               {event.data?.agent && (
-                <span className="text-2xs font-mono flex-shrink-0" style={{ color: agentColor(event.data.agent) }}>
+                <span className="text-2xs font-mono shrink-0" style={{ color: agentColor(event.data.agent) }}>
                   {event.data.agent}
                 </span>
               )}
               {event.data?.step != null && (
-                <span className="text-2xs font-mono text-on-surface-variant flex-shrink-0">#{event.data.step}</span>
+                <span className="text-2xs font-mono text-on-surface-variant shrink-0">#{event.data.step}</span>
               )}
             </div>
           ))
@@ -789,7 +789,7 @@ function EventDot({ eventType }) {
   else if (eventType?.includes('rework')) color = 'var(--sf-status-rework)'
   else if (eventType?.includes('human_gate')) color = 'var(--sf-status-warning)'
 
-  return <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
+  return <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: color }} />
 }
 
 function formatEventTime(ts) {
@@ -817,7 +817,7 @@ function ResumePanel({ projectId, runId, steps }) {
 
   return (
     <div className="bg-status-failed/10 rounded p-4 flex items-start gap-4">
-      <div className="flex items-center gap-2 flex-shrink-0">
+      <div className="flex items-center gap-2 shrink-0">
         <div className="w-2 h-2 rounded-full bg-status-failed" />
         <span className="label-technical text-2xs font-bold text-status-failed">Resume This Run</span>
         {failedStep && (
@@ -831,7 +831,7 @@ function ResumePanel({ projectId, runId, steps }) {
         onChange={e => setPrompt(e.target.value)}
         placeholder="Additional context for resume (optional)..."
         rows={1}
-        className="flex-1 bg-surface-container-lowest rounded px-3 py-2 text-xs text-on-surface placeholder:text-on-surface-variant focus:outline-none focus:ring-1 focus:ring-primary resize-none font-mono"
+        className="flex-1 bg-surface-container-lowest rounded px-3 py-2 text-xs text-on-surface placeholder:text-on-surface-variant focus:outline-hidden focus:ring-1 focus:ring-primary resize-none font-mono"
       />
       <button
         onClick={handleResume}
@@ -908,7 +908,7 @@ function PlanSection({ plan, events, expanded, onToggle }) {
               <div className="space-y-1">
                 {errors.map((e, i) => (
                   <div key={i} className="flex items-center gap-2 text-2xs">
-                    <div className="w-1.5 h-1.5 rounded-full bg-status-failed flex-shrink-0" />
+                    <div className="w-1.5 h-1.5 rounded-full bg-status-failed shrink-0" />
                     <span className="text-on-surface-variant truncate">{e.data?.message || eventLabel(e.event_type)}</span>
                   </div>
                 ))}
@@ -959,7 +959,7 @@ function ReviewPanel({ reviews, projectId, runId, steps }) {
               onChange={e => setFeedback(e.target.value)}
               placeholder="Optional feedback..."
               rows={2}
-              className="w-full bg-surface-container-lowest rounded px-3 py-2 text-xs text-on-surface placeholder:text-on-surface-variant focus:outline-none focus:ring-1 focus:ring-primary resize-none"
+              className="w-full bg-surface-container-lowest rounded px-3 py-2 text-xs text-on-surface placeholder:text-on-surface-variant focus:outline-hidden focus:ring-1 focus:ring-primary resize-none"
             />
             <div className="flex gap-2">
               <button
@@ -1069,7 +1069,7 @@ function StepResultPanel({ stepResult, step }) {
           <div className="space-y-1">
             {issues.map((issue, i) => (
               <div key={i} className="flex items-start gap-2 text-2xs">
-                <div className="w-1.5 h-1.5 rounded-full bg-status-warning flex-shrink-0 mt-1" />
+                <div className="w-1.5 h-1.5 rounded-full bg-status-warning shrink-0 mt-1" />
                 <span className="text-on-surface">{typeof issue === 'string' ? issue : issue.message || JSON.stringify(issue)}</span>
               </div>
             ))}
@@ -1173,7 +1173,7 @@ function MetadataTree({ data, depth = 0 }) {
         }
         return (
           <div key={key} className="flex items-baseline gap-2 text-2xs px-1">
-            <span className="font-mono text-on-surface-variant flex-shrink-0">{key}:</span>
+            <span className="font-mono text-on-surface-variant shrink-0">{key}:</span>
             <MetadataTree data={value} depth={depth + 1} />
           </div>
         )

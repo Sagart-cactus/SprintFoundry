@@ -6,7 +6,7 @@ const SSE_DOT = {
 
 export default function Topbar({ view, onViewChange, stats, sseStatus, searchQuery, onSearchChange, onBack, selectedRun, onRefresh }) {
   return (
-    <header className="h-14 flex-shrink-0 flex items-center justify-between px-5 border-b border-surface-200 bg-surface-0 z-40">
+    <header className="h-14 shrink-0 flex items-center justify-between px-5 border-b border-surface-200 bg-surface-0 z-40">
       <div className="flex items-center gap-4">
         {onBack && (
           <button
@@ -64,7 +64,7 @@ export default function Topbar({ view, onViewChange, stats, sseStatus, searchQue
               placeholder="Search runs..."
               value={searchQuery}
               onChange={(e) => onSearchChange(e.target.value)}
-              className="h-8 w-48 bg-surface-50 border border-surface-200 rounded-lg px-3 pr-8 text-sm text-ink-900 placeholder:text-ink-400 focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/10 transition-all"
+              className="h-8 w-48 bg-surface-50 border border-surface-200 rounded-lg px-3 pr-8 text-sm text-ink-900 placeholder:text-ink-400 focus:outline-hidden focus:border-brand focus:ring-2 focus:ring-brand/10 transition-all"
             />
             <svg className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />

@@ -122,14 +122,14 @@ export default function RunDetail({ projectId, runId }) {
     <div className="max-w-6xl space-y-4 animate-fade-in">
       {/* Run header — left status strip like RunCard */}
       <div className="bg-surface-0 border border-surface-200 rounded-xl shadow-card overflow-hidden flex">
-        <div className={`w-1.5 flex-shrink-0 ${color.bar}`} />
+        <div className={`w-1.5 shrink-0 ${color.bar}`} />
         <div className="flex-1 min-w-0 p-5">
           {/* Row 1: Title + status + PR */}
           <div className="flex items-start justify-between gap-4 mb-2">
             <h2 className="text-lg font-semibold text-ink-900 leading-tight truncate">
               {run.ticket_title || run.run_id}
             </h2>
-            <div className="flex items-center gap-2 flex-shrink-0">
+            <div className="flex items-center gap-2 shrink-0">
               {handoffEligible && (
                 <button
                   type="button"
@@ -143,8 +143,8 @@ export default function RunDetail({ projectId, runId }) {
               {run.pr_url && (
                 <a href={run.pr_url} target="_blank" rel="noreferrer"
                   onClick={e => e.stopPropagation()}
-                  className="inline-flex items-center gap-1.5 text-2xs font-semibold text-status-success px-2 py-0.5 rounded bg-status-success-light border border-status-success-border hover:shadow-sm transition-all">
-                  <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" className="flex-shrink-0">
+                  className="inline-flex items-center gap-1.5 text-2xs font-semibold text-status-success px-2 py-0.5 rounded bg-status-success-light border border-status-success-border hover:shadow-xs transition-all">
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" className="shrink-0">
                     <path d="M6.5 3.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Zm6 8a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0ZM5 5.5v5A3.5 3.5 0 0 0 8.5 14H10v-1.5H8.5a2 2 0 0 1-2-2v-5H5Zm6-2v3.17a3 3 0 0 1-.88 2.12l-.7.71 1.06 1.06.7-.7a4.5 4.5 0 0 0 1.32-3.19V3.5H11Z"/>
                   </svg>
                   PR
@@ -229,7 +229,7 @@ export default function RunDetail({ projectId, runId }) {
                     style={{ width: `${(completedSteps / totalSteps) * 100}%` }}
                   />
                 </div>
-                <span className="font-mono tabular-nums flex-shrink-0">{completedSteps}/{totalSteps}</span>
+                <span className="font-mono tabular-nums shrink-0">{completedSteps}/{totalSteps}</span>
               </div>
             )}
             {totalTokens > 0 && <span className="font-mono">{formatTokens(totalTokens)}</span>}
@@ -239,7 +239,7 @@ export default function RunDetail({ projectId, runId }) {
               <a href={run.ticket_repo_url} target="_blank" rel="noreferrer"
                 className="inline-flex items-center gap-1 text-ink-400 hover:text-brand transition-colors ml-auto"
                 onClick={e => e.stopPropagation()}>
-                <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" className="flex-shrink-0">
+                <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" className="shrink-0">
                   <path d="M2 2.5A2.5 2.5 0 0 1 4.5 0h8.75a.75.75 0 0 1 .75.75v12.5a.75.75 0 0 1-.75.75h-2.5a.75.75 0 0 1 0-1.5h1.75v-2h-8a1 1 0 0 0-.714 1.7.75.75 0 1 1-1.072 1.05A2.495 2.495 0 0 1 2 11.5Zm10.5-1h-8a1 1 0 0 0-1 1v6.708A2.486 2.486 0 0 1 4.5 9h8ZM5 12.25a.25.25 0 0 1 .25-.25h3.5a.25.25 0 0 1 .25.25v3.25a.25.25 0 0 1-.4.2l-1.45-1.087a.249.249 0 0 0-.3 0L5.4 15.7a.25.25 0 0 1-.4-.2Z"/>
                 </svg>
                 Repo
@@ -344,10 +344,10 @@ function FullPipeline({ steps, selectedStep, onSelectStep, stepModels }) {
                   : isRunning
                     ? `${ac.bg} ${ac.border} ${ac.text}`
                     : step.status === 'completed'
-                      ? `${color.bg} ${color.border} hover:shadow-sm`
+                      ? `${color.bg} ${color.border} hover:shadow-xs`
                       : step.status === 'failed'
-                        ? `${color.bg} ${color.border} hover:shadow-sm`
-                        : 'bg-surface-100 border-surface-200 hover:shadow-sm'
+                        ? `${color.bg} ${color.border} hover:shadow-xs`
+                        : 'bg-surface-100 border-surface-200 hover:shadow-xs'
               }`}
             >
               {isRunning && <div className="w-1 h-1 rounded-full bg-current animate-pulse" />}
@@ -513,27 +513,27 @@ function FileList({ label, files, color }) {
 function SourceIcon({ source }) {
   if (source === 'linear') {
     return (
-      <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" className="flex-shrink-0">
+      <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" className="shrink-0">
         <path d="M1.16 10.2a7.03 7.03 0 0 1-.46-1.6l5.7 5.7a7.03 7.03 0 0 1-1.6-.46L1.16 10.2Zm3.08 2.81L.43 9.2a7 7 0 0 0 .65 1.42l1.75 1.75a7 7 0 0 0 1.42.65Zm-2.68-4.2L5.8 13.05a7.03 7.03 0 0 1-1.82-.78L.78 9.01a7 7 0 0 1-.78-1.82l-.01.01Zm-.63-1.07 7.3 7.3c.34-.12.67-.26.99-.42L2.28 7.68c-.16.32-.3.65-.42.99Zm8.28 7.72.02-.01-7.65-7.65a7 7 0 0 0-.2.56l7.29 7.3c.18-.07.36-.13.54-.2Zm1.12-.52L2.06 6.67A7 7 0 0 0 .96 8.08l6.96 6.96a7 7 0 0 0 1.41-1.1ZM14.48 13A7 7 0 0 0 8 1a7 7 0 0 0-5.44 2.6L13 14.04c.55-.3 1.05-.66 1.49-1.05Z"/>
       </svg>
     )
   }
   if (source === 'github') {
     return (
-      <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" className="flex-shrink-0">
+      <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" className="shrink-0">
         <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/>
       </svg>
     )
   }
   if (source === 'jira') {
     return (
-      <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" className="flex-shrink-0">
+      <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" className="shrink-0">
         <path d="M15.52 7.27 8.73.48 8 0 2.64 5.36.48 7.52a.67.67 0 0 0 0 .96l4.89 4.89L8 16l5.36-5.36.16-.16 2-2a.67.67 0 0 0 0-.96ZM8 10.18 5.82 8 8 5.82 10.18 8 8 10.18Z"/>
       </svg>
     )
   }
   return (
-    <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="flex-shrink-0">
+    <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="shrink-0">
       <path d="M4 5l3 3-3 3" strokeLinecap="round" strokeLinejoin="round"/>
       <path d="M9 11h3" strokeLinecap="round"/>
     </svg>
@@ -564,13 +564,13 @@ function EventFeed({ events, feedRef }) {
             const dotColor = eventDotColor(event.event_type)
             return (
               <div key={`${event.timestamp}-${i}`} className="flex items-center gap-2 py-1 px-2.5 rounded hover:bg-surface-50 transition-colors">
-                <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${dotColor}`} />
-                <span className="text-2xs font-mono text-ink-300 tabular-nums flex-shrink-0 w-16">
+                <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotColor}`} />
+                <span className="text-2xs font-mono text-ink-300 tabular-nums shrink-0 w-16">
                   {formatTimestamp(event.timestamp)}
                 </span>
                 <span className="text-2xs font-medium text-ink-600 truncate">{eventLabel(event.event_type)}</span>
-                {event.data?.agent && <span className="text-2xs font-mono text-ink-400 flex-shrink-0">{event.data.agent}</span>}
-                {event.data?.step != null && <span className="text-2xs font-mono text-ink-300 flex-shrink-0">#{event.data.step}</span>}
+                {event.data?.agent && <span className="text-2xs font-mono text-ink-400 shrink-0">{event.data.agent}</span>}
+                {event.data?.step != null && <span className="text-2xs font-mono text-ink-300 shrink-0">#{event.data.step}</span>}
               </div>
             )
           })
@@ -610,7 +610,7 @@ function ResumePanel({ projectId, runId, steps }) {
         onChange={e => setPrompt(e.target.value)}
         placeholder="Additional context for resume (optional)..."
         rows={2}
-        className="w-full bg-surface-0 border border-surface-200 rounded-lg px-3 py-2 text-xs text-ink-700 placeholder:text-ink-400 focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/10 resize-none"
+        className="w-full bg-surface-0 border border-surface-200 rounded-lg px-3 py-2 text-xs text-ink-700 placeholder:text-ink-400 focus:outline-hidden focus:border-brand focus:ring-2 focus:ring-brand/10 resize-none"
       />
       <button
         onClick={handleResume}

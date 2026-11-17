@@ -123,11 +123,11 @@ export default function FileDiffs({ projectId, runId, onFileCount }) {
 }
 
 function FileIcon({ kind }) {
-  if (kind === 'new') return <span className="text-xs text-status-completed font-bold flex-shrink-0">+</span>
-  if (kind === 'diff') return <span className="text-xs text-status-warning font-bold flex-shrink-0">~</span>
-  if (kind === 'untracked') return <span className="text-xs text-status-planning font-bold flex-shrink-0">?</span>
+  if (kind === 'new') return <span className="text-xs text-status-completed font-bold shrink-0">+</span>
+  if (kind === 'diff') return <span className="text-xs text-status-warning font-bold shrink-0">~</span>
+  if (kind === 'untracked') return <span className="text-xs text-status-planning font-bold shrink-0">?</span>
   return (
-    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" className="text-on-surface-variant flex-shrink-0">
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" className="text-on-surface-variant shrink-0">
       <path d="M4 2h5.5L13 5.5V13a1 1 0 01-1 1H4a1 1 0 01-1-1V3a1 1 0 011-1z" />
       <path d="M9.5 2v4H13" />
     </svg>

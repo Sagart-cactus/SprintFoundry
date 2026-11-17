@@ -72,7 +72,7 @@ export default function FileDiffs({ projectId, runId }) {
             >
               <FileIcon kind={diffData?.kind} />
               <span className="text-xs font-mono text-ink-700 truncate flex-1">{file.path}</span>
-              <span className="text-xs font-mono text-ink-300 flex-shrink-0">
+              <span className="text-xs font-mono text-ink-300 shrink-0">
                 {formatSize(file.size)}
               </span>
               <svg
@@ -112,10 +112,10 @@ export default function FileDiffs({ projectId, runId }) {
 }
 
 function FileIcon({ kind }) {
-  if (kind === 'new') return <span className="text-xs text-status-success font-bold flex-shrink-0">+</span>
-  if (kind === 'diff') return <span className="text-xs text-status-warning font-bold flex-shrink-0">~</span>
-  if (kind === 'untracked') return <span className="text-xs text-status-planning font-bold flex-shrink-0">?</span>
-  return <span className="text-xs text-ink-300 flex-shrink-0">&bull;</span>
+  if (kind === 'new') return <span className="text-xs text-status-success font-bold shrink-0">+</span>
+  if (kind === 'diff') return <span className="text-xs text-status-warning font-bold shrink-0">~</span>
+  if (kind === 'untracked') return <span className="text-xs text-status-planning font-bold shrink-0">?</span>
+  return <span className="text-xs text-ink-300 shrink-0">&bull;</span>
 }
 
 function DiffView({ diff, kind }) {

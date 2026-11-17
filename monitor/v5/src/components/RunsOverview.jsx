@@ -257,7 +257,7 @@ function ActiveRunCard({ run, onClick }) {
         <h3 className="font-display font-semibold text-sm text-on-surface leading-snug">
           {run.ticket_title || run.run_id}
         </h3>
-        <div className="flex items-center gap-1.5 flex-shrink-0">
+        <div className="flex items-center gap-1.5 shrink-0">
           {run.classification && (
             <span className="label-technical text-2xs px-2 py-0.5 rounded bg-surface-container-highest text-on-surface-variant">
               {run.classification.replace(/_/g, ' ')}
@@ -365,7 +365,7 @@ function FailedRunCard({ run, onClick }) {
         <h3 className="font-display font-semibold text-sm text-on-surface leading-snug">
           {run.ticket_title || run.run_id}
         </h3>
-        <div className="flex items-center gap-1.5 flex-shrink-0">
+        <div className="flex items-center gap-1.5 shrink-0">
           {run.classification && (
             <span className="label-technical text-2xs px-2 py-0.5 rounded bg-surface-container-highest text-on-surface-variant">
               {run.classification.replace(/_/g, ' ')}
@@ -444,7 +444,7 @@ function CompletedItem({ run, onClick, even }) {
             )}
           </div>
         </div>
-        <div className="flex items-center gap-2 flex-shrink-0 ml-3">
+        <div className="flex items-center gap-2 shrink-0 ml-3">
           <span className="text-2xs text-on-surface-variant">Done in {duration ? formatDuration(duration) : '-'}</span>
           <div className="w-5 h-5 rounded-full bg-status-completed flex items-center justify-center">
             <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="var(--sf-on-primary)" strokeWidth="2">
