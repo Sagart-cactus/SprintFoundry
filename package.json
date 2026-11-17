@@ -81,7 +81,7 @@
     "@kubernetes/client-node": "^2.0.0",
     "@openai/codex-sdk": "^0.165.0",
     "@opentelemetry/api": "~1.10.0",
-    "@opentelemetry/exporter-metrics-otlp-http": "^0.300.0",
+    "@opentelemetry/exporter-metrics-otlp-http": "^0.301.2",
     "@opentelemetry/sdk-metrics": "~3.1.1",
     "commander": "^15.0.0",
     "pg": "^8.16.3",
@@ -103,7 +103,7 @@
     "prettier": "^3",
     "syncpack": "^15",
     "tsx": "^4.19.0",
-    "typescript": "^5.7.0",
+    "typescript": "^6.0.3",
     "typescript-eslint": "^8",
     "vitest": "^4.0.18"
   },
