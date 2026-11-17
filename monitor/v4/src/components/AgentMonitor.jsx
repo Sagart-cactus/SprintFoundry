@@ -72,7 +72,7 @@ function AgentCard({ entry, onSelectRun }) {
       isActive ? 'border-status-running-border ring-1 ring-status-running/10' : 'border-surface-200'
     }`}>
       {/* Left accent strip using agent color */}
-      <div className={`w-1 flex-shrink-0`} style={{ backgroundColor: ac.accent }} />
+      <div className={`w-1 shrink-0`} style={{ backgroundColor: ac.accent }} />
 
       <div className="flex-1 min-w-0 p-4">
         {/* Header */}
@@ -116,7 +116,7 @@ function AgentCard({ entry, onSelectRun }) {
           <div className="space-y-1 pt-2.5 border-t border-surface-100">
             {entry.activeSteps.map(({ step, run }, i) => (
               <button key={i} onClick={() => onSelectRun(run)}
-                className="w-full text-left flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-status-running-light border border-status-running-border hover:shadow-sm transition-all">
+                className="w-full text-left flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-status-running-light border border-status-running-border hover:shadow-xs transition-all">
                 <div className="w-1.5 h-1.5 rounded-full bg-status-running animate-pulse" />
                 <span className="text-2xs text-ink-700 truncate flex-1">{run.ticket_title || run.run_id}</span>
                 <span className="text-2xs font-mono text-ink-400">#{step.step_number}</span>

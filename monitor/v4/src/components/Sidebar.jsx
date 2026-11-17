@@ -32,13 +32,13 @@ export default function Sidebar({ runs, view, selectedRun, onSelectRun, onViewCh
   const completed = filtered.filter(r => r.status === 'completed')
 
   return (
-    <aside className="w-60 flex-shrink-0 border-r border-surface-200 bg-surface-0 overflow-y-auto">
+    <aside className="w-60 shrink-0 border-r border-surface-200 bg-surface-0 overflow-y-auto">
       {projects.length > 1 && (
         <div className="px-3 pt-3">
           <select
             value={projectFilter}
             onChange={e => setProjectFilter(e.target.value)}
-            className="w-full h-8 text-sm bg-surface-50 border border-surface-200 rounded-lg px-2.5 text-ink-700 focus:outline-none focus:border-brand/40"
+            className="w-full h-8 text-sm bg-surface-50 border border-surface-200 rounded-lg px-2.5 text-ink-700 focus:outline-hidden focus:border-brand/40"
           >
             <option value="all">All projects</option>
             {projects.map(p => <option key={p} value={p}>{p}</option>)}
@@ -121,7 +121,7 @@ function SidebarItem({ run, active, onClick }) {
       } ${stale ? 'opacity-50' : ''}`}
     >
       <div className="flex items-start gap-2">
-        <div className={`w-2 h-2 rounded-full mt-1 flex-shrink-0 ${color.dot} ${run.status === 'running' || run.status === 'executing' ? 'animate-pulse-soft' : ''}`} />
+        <div className={`w-2 h-2 rounded-full mt-1 shrink-0 ${color.dot} ${run.status === 'running' || run.status === 'executing' ? 'animate-pulse-soft' : ''}`} />
         <div className="min-w-0 flex-1">
           <p className="text-[13px] font-medium text-ink-900 truncate leading-tight">
             {run.ticket_title || run.run_id}

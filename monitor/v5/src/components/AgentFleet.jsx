@@ -177,7 +177,7 @@ function AgentCard({ entry, onSelectRun }) {
       }`}
     >
       {/* Left accent strip */}
-      <div className="w-1 flex-shrink-0" style={{ backgroundColor: color }} />
+      <div className="w-1 shrink-0" style={{ backgroundColor: color }} />
 
       <div className="flex-1 min-w-0 p-4">
         {/* Header: agent name + active badge */}
@@ -217,14 +217,14 @@ function AgentCard({ entry, onSelectRun }) {
 
         {/* Success rate */}
         <div className="flex items-center gap-2 mb-3">
-          <div className="label-technical text-2xs text-on-surface-variant flex-shrink-0">Success Rate</div>
+          <div className="label-technical text-2xs text-on-surface-variant shrink-0">Success Rate</div>
           <div className="flex-1 h-1.5 bg-surface-container-highest rounded-full overflow-hidden">
             <div
               className="h-full rounded-full transition-all duration-500"
               style={{ width: `${successRate}%`, backgroundColor: color }}
             />
           </div>
-          <span className="text-2xs font-mono text-on-surface tabular-nums flex-shrink-0">{successRate}%</span>
+          <span className="text-2xs font-mono text-on-surface tabular-nums shrink-0">{successRate}%</span>
         </div>
 
         {/* Current activity (active agents) */}
@@ -238,13 +238,13 @@ function AgentCard({ entry, onSelectRun }) {
                 className="w-full text-left flex items-center gap-2 px-2.5 py-1.5 rounded bg-surface-container-low hover:bg-surface-container-high transition-colors"
               >
                 <div
-                  className="w-1.5 h-1.5 rounded-full animate-pulse-soft flex-shrink-0"
+                  className="w-1.5 h-1.5 rounded-full animate-pulse-soft shrink-0"
                   style={{ backgroundColor: color }}
                 />
                 <span className="text-2xs text-on-surface truncate flex-1">
                   {truncate(step.task || run.ticket_title || run.run_id, 50)}
                 </span>
-                <span className="text-2xs font-mono text-on-surface-variant flex-shrink-0">
+                <span className="text-2xs font-mono text-on-surface-variant shrink-0">
                   (Step {step.step_number})
                 </span>
               </button>
@@ -265,7 +265,7 @@ function AgentCard({ entry, onSelectRun }) {
                 <span className="text-2xs text-on-surface-variant truncate flex-1">
                   {truncate(run.ticket_title || run.run_id, 40)}
                 </span>
-                <span className="text-2xs font-mono text-on-surface-variant flex-shrink-0">
+                <span className="text-2xs font-mono text-on-surface-variant shrink-0">
                   {step.started_at ? timeAgo(step.started_at) : ''}
                 </span>
               </button>

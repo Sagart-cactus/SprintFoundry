@@ -110,7 +110,7 @@ function RunCard({ run, onClick, expanded = false }) {
       className={`w-full text-left bg-surface-0 border border-surface-200 rounded-xl shadow-card hover:shadow-card-hover transition-all duration-150 hover:border-surface-300 overflow-hidden flex ${stale ? 'opacity-50' : ''}`}
     >
       {/* Left status strip */}
-      <div className={`w-1 flex-shrink-0 ${color.bar}`} />
+      <div className={`w-1 shrink-0 ${color.bar}`} />
 
       <div className={`flex-1 min-w-0 ${expanded ? 'p-4' : 'p-3.5'}`}>
         {/* Row 1: Title + status badge */}
@@ -118,7 +118,7 @@ function RunCard({ run, onClick, expanded = false }) {
           <h3 className="text-sm font-medium text-ink-900 leading-snug truncate">
             {run.ticket_title || run.run_id}
           </h3>
-          <div className="flex items-center gap-1.5 flex-shrink-0">
+          <div className="flex items-center gap-1.5 shrink-0">
             {run.pr_url && <PrBadge />}
             {resumed && (
               <span className="text-2xs px-1.5 py-px rounded bg-blue-50 text-blue-600 border border-blue-200 font-medium">
@@ -202,12 +202,12 @@ function RunCard({ run, onClick, expanded = false }) {
                   style={{ width: `${(completedSteps / totalSteps) * 100}%` }}
                 />
               </div>
-              <span className="text-xs text-ink-500 font-mono tabular-nums flex-shrink-0">
+              <span className="text-xs text-ink-500 font-mono tabular-nums shrink-0">
                 {completedSteps}/{totalSteps}
               </span>
             </div>
           )}
-          <div className="flex items-center gap-3 text-xs text-ink-400 flex-shrink-0">
+          <div className="flex items-center gap-3 text-xs text-ink-400 shrink-0">
             {totalTokens > 0 && <span className="font-mono">{formatTokens(totalTokens)}</span>}
             {duration && <span>{formatDuration(duration)}</span>}
             {run.last_event_ts && <span className="text-ink-300">{timeAgo(run.last_event_ts)}</span>}
@@ -270,27 +270,27 @@ function PrBadge() {
 function SourceIcon({ source }) {
   if (source === 'linear') {
     return (
-      <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" className="flex-shrink-0">
+      <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" className="shrink-0">
         <path d="M1.16 10.2a7.03 7.03 0 0 1-.46-1.6l5.7 5.7a7.03 7.03 0 0 1-1.6-.46L1.16 10.2Zm3.08 2.81L.43 9.2a7 7 0 0 0 .65 1.42l1.75 1.75a7 7 0 0 0 1.42.65Zm-2.68-4.2L5.8 13.05a7.03 7.03 0 0 1-1.82-.78L.78 9.01a7 7 0 0 1-.78-1.82l-.01.01Zm-.63-1.07 7.3 7.3c.34-.12.67-.26.99-.42L2.28 7.68c-.16.32-.3.65-.42.99Zm8.28 7.72.02-.01-7.65-7.65a7 7 0 0 0-.2.56l7.29 7.3c.18-.07.36-.13.54-.2Zm1.12-.52L2.06 6.67A7 7 0 0 0 .96 8.08l6.96 6.96a7 7 0 0 0 1.41-1.1ZM14.48 13A7 7 0 0 0 8 1a7 7 0 0 0-5.44 2.6L13 14.04c.55-.3 1.05-.66 1.49-1.05Z"/>
       </svg>
     )
   }
   if (source === 'github') {
     return (
-      <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" className="flex-shrink-0">
+      <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" className="shrink-0">
         <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/>
       </svg>
     )
   }
   if (source === 'jira') {
     return (
-      <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" className="flex-shrink-0">
+      <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" className="shrink-0">
         <path d="M15.52 7.27 8.73.48 8 0 2.64 5.36.48 7.52a.67.67 0 0 0 0 .96l4.89 4.89L8 16l5.36-5.36.16-.16 2-2a.67.67 0 0 0 0-.96ZM8 10.18 5.82 8 8 5.82 10.18 8 8 10.18Z"/>
       </svg>
     )
   }
   return (
-    <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="flex-shrink-0">
+    <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="shrink-0">
       <path d="M4 5l3 3-3 3" strokeLinecap="round" strokeLinejoin="round"/>
       <path d="M9 11h3" strokeLinecap="round"/>
     </svg>

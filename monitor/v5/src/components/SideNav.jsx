@@ -1,6 +1,6 @@
 export default function SideNav({ view, onViewChange, theme, onToggleTheme }) {
   return (
-    <aside className="w-60 flex-shrink-0 h-full flex flex-col bg-surface-container-low">
+    <aside className="w-60 shrink-0 h-full flex flex-col bg-surface-container-low">
       {/* Logo */}
       <div className="px-5 pt-6 pb-4">
         <div className="flex items-center gap-2.5">

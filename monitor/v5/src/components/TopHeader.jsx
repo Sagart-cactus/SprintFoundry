@@ -1,6 +1,6 @@
 export default function TopHeader({ view, stats, sseStatus, searchQuery, onSearchChange, onBack, selectedRun, onRefresh }) {
   return (
-    <header className="h-12 flex-shrink-0 flex items-center justify-between px-5 bg-surface-container-low">
+    <header className="h-12 shrink-0 flex items-center justify-between px-5 bg-surface-container-low">
       <div className="flex items-center gap-4">
         {/* Search */}
         <div className="relative">
@@ -13,7 +13,7 @@ export default function TopHeader({ view, stats, sseStatus, searchQuery, onSearc
             value={searchQuery}
             onChange={e => onSearchChange(e.target.value)}
             placeholder={onBack ? 'Search logs, agents...' : 'Search runs...'}
-            className="w-64 h-8 pl-9 pr-3 rounded bg-surface-container-lowest text-sm text-on-surface placeholder:text-on-surface-variant ghost-border focus:outline-none focus:ring-1 focus:ring-primary"
+            className="w-64 h-8 pl-9 pr-3 rounded bg-surface-container-lowest text-sm text-on-surface placeholder:text-on-surface-variant ghost-border focus:outline-hidden focus:ring-1 focus:ring-primary"
           />
         </div>
       </div>

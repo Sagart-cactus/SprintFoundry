@@ -196,7 +196,7 @@ function KindIcon({ kind, size = 16 }) {
       )
     default:
       return (
-        <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
+        <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: color }} />
       )
   }
 }
@@ -283,7 +283,7 @@ export default function AgentActivity({ projectId, runId, stepNumber }) {
               onClick={() => toggleExpand(index)}
               className="w-full text-left flex items-start gap-3 px-3.5 py-2.5 hover:bg-surface-container-high/50 transition-colors"
             >
-              <div className="mt-0.5 flex-shrink-0">
+              <div className="mt-0.5 shrink-0">
                 <KindIcon kind={cls.kind} />
               </div>
               <div className="flex-1 min-w-0">
@@ -306,7 +306,7 @@ export default function AgentActivity({ projectId, runId, stepNumber }) {
                   )}
                 </span>
               </div>
-              <span className="text-2xs font-mono text-on-surface-variant flex-shrink-0 mt-0.5 tabular-nums">
+              <span className="text-2xs font-mono text-on-surface-variant shrink-0 mt-0.5 tabular-nums">
                 #{visibleIdx + 1}
               </span>
             </button>

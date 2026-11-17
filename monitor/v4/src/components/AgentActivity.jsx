@@ -199,13 +199,13 @@ export default function AgentActivity({ projectId, runId, stepNumber }) {
               onClick={() => toggleExpand(index)}
               className="w-full text-left flex items-start gap-3 px-3.5 py-2.5 hover:bg-black/[0.02] transition-colors"
             >
-              <span className={`text-xs font-mono font-semibold mt-px flex-shrink-0 w-16 ${style.label}`}>
+              <span className={`text-xs font-mono font-semibold mt-px shrink-0 w-16 ${style.label}`}>
                 {cls.kind}
               </span>
               <span className={`text-xs leading-snug flex-1 min-w-0 ${cls.isCode ? 'font-mono text-ink-700' : 'text-ink-600'} ${cls.preview ? '' : 'italic text-ink-300'}`}>
                 {cls.preview || '(empty)'}
               </span>
-              <span className="text-[10px] font-mono text-ink-300 flex-shrink-0 mt-px">
+              <span className="text-[10px] font-mono text-ink-300 shrink-0 mt-px">
                 #{visibleIdx + 1}
               </span>
             </button>
