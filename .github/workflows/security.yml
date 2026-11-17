@@ -103,14 +103,14 @@ jobs:
           done
 
       - name: ZAP baseline scan (website)
-        uses: zaproxy/action-baseline@v0.14.0
+        uses: zaproxy/action-baseline@v0.15.0
         with:
           target: http://localhost:4173
           allow_issue_writing: false
           fail_action: false
 
       - name: ZAP baseline scan (monitor)
-        uses: zaproxy/action-baseline@v0.14.0
+        uses: zaproxy/action-baseline@v0.15.0
         with:
           target: http://localhost:4310
           allow_issue_writing: false
