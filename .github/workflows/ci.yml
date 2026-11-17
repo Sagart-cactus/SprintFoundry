@@ -60,6 +60,23 @@ jobs:
       - name: Dependency version drift
         run: pnpm versions:check
 
+  monitors:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        directory: [monitor/v4, monitor/v5]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.19.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build monitor
+        run: pnpm --dir ${{ matrix.directory }} build
+
   website:
     runs-on: ubuntu-latest
     timeout-minutes: 10
