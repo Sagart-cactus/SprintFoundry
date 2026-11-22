@@ -47,12 +47,15 @@ Every action with an effect outside the controller (create a branch, open a pull
 3. Perform the effect only if it is not found.
 4. Record the result.
 
+These rules are one shared suite (`internal/effect/effecttest`). It runs against the in-memory journal as `TestMemoryJournal/...` and against real Postgres as `TestPostgresJournal/...`.
+
 | Rule | Test |
 |---|---|
-| A crash after the effect and before step 4 does not repeat the effect on restart | `TestEffectNotRepeatedAfterCrash` |
-| A crash after step 1 and before the effect performs it exactly once on restart | `TestEffectPerformedOnceAfterEarlyCrash` |
-| Two controllers racing on the same key produce one effect | `TestEffectSingleUnderRace` |
-| An effect without a remote lookup cannot be registered | `TestEffectRequiresReconciler` |
+| A crash after the effect and before step 4 does not repeat the effect on restart | `EffectNotRepeatedAfterCrash` |
+| A crash after step 1 and before the effect performs it exactly once on restart | `EffectPerformedOnceAfterEarlyCrash` |
+| Three controllers racing on the same key produce one effect | `EffectSingleUnderRace` |
+| An effect without a remote lookup cannot be registered | `EffectRequiresReconciler` |
+| A lock held by a controller that dies is released by the database | `TestLockIsReleasedWhenTheHolderDies` |
 
 ## Trust rules with tests
 
