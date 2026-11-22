@@ -85,6 +85,9 @@ func runtimeOrSkip(t *testing.T) CLI {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	if err := c.Available(ctx); err != nil {
+		if os.Getenv("CI") != "" && os.Getenv("SPRINTFOUNDRY_NO_CONTAINERS") == "" {
+			t.Fatalf("no container runtime in CI, and this test must not be skipped silently: %v", err)
+		}
 		t.Skipf("no container runtime: %v", err)
 	}
 	return c

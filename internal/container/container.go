@@ -355,3 +355,82 @@ func labelArgs(labels map[string]string) []string {
 	}
 	return args
 }
+
+// ServiceOptions describes a trusted service container the controller runs
+// for itself, such as its database. It is never used for anything a builder
+// wrote.
+type ServiceOptions struct {
+	Name  string
+	Image string // name@sha256:digest
+	Env   map[string]string
+	// Publish maps a port on 127.0.0.1 of the host to a port in the
+	// container.
+	HostPort, ContainerPort int
+	// Volume is a named volume mounted at MountPath.
+	Volume, MountPath string
+	Labels            map[string]string
+}
+
+// RunService starts a trusted service container, reachable only from this
+// machine.
+func (c CLI) RunService(ctx context.Context, opts ServiceOptions) error {
+	if !nameOK.MatchString(opts.Name) || !nameOK.MatchString(opts.Volume) {
+		return fmt.Errorf("container: service name %q or volume %q is not allowed", opts.Name, opts.Volume)
+	}
+	if !strings.Contains(opts.Image, "@sha256:") || strings.HasPrefix(opts.Image, "-") {
+		return fmt.Errorf("container: service image %q must be pinned by digest", opts.Image)
+	}
+	if opts.HostPort < 1 || opts.HostPort > 65535 || opts.ContainerPort < 1 || opts.ContainerPort > 65535 || !strings.HasPrefix(opts.MountPath, "/") {
+		return errors.New("container: service ports and mount path are required")
+	}
+	args := []string{"run", "--detach", "--name", opts.Name,
+		"--publish", fmt.Sprintf("127.0.0.1:%d:%d", opts.HostPort, opts.ContainerPort),
+		"--volume", opts.Volume + ":" + opts.MountPath,
+		"--security-opt", "no-new-privileges"}
+	names := make([]string, 0, len(opts.Env))
+	for name := range opts.Env {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		args = append(args, "--env", name+"="+opts.Env[name])
+	}
+	args = append(args, labelArgs(opts.Labels)...)
+	args = append(args, opts.Image)
+	_, err := c.must(ctx, nil, args...)
+	return err
+}
+
+// Start starts a stopped container.
+func (c CLI) Start(ctx context.Context, name string) error {
+	if !nameOK.MatchString(name) {
+		return fmt.Errorf("container: name %q is not allowed", name)
+	}
+	_, err := c.must(ctx, nil, "start", name)
+	return err
+}
+
+// Exists reports whether a container exists, running or not.
+func (c CLI) Exists(ctx context.Context, name string) (bool, error) {
+	if !nameOK.MatchString(name) {
+		return false, fmt.Errorf("container: name %q is not allowed", name)
+	}
+	res, err := c.run(ctx, nil, "inspect", "--type", "container", "--format", "{{.Name}}", name)
+	if err != nil {
+		return false, err
+	}
+	return res.ExitCode == 0, nil
+}
+
+// VolumeRemove deletes named volumes. Missing volumes are not an error.
+func (c CLI) VolumeRemove(ctx context.Context, names ...string) error {
+	for _, name := range names {
+		if !nameOK.MatchString(name) {
+			return fmt.Errorf("container: volume %q is not allowed", name)
+		}
+		if _, err := c.run(ctx, nil, "volume", "rm", "--force", name); err != nil {
+			return err
+		}
+	}
+	return nil
+}

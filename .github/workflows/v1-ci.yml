@@ -44,12 +44,15 @@ jobs:
             echo "$unformatted"
             exit 1
           fi
+      - name: Runner binaries
+        run: make runner
       - name: Vet
         run: go vet ./...
       - name: Test
-        run: go test -race -count=1 -timeout 5m ./...
+        # Includes the end-to-end demo, which runs real containers on Docker.
+        run: go test -race -count=1 -timeout 15m ./...
       - name: Build
-        run: go build ./cmd/sprintfoundry
+        run: make build
 
   binaries:
     # Builds what a release would ship and keeps it as a workflow artifact.
@@ -65,6 +68,7 @@ jobs:
         env:
           CGO_ENABLED: "0"
         run: |
+          make runner
           mkdir -p dist
           for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
             os=${target%/*}; arch=${target#*/}
@@ -80,19 +84,23 @@ jobs:
           retention-days: 14
 
   macos:
-    # No service containers on macOS runners. Tests that need Postgres refuse
-    # to be skipped in CI unless a job says so explicitly, as this one does.
+    # No service containers and no container runtime on macOS runners. Tests
+    # that need Postgres or containers refuse to be skipped in CI unless a job
+    # says so explicitly, as this one does.
     runs-on: macos-latest
     env:
       SPRINTFOUNDRY_NO_POSTGRES: "1"
+      SPRINTFOUNDRY_NO_CONTAINERS: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: Runner binaries
+        run: make runner
       - name: Vet
         run: go vet ./...
       - name: Test
         run: go test -race -count=1 -timeout 5m ./...
       - name: Build
-        run: go build ./cmd/sprintfoundry
+        run: make build

@@ -15,6 +15,7 @@ import (
 
 	"github.com/sagart-cactus/sprintfoundry/internal/agent"
 	"github.com/sagart-cactus/sprintfoundry/internal/gitimport"
+	"github.com/sagart-cactus/sprintfoundry/internal/sandbox"
 )
 
 //go:embed app variants criteria.md checks.yaml runspec.yaml
@@ -156,4 +157,27 @@ func commitTree(ctx context.Context, store, tree, parent, message string) (strin
 	}
 	git := gitimport.Plumbing(store, "", "GIT_AUTHOR_DATE="+seedDate, "GIT_COMMITTER_DATE="+seedDate)
 	return git(ctx, nil, args...)
+}
+
+// Builder returns an agent that plays the named recorded builders, one per
+// round. It needs no model and no network.
+func Builder(scratchDir, store, parent string, variants ...string) agent.Agent {
+	return &recorded{scratchDir: scratchDir, store: store, parent: parent, variants: variants}
+}
+
+type recorded struct {
+	scratchDir, store, parent string
+	variants                  []string
+	round                     int
+}
+
+func (r *recorded) Name() string { return "recorded builder" }
+
+func (r *recorded) Run(ctx context.Context, _ sandbox.Sandbox, _ string, _ agent.Task) (agent.Change, error) {
+	if r.round >= len(r.variants) {
+		return agent.Change{}, agent.ErrNoMoreChanges
+	}
+	variant := r.variants[r.round]
+	r.round++
+	return Change(ctx, r.scratchDir, r.store, r.parent, variant)
 }

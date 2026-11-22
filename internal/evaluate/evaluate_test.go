@@ -1,6 +1,7 @@
 package evaluate
 
 import (
+	"os"
 	"bytes"
 	"context"
 	"errors"
@@ -33,6 +34,9 @@ func newWorld(t *testing.T) *world {
 	probe, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	if err := cli.Available(probe); err != nil {
+		if os.Getenv("CI") != "" && os.Getenv("SPRINTFOUNDRY_NO_CONTAINERS") == "" {
+			t.Fatalf("no container runtime in CI, and this test must not be skipped silently: %v", err)
+		}
 		t.Skipf("no container runtime: %v", err)
 	}
 	ctx, cancelAll := context.WithTimeout(context.Background(), 8*time.Minute)

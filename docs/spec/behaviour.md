@@ -17,10 +17,11 @@ passed -> evidence_signed -> released_decision_issued
 
 | Rule | Test |
 |---|---|
-| A run cannot leave `requested` until the criteria, the check suite and the run spec each have a digest | *planned, milestone 1:* `TestRunNeedsFrozenInputs` |
-| A third repair round for the same criteria digest moves the run to `needs_owner` | *planned, milestone 3:* `TestRepairCapIsPerCriteriaDigest` |
+| A run cannot leave `requested` until the criteria, the check suite and the run spec each have a digest | `TestRunNeedsFrozenInputs` |
+| A third repair round for the same criteria digest moves the run to `needs_owner` | `TestRepairCapIsPerCriteriaDigest` |
 | An evaluation with a check that could not be completed is graded inconclusive, never passed | `TestInconclusiveNeverPasses`, `TestGradeNeedsRealFacts` |
-| An inconclusive run moves to `needs_owner` after its retry budget | *planned, milestone 3* |
+| An inconclusive evaluation goes to a person and never starts a repair round | `TestInconclusiveEvaluationGoesToAPerson` |
+| An inconclusive run is retried within a budget before it goes to a person | *planned, milestone 3* |
 
 ## Mechanism 1: a change is imported as data
 
@@ -46,8 +47,8 @@ The controller reads the image identity from the container runtime. It never ask
 
 | Rule | Test |
 |---|---|
-| Before evaluation starts, the runtime must report that the preview runs the candidate image | *planned, milestone 1:* `TestEvaluationWaitsForCandidateDigest` |
-| After evaluation ends, the runtime must still report the same image, or the result is discarded | *planned, milestone 1:* `TestEvaluationDiscardedIfPreviewChanged` |
+| Before evaluation starts, the runtime must report that the preview runs the candidate image | `TestEvaluationWaitsForCandidateDigest` |
+| After evaluation ends, the runtime must still report the same image, or the result is discarded | `TestEvaluationDiscardedIfPreviewChanged` |
 
 ## Mechanism 3: intent before effect
 
@@ -88,8 +89,23 @@ One window stays open by design: if a hold is lost while the effect is being per
 | Feedback to the builder contains the criterion and a symptom, never the request or the expected value | `TestFeedbackHidesCheckDetails` |
 | A holdout failure sends nothing to the builder | `TestHoldoutFailureIsSilentToBuilder` |
 | A demo signer refuses any statement whose own purpose is not `demo`, whatever the caller says | `TestDemoSignerCannotSignProduction` |
-| `verify` rejects a decision older than `max_decision_age`, for another image, another policy digest or another repository | *planned, milestone 1:* `TestVerifyRejectsStaleOrForeignDecision` |
-| Evidence superseded by a newer run cannot back a new decision | *planned, milestone 1:* `TestSupersededEvidenceCannotRelease` |
+| `verify` rejects a decision older than `max_decision_age`, for another image, another policy digest or another repository | `TestVerifyRejectsStaleOrForeignDecision` |
+| Evidence superseded by a newer run cannot back a new decision | `TestSupersededEvidenceCannotRelease` |
+
+## The release gate
+
+| Rule | Test |
+|---|---|
+| The controller decides from the signed evidence statement, not from its store's columns, and refuses evidence it did not sign | `TestControllerDoesNotTrustItsOwnStoreBlindly`, `TestControllerRefusesToAuthorise` |
+| A change that touched a protected path cannot be released until a person approves the review | `TestProtectedPathsNeedAPersonEvenWhenChecksPass`, `TestReviewApprovalUnblocksAFlaggedChange` |
+| A holdout failure goes to a person and never starts a repair round | `TestHoldoutFailureGoesToAPersonNotTheBuilder` |
+| A signed statement never names a check | `TestSignedStatementsNeverNameChecks` |
+| A production policy cannot trust a demo signer, and a decision may not live longer than an hour | `TestPolicyRules` |
+| `verify` never accepts a tag | `TestParseImageNeverAcceptsATag` |
+
+## The whole slice
+
+`TestDemoEndToEnd` runs the demo on a real container runtime and then asks the gate from a separate command. It is the milestone 1 exit test. In CI it runs on Linux with Docker.
 
 ## Not carried over from the prototype
 
