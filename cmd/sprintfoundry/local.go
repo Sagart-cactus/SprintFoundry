@@ -70,7 +70,7 @@ func (e *environment) build(ctx context.Context, storeDir, commit string, spec r
 	}
 	return e.cli.Build(ctx, &tarball, container.BuildOptions{
 		Dockerfile: spec.Build.Dockerfile, Network: spec.Build.Network,
-		Labels: map[string]string{"sprintfoundry.component": "candidate"},
+		Labels: map[string]string{local.ImageLabel: "candidate"},
 	})
 }
 
@@ -175,7 +175,7 @@ func downCommand(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("down", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	homeDir := homeFlag(fs)
-	purge := fs.Bool("purge", false, "also delete the database's data and its stored password")
+	purge := fs.Bool("purge", false, "also delete the database's data, its stored password and unused SprintFoundry images")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}

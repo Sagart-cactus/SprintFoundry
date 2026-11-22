@@ -44,7 +44,7 @@ func TestDemoEndToEnd(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	if err := runDemo(home.Dir, false, &out); err != nil {
+	if err := runDemo(home.Dir, &out); err != nil {
 		t.Fatalf("demo failed: %v\n%s", err, out.String())
 	}
 	transcript := out.String()

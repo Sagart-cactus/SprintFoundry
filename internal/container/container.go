@@ -434,3 +434,15 @@ func (c CLI) VolumeRemove(ctx context.Context, names ...string) error {
 	}
 	return nil
 }
+
+// PruneImages deletes images that carry the label and that no container
+// uses. Images are shared between runs when their content is identical, so
+// SprintFoundry never deletes an image by ID while runs may be in progress;
+// it only prunes on request.
+func (c CLI) PruneImages(ctx context.Context, label string) error {
+	if !nameOK.MatchString(label) {
+		return fmt.Errorf("container: label %q is not allowed", label)
+	}
+	_, err := c.must(ctx, nil, "image", "prune", "--all", "--force", "--filter", "label="+label)
+	return err
+}

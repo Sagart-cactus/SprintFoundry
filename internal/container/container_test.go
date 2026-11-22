@@ -114,12 +114,12 @@ func TestBuildRunAndObserveServedImage(t *testing.T) {
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano()%1_000_000)
 	network, preview, other := "sf-test-net-"+suffix, "sf-test-preview-"+suffix, "sf-test-other-"+suffix
 	labels := map[string]string{"sprintfoundry.test": suffix}
-	var images []string
+	// Images are left in place: identical content has the same image ID, so
+	// another test package running at the same time may be using them.
 	t.Cleanup(func() {
 		bg := context.Background()
 		_ = c.Remove(bg, preview, other)
 		_ = c.NetworkRemove(bg, network)
-		_ = c.ImageRemove(bg, images...)
 	})
 
 	appDir := filepath.Join("..", "demo", "app")
@@ -127,7 +127,6 @@ func TestBuildRunAndObserveServedImage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	images = append(images, first)
 
 	// A different source gives a different image ID.
 	changed := tarDir(t, filepath.Join("..", "demo", "variants", "fixed"))
@@ -135,7 +134,6 @@ func TestBuildRunAndObserveServedImage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build of the changed source: %v", err)
 	}
-	images = append(images, second)
 	if first == second {
 		t.Fatal("two different sources produced the same image ID")
 	}

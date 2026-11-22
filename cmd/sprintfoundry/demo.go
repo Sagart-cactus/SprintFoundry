@@ -24,18 +24,17 @@ func demoCommand(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("demo", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	homeDir := homeFlag(fs)
-	keep := fs.Bool("keep-images", false, "leave the candidate and runner images in place afterwards")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if err := runDemo(*homeDir, *keep, stdout); err != nil {
+	if err := runDemo(*homeDir, stdout); err != nil {
 		fmt.Fprintf(stderr, "\nsprintfoundry: the demo could not finish: %v\n", err)
 		return 1
 	}
 	return 0
 }
 
-func runDemo(homeDir string, keepImages bool, out io.Writer) error {
+func runDemo(homeDir string, out io.Writer) error {
 	started := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
@@ -59,13 +58,6 @@ func runDemo(homeDir string, keepImages bool, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	images := []string{runnerImage}
-	defer func() {
-		if !keepImages {
-			_ = env.cli.ImageRemove(context.WithoutCancel(ctx), images...)
-		}
-	}()
-
 	work := env.home.Path("demo")
 	if err := os.RemoveAll(work); err != nil {
 		return err
@@ -104,9 +96,6 @@ func runDemo(homeDir string, keepImages bool, out io.Writer) error {
 		})
 		if err != nil {
 			return controller.Result{}, err
-		}
-		for _, round := range result.Rounds {
-			images = append(images, round.Image)
 		}
 		if result.Reason != "" {
 			step("Result: %s. %s", result.State, result.Reason)
@@ -196,7 +185,8 @@ func runDemo(homeDir string, keepImages bool, out io.Writer) error {
 	say("  sprintfoundry verify --policy %s %s", policyPath, main.Rounds[0].Image)
 	say("")
 	say("The candidates ran in ordinary containers. That is not a security boundary")
-	say("against a hostile agent. Stop the local database with: sprintfoundry down")
+	say("against a hostile agent.")
+	say("Remove the local database and the demo's images with: sprintfoundry down --purge")
 	return nil
 }
 

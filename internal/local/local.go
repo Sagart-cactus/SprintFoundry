@@ -28,6 +28,10 @@ const (
 	PostgresImage = "docker.io/library/postgres:17-alpine@sha256:f9cf3e1f0066f0eb0c48707d864f0ac5941e9ff454a072077d97a4d278d07d73"
 
 	database = "sprintfoundry"
+
+	// ImageLabel marks every image SprintFoundry builds, so that they can be
+	// pruned together.
+	ImageLabel = "sprintfoundry.component"
 )
 
 // names returns the database container and volume names for this home. They
@@ -180,8 +184,8 @@ func (h Home) Postgres(ctx context.Context, cli container.CLI) (string, error) {
 }
 
 // Down stops and removes the local database container. With purge it also
-// deletes the data volume and the stored password, so the next start is
-// fresh.
+// deletes the data volume, the stored password and the images SprintFoundry
+// built that are no longer in use, so the next start is fresh.
 func (h Home) Down(ctx context.Context, cli container.CLI, purge bool) error {
 	postgresContainer, postgresVolume := h.names()
 	if err := cli.Remove(ctx, postgresContainer); err != nil {
@@ -191,6 +195,10 @@ func (h Home) Down(ctx context.Context, cli container.CLI, purge bool) error {
 		return nil
 	}
 	if err := cli.VolumeRemove(ctx, postgresVolume); err != nil {
+		return err
+	}
+	// Candidate and runner images that no container uses any more.
+	if err := cli.PruneImages(ctx, ImageLabel); err != nil {
 		return err
 	}
 	if err := os.Remove(h.Path("postgres.json")); err != nil && !errors.Is(err, os.ErrNotExist) {

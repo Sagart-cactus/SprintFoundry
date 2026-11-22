@@ -1,11 +1,11 @@
 package evaluate
 
 import (
-	"os"
 	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -87,13 +87,8 @@ func newWorld(t *testing.T) *world {
 		}
 		w.images[variant] = id
 	}
-	t.Cleanup(func() {
-		ids := []string{w.runner}
-		for _, id := range w.images {
-			ids = append(ids, id)
-		}
-		_ = cli.ImageRemove(context.Background(), ids...)
-	})
+	// Images are left in place: identical content has the same image ID, so
+	// another test package running at the same time may be using them.
 	return w
 }
 
