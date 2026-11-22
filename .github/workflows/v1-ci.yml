@@ -80,8 +80,11 @@ jobs:
           retention-days: 14
 
   macos:
-    # No service containers on macOS runners, so tests that need Postgres skip here.
+    # No service containers on macOS runners. Tests that need Postgres refuse
+    # to be skipped in CI unless a job says so explicitly, as this one does.
     runs-on: macos-latest
+    env:
+      SPRINTFOUNDRY_NO_POSTGRES: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
