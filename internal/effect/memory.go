@@ -22,7 +22,7 @@ func NewMemory() *Memory {
 
 var _ Journal = (*Memory)(nil)
 
-func (m *Memory) Lock(ctx context.Context, key string) (func(), error) {
+func (m *Memory) Acquire(ctx context.Context, key string) (Held, error) {
 	for {
 		m.mu.Lock()
 		held, busy := m.locks[key]
@@ -30,12 +30,7 @@ func (m *Memory) Lock(ctx context.Context, key string) (func(), error) {
 			mine := make(chan struct{})
 			m.locks[key] = mine
 			m.mu.Unlock()
-			return func() {
-				m.mu.Lock()
-				delete(m.locks, key)
-				m.mu.Unlock()
-				close(mine)
-			}, nil
+			return &memoryHeld{m: m, key: key, token: mine}, nil
 		}
 		m.mu.Unlock()
 		select {
@@ -44,32 +39,6 @@ func (m *Memory) Lock(ctx context.Context, key string) (func(), error) {
 			return nil, ctx.Err()
 		}
 	}
-}
-
-func (m *Memory) Begin(_ context.Context, key, kind string) (Record, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if rec, ok := m.records[key]; ok {
-		if rec.Kind != kind {
-			return Record{}, fmt.Errorf("effect: key %s already used for kind %s", key, rec.Kind)
-		}
-		return rec, nil
-	}
-	rec := Record{Key: key, Kind: kind}
-	m.records[key] = rec
-	return rec, nil
-}
-
-func (m *Memory) Complete(_ context.Context, key string, result []byte) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	rec, ok := m.records[key]
-	if !ok {
-		return fmt.Errorf("effect: no intent recorded for %s", key)
-	}
-	rec.Done, rec.Result = true, append([]byte(nil), result...)
-	m.records[key] = rec
-	return nil
 }
 
 func (m *Memory) Open(_ context.Context) ([]Record, error) {
@@ -83,4 +52,70 @@ func (m *Memory) Open(_ context.Context) ([]Record, error) {
 	}
 	sort.Slice(open, func(i, j int) bool { return open[i].Key < open[j].Key })
 	return open, nil
+}
+
+type memoryHeld struct {
+	m       *Memory
+	key     string
+	token   chan struct{}
+	release sync.Once
+}
+
+// holding reports whether this value still owns the key. The caller holds
+// m.mu.
+func (h *memoryHeld) holding() bool { return h.m.locks[h.key] == h.token }
+
+func (h *memoryHeld) Alive(context.Context) error {
+	h.m.mu.Lock()
+	defer h.m.mu.Unlock()
+	if !h.holding() {
+		return ErrHoldLost
+	}
+	return nil
+}
+
+func (h *memoryHeld) Begin(_ context.Context, kind string) (Record, error) {
+	h.m.mu.Lock()
+	defer h.m.mu.Unlock()
+	if !h.holding() {
+		return Record{}, ErrHoldLost
+	}
+	if rec, ok := h.m.records[h.key]; ok {
+		if rec.Kind != kind {
+			return Record{}, fmt.Errorf("effect: key %s already used for kind %s", h.key, rec.Kind)
+		}
+		return rec, nil
+	}
+	rec := Record{Key: h.key, Kind: kind}
+	h.m.records[h.key] = rec
+	return rec, nil
+}
+
+func (h *memoryHeld) Complete(_ context.Context, result []byte) error {
+	h.m.mu.Lock()
+	defer h.m.mu.Unlock()
+	if !h.holding() {
+		return ErrHoldLost
+	}
+	rec, ok := h.m.records[h.key]
+	if !ok {
+		return fmt.Errorf("effect: no intent recorded for %s", h.key)
+	}
+	if rec.Done {
+		return ErrAlreadyDone
+	}
+	rec.Done, rec.Result = true, append([]byte(nil), result...)
+	h.m.records[h.key] = rec
+	return nil
+}
+
+func (h *memoryHeld) Release() {
+	h.release.Do(func() {
+		h.m.mu.Lock()
+		if h.holding() {
+			delete(h.m.locks, h.key)
+		}
+		h.m.mu.Unlock()
+		close(h.token)
+	})
 }

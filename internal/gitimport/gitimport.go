@@ -21,10 +21,15 @@ import (
 
 // Errors returned by Import. Callers match them with errors.Is.
 var (
-	ErrTreeMismatch = errors.New("gitimport: applied tree differs from the tested tree")
-	ErrEmptyChange  = errors.New("gitimport: patch changes nothing")
-	ErrBadPatch     = errors.New("gitimport: patch does not apply")
+	ErrTreeMismatch   = errors.New("gitimport: applied tree differs from the tested tree")
+	ErrEmptyChange    = errors.New("gitimport: patch changes nothing")
+	ErrBadPatch       = errors.New("gitimport: patch does not apply")
+	ErrPatchTooLarge  = errors.New("gitimport: patch is larger than the limit")
+	ErrForbiddenEntry = errors.New("gitimport: patch adds a symbolic link, a submodule or a .gitmodules file")
 )
+
+// MaxPatchBytes bounds the size of a patch the controller will apply.
+const MaxPatchBytes = 32 << 20
 
 // Request describes one change to import.
 type Request struct {
@@ -63,14 +68,17 @@ func Import(ctx context.Context, req Request) (Result, error) {
 		return Result{}, ErrEmptyChange
 	}
 
-	index, err := os.CreateTemp("", "sprintfoundry-index-*")
-	if err != nil {
-		return Result{}, fmt.Errorf("gitimport: temp index: %w", err)
+	if len(req.Patch) > MaxPatchBytes {
+		return Result{}, fmt.Errorf("%w: %d bytes", ErrPatchTooLarge, len(req.Patch))
 	}
-	indexPath := index.Name()
-	index.Close()
-	os.Remove(indexPath) // git wants to create the index file itself
-	defer os.Remove(indexPath)
+
+	// A private directory, so no other user can guess or pre-create the index.
+	scratch, err := os.MkdirTemp("", "sprintfoundry-import-*")
+	if err != nil {
+		return Result{}, fmt.Errorf("gitimport: temp directory: %w", err)
+	}
+	defer os.RemoveAll(scratch)
+	indexPath := filepath.Join(scratch, "index")
 
 	g := runner{store: req.Store, index: indexPath, name: req.AuthorName, email: req.AuthorEmail}
 
@@ -93,6 +101,9 @@ func Import(ctx context.Context, req Request) (Result, error) {
 	}
 	if tree != req.TestedTree {
 		return Result{}, fmt.Errorf("%w: applied %s, tested %s", ErrTreeMismatch, tree, req.TestedTree)
+	}
+	if err := g.refuseForbiddenEntries(ctx, req.Parent, tree); err != nil {
+		return Result{}, err
 	}
 	commit, err := g.output(ctx, []byte(req.Message), "commit-tree", tree, "-p", req.Parent, "-F", "-")
 	if err != nil {
@@ -124,6 +135,8 @@ func (r runner) output(ctx context.Context, stdin []byte, args ...string) (strin
 		"GIT_CONFIG_NOSYSTEM=1",
 		"GIT_CONFIG_GLOBAL=" + os.DevNull,
 		"GIT_TERMINAL_PROMPT=0",
+		// A replace ref in the store must not change what a commit ID means.
+		"GIT_NO_REPLACE_OBJECTS=1",
 		"GIT_INDEX_FILE=" + r.index,
 		"GIT_AUTHOR_NAME=" + r.name,
 		"GIT_AUTHOR_EMAIL=" + r.email,
@@ -139,4 +152,27 @@ func (r runner) output(ctx context.Context, stdin []byte, args ...string) (strin
 		return "", fmt.Errorf("git %s: %v: %s", args[0], err, strings.TrimSpace(stderr.String()))
 	}
 	return strings.TrimSpace(stdout.String()), nil
+}
+
+// refuseForbiddenEntries rejects a change that adds or modifies a symbolic
+// link, a submodule or a .gitmodules file. A symbolic link in a build context
+// can point outside it, and a submodule can name a transport that runs a
+// command.
+func (r runner) refuseForbiddenEntries(ctx context.Context, parent, tree string) error {
+	raw, err := r.output(ctx, nil, "diff-tree", "-r", "--raw", "--no-renames", "-z", parent, tree)
+	if err != nil {
+		return fmt.Errorf("gitimport: inspect change: %w", err)
+	}
+	fields := strings.Split(raw, "\x00")
+	for i := 0; i+1 < len(fields); i += 2 {
+		meta, path := strings.Fields(strings.TrimPrefix(fields[i], ":")), fields[i+1]
+		if len(meta) < 2 {
+			continue
+		}
+		newMode := meta[1]
+		if newMode == "120000" || newMode == "160000" || filepath.Base(path) == ".gitmodules" && newMode != "000000" {
+			return fmt.Errorf("%w: %s", ErrForbiddenEntry, path)
+		}
+	}
+	return nil
 }

@@ -7,6 +7,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -72,10 +73,18 @@ func (s *Store) migrate(ctx context.Context) error {
 
 var _ effect.Journal = (*Store)(nil)
 
-// Lock takes a session-level advisory lock on a dedicated connection, so it
-// is exclusive across every controller that shares the database and is
-// released by Postgres if this controller dies.
-func (s *Store) Lock(ctx context.Context, key string) (func(), error) {
+// lockHeld is true when the current session holds the advisory lock for $1.
+// A 64-bit advisory lock shows in pg_locks as two 32-bit halves.
+const lockHeld = `EXISTS (
+	SELECT 1 FROM pg_locks
+	WHERE locktype = 'advisory' AND granted AND pid = pg_backend_pid() AND objsubid = 1
+	  AND ((classid::bigint << 32) | objid::bigint) = hashtextextended($1, 0))`
+
+// Acquire takes a session-level advisory lock on a dedicated connection, so
+// the hold is exclusive across every controller that shares the database and
+// Postgres releases it if this controller dies. Every later write for the
+// key runs on that same connection: if the session is gone, the write fails.
+func (s *Store) Acquire(ctx context.Context, key string) (effect.Held, error) {
 	conn, err := s.locks.Acquire(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("postgres: acquire connection for lock: %w", err)
@@ -83,48 +92,91 @@ func (s *Store) Lock(ctx context.Context, key string) (func(), error) {
 	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock(hashtextextended($1, 0))", key); err != nil {
 		// The session may still hold or be waiting for the lock. Drop the
 		// connection instead of returning it to the pool.
-		raw := conn.Hijack()
-		_ = raw.Close(context.Background())
+		discard(conn)
 		return nil, fmt.Errorf("postgres: lock %s: %w", key, err)
 	}
-	return func() {
-		_, err := conn.Exec(context.Background(), "SELECT pg_advisory_unlock(hashtextextended($1, 0))", key)
-		if err != nil {
-			raw := conn.Hijack()
-			_ = raw.Close(context.Background())
-			return
-		}
-		conn.Release()
-	}, nil
+	return &held{conn: conn, key: key}, nil
 }
 
-func (s *Store) Begin(ctx context.Context, key, kind string) (effect.Record, error) {
-	if _, err := s.pool.Exec(ctx,
-		`INSERT INTO sf_effects (key, kind) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING`, key, kind); err != nil {
+func discard(conn *pgxpool.Conn) {
+	raw := conn.Hijack()
+	_ = raw.Close(context.Background())
+}
+
+type held struct {
+	conn    *pgxpool.Conn
+	key     string
+	release sync.Once
+}
+
+func (h *held) Alive(ctx context.Context) error {
+	var ok bool
+	if err := h.conn.QueryRow(ctx, "SELECT "+lockHeld, h.key).Scan(&ok); err != nil {
+		return fmt.Errorf("%w: %v", effect.ErrHoldLost, err)
+	}
+	if !ok {
+		return effect.ErrHoldLost
+	}
+	return nil
+}
+
+func (h *held) Begin(ctx context.Context, kind string) (effect.Record, error) {
+	if err := h.Alive(ctx); err != nil {
+		return effect.Record{}, err
+	}
+	if _, err := h.conn.Exec(ctx,
+		`INSERT INTO sf_effects (key, kind) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING`, h.key, kind); err != nil {
 		return effect.Record{}, fmt.Errorf("postgres: record intent: %w", err)
 	}
-	rec := effect.Record{Key: key}
-	err := s.pool.QueryRow(ctx, `SELECT kind, done, result FROM sf_effects WHERE key = $1`, key).
+	rec := effect.Record{Key: h.key}
+	err := h.conn.QueryRow(ctx, `SELECT kind, done, result FROM sf_effects WHERE key = $1`, h.key).
 		Scan(&rec.Kind, &rec.Done, &rec.Result)
 	if err != nil {
 		return effect.Record{}, fmt.Errorf("postgres: read intent: %w", err)
 	}
 	if rec.Kind != kind {
-		return effect.Record{}, fmt.Errorf("postgres: key %s already used for kind %s", key, rec.Kind)
+		return effect.Record{}, fmt.Errorf("postgres: key %s already used for kind %s", h.key, rec.Kind)
 	}
 	return rec, nil
 }
 
-func (s *Store) Complete(ctx context.Context, key string, result []byte) error {
-	tag, err := s.pool.Exec(ctx,
-		`UPDATE sf_effects SET done = true, result = $2, completed_at = now() WHERE key = $1`, key, result)
+func (h *held) Complete(ctx context.Context, result []byte) error {
+	// One statement: the result is stored only if this session still holds
+	// the lock and the record has no result yet.
+	tag, err := h.conn.Exec(ctx,
+		`UPDATE sf_effects SET done = true, result = $2, completed_at = now()
+		 WHERE key = $1 AND NOT done AND `+lockHeld, h.key, result)
 	if err != nil {
-		return fmt.Errorf("postgres: record result: %w", err)
+		return fmt.Errorf("%w: %v", effect.ErrHoldLost, err)
 	}
-	if tag.RowsAffected() == 0 {
-		return errors.New("postgres: no intent recorded for " + key)
+	if tag.RowsAffected() == 1 {
+		return nil
 	}
-	return nil
+	if err := h.Alive(ctx); err != nil {
+		return err
+	}
+	var done bool
+	err = h.conn.QueryRow(ctx, `SELECT done FROM sf_effects WHERE key = $1`, h.key).Scan(&done)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return errors.New("postgres: no intent recorded for " + h.key)
+	case err != nil:
+		return fmt.Errorf("postgres: read record: %w", err)
+	case done:
+		return effect.ErrAlreadyDone
+	}
+	return effect.ErrHoldLost
+}
+
+func (h *held) Release() {
+	h.release.Do(func() {
+		_, err := h.conn.Exec(context.Background(), "SELECT pg_advisory_unlock(hashtextextended($1, 0))", h.key)
+		if err != nil {
+			discard(h.conn)
+			return
+		}
+		h.conn.Release()
+	})
 }
 
 func (s *Store) Open(ctx context.Context) ([]effect.Record, error) {

@@ -30,11 +30,12 @@ The controller, not the builder, starts the build and the preview. Neither runs 
 
 ## What this does not solve
 
-The builder still writes the code and the Dockerfile. An image could behave well only when it detects a test. Three things reduce that risk and none removes it:
+The builder still writes the code and the Dockerfile. An image could behave well only when it detects a test. Two things reduce that risk and neither removes it:
 
 1. A change to a sensitive path is flagged, and the verdict is not usable for release until a person reviews it.
-2. The preview has no way to tell the runner from a user except by traffic shape, because both arrive over the same internal network with no headers added.
-3. A person approves release by default.
+2. A person approves release by default.
+
+The preview can tell it is under evaluation: its network has no route out and its only client is the runner. We do not claim otherwise.
 
 We state this as remaining risk in the docs and in the evidence report.
 

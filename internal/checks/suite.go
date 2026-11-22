@@ -14,6 +14,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"math"
 	"regexp"
 	"strings"
 
@@ -91,6 +93,12 @@ func Parse(data []byte) (Suite, error) {
 	if err := dec.Decode(&s); err != nil {
 		return Suite{}, fmt.Errorf("%w: %v", ErrInvalidSuite, err)
 	}
+	// A second YAML document would be dropped silently and left out of the
+	// digest, so it is an error.
+	var extra any
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+		return Suite{}, fmt.Errorf("%w: the file holds more than one YAML document", ErrInvalidSuite)
+	}
 	if err := s.validate(); err != nil {
 		return Suite{}, fmt.Errorf("%w: %v", ErrInvalidSuite, err)
 	}
@@ -130,8 +138,12 @@ func (s Suite) validate() error {
 			if !actors[c.HTTP.As] {
 				return fmt.Errorf("check %s: actor %q is not declared", c.ID, c.HTTP.As)
 			}
-			if !requestPattern.MatchString(c.HTTP.Request) {
+			m := requestPattern.FindStringSubmatch(c.HTTP.Request)
+			if m == nil || !localPath(m[2]) {
 				return fmt.Errorf("check %s: request %q must look like \"GET /path\"", c.ID, c.HTTP.Request)
+			}
+			for path, err := range jsonValueErrors(c.HTTP.Expect.JSON) {
+				return fmt.Errorf("check %s: json value at %q: %v", c.ID, path, err)
 			}
 			e := c.HTTP.Expect
 			if e.Status == nil && len(e.Header) == 0 && e.BodyContains == "" && e.BodyNotContains == "" && len(e.JSON) == 0 {
@@ -144,7 +156,7 @@ func (s Suite) validate() error {
 			if !actors[c.Browser.As] {
 				return fmt.Errorf("check %s: actor %q is not declared", c.ID, c.Browser.As)
 			}
-			if !strings.HasPrefix(c.Browser.Open, "/") {
+			if !localPath(c.Browser.Open) {
 				return fmt.Errorf("check %s: open %q must be a path", c.ID, c.Browser.Open)
 			}
 			e := c.Browser.Expect
@@ -168,8 +180,33 @@ func (s Suite) validate() error {
 	return nil
 }
 
-// Digest is the SHA-256 of the suite's canonical JSON form. Comments, key
-// order and whitespace in the YAML source do not change it.
+// localPath reports whether p is a path on the preview itself: one leading
+// slash, no backslash and no white space, so it cannot name another host.
+func localPath(p string) bool {
+	return strings.HasPrefix(p, "/") && !strings.HasPrefix(p, "//") && !strings.ContainsAny(p, "\\ \t\r\n")
+}
+
+// jsonValueErrors returns an error for each json expectation whose value is
+// not a string, a boolean, a finite number or null.
+func jsonValueErrors(expect map[string]any) map[string]error {
+	out := map[string]error{}
+	for path, v := range expect {
+		switch n := v.(type) {
+		case nil, string, bool, int, int64, uint64:
+		case float64:
+			if math.IsNaN(n) || math.IsInf(n, 0) {
+				out[path] = errors.New("must be a finite number")
+			}
+		default:
+			out[path] = errors.New("must be a string, a boolean, a number or null")
+		}
+	}
+	return out
+}
+
+// Digest is the SHA-256 of the suite's JSON encoding: fields in a fixed
+// order, map keys sorted, no insignificant white space. Comments, key order
+// and layout in the YAML source do not change it.
 func (s Suite) Digest() string {
 	canonical, err := json.Marshal(s)
 	if err != nil {

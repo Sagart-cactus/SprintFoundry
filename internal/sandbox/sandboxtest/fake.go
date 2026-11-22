@@ -25,7 +25,8 @@ type Fake struct {
 
 var _ sandbox.Sandbox = (*Fake)(nil)
 
-func (f *Fake) Create(_ context.Context, spec sandbox.Spec) (string, error) {
+func (f *Fake) Create(_ context.Context, validated sandbox.Validated) (string, error) {
+	spec := validated.Spec()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.live == nil {

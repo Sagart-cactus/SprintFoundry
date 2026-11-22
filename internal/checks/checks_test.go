@@ -344,3 +344,136 @@ checks:
 		})
 	}
 }
+
+func TestHeadersAreComparedExactly(t *testing.T) {
+	s := mustParse(t, `
+version: 1
+actors: [owner]
+checks:
+  - id: csp
+    criterion: security
+    http:
+      as: owner
+      request: GET /
+      expect:
+        header:
+          content-security-policy: "default-src 'self'"
+          location: /dashboard
+          content-type: text/html
+`)
+	base := func() []Observation {
+		return []Observation{{Check: "csp", HTTP: &HTTPObservation{Status: 200, Header: map[string]string{
+			"content-security-policy": "default-src 'self'", "location": "/dashboard", "content-type": "Text/HTML; charset=utf-8"}}}}
+	}
+	if report, err := Grade(s, base()); err != nil || report.Result != Passed {
+		t.Fatalf("exact headers: %v, %v: %+v", report.Result, err, report.Checks)
+	}
+	weakened := map[string]string{
+		"content-security-policy": "default-src 'self'; script-src * 'unsafe-inline'",
+		"location":                "/dashboard;evil",
+		"content-type":            "text/htmlx",
+	}
+	for name, value := range weakened {
+		obs := base()
+		obs[0].HTTP.Header[name] = value
+		if report, _ := Grade(s, obs); report.Result != Failed {
+			t.Errorf("%s = %q graded %s, want failed", name, value, report.Result)
+		}
+	}
+	upper := base()
+	upper[0].HTTP.Header["content-security-policy"] = "DEFAULT-SRC 'SELF'"
+	if report, _ := Grade(s, upper); report.Result != Failed {
+		t.Error("a header in another case was accepted as an exact match")
+	}
+}
+
+func TestGradeNeedsRealFacts(t *testing.T) {
+	s := mustParse(t, `
+version: 1
+actors: [owner]
+checks:
+  - id: no-leak
+    criterion: privacy
+    http:
+      as: owner
+      request: GET /profile
+      expect:
+        body_not_contains: password
+`)
+	// An observation with no facts in it must not satisfy a negative check.
+	if report, _ := Grade(s, []Observation{{Check: "no-leak", HTTP: &HTTPObservation{}}}); report.Result != Inconclusive {
+		t.Errorf("empty HTTP observation graded %s, want inconclusive", report.Result)
+	}
+	// A body cut at the size limit cannot prove that something is absent.
+	cut := []Observation{{Check: "no-leak", HTTP: &HTTPObservation{Status: 200, Body: "name=x", Truncated: true}}}
+	if report, _ := Grade(s, cut); report.Result != Inconclusive {
+		t.Errorf("truncated body graded %s, want inconclusive", report.Result)
+	}
+	whole := []Observation{{Check: "no-leak", HTTP: &HTTPObservation{Status: 200, Body: "name=x"}}}
+	if report, _ := Grade(s, whole); report.Result != Passed {
+		t.Errorf("complete clean body graded %s, want passed", report.Result)
+	}
+
+	// A suite that never went through Parse cannot grade anything as passed.
+	if report, err := Grade(Suite{}, nil); err == nil {
+		t.Errorf("an empty suite graded %q with no error", report.Result)
+	}
+	kindless := Suite{Version: 1, Actors: []string{"owner"}, Checks: []Check{{ID: "x", Criterion: "c"}}}
+	if _, err := Grade(kindless, []Observation{{Check: "x"}}); err == nil {
+		t.Error("a check with neither kind was graded")
+	}
+}
+
+func TestParseRejectsWhatWouldBeDroppedOrLeaveThePreview(t *testing.T) {
+	second := invoiceSuite + "---\nversion: 1\nactors: [owner]\nchecks:\n  - id: dropped\n    criterion: c\n    http: { as: owner, request: GET /x, expect: { status: 200 } }\n"
+	if _, err := Parse([]byte(second)); !errors.Is(err, ErrInvalidSuite) || !strings.Contains(err.Error(), "more than one") {
+		t.Errorf("two documents: err = %v", err)
+	}
+	for _, target := range []string{"//elsewhere.example/x", "/\\\\elsewhere.example", "/a b"} {
+		src := strings.Replace(invoiceSuite, "request: GET /invoices/export.csv", "request: \"GET "+target+"\"", 1)
+		if _, err := Parse([]byte(src)); !errors.Is(err, ErrInvalidSuite) {
+			t.Errorf("request target %q: err = %v", target, err)
+		}
+	}
+	if _, err := Parse([]byte(strings.Replace(invoiceSuite, "open: /invoices", "open: //elsewhere.example", 1))); !errors.Is(err, ErrInvalidSuite) {
+		t.Errorf("browser open on another host: err = %v", err)
+	}
+	for _, value := range []string{".nan", ".inf", "{1: x}", "[1, 2]", "{a: b}"} {
+		src := strings.Replace(invoiceSuite, "body_contains: INV-0007", "json: { total: "+value+" }", 1)
+		if _, err := Parse([]byte(src)); !errors.Is(err, ErrInvalidSuite) {
+			t.Errorf("json value %s: err = %v", value, err)
+		}
+	}
+}
+
+func TestJSONNumbersAreExact(t *testing.T) {
+	s := mustParse(t, `
+version: 1
+actors: [owner]
+checks:
+  - id: big
+    criterion: c
+    http:
+      as: owner
+      request: GET /n
+      expect:
+        json: { id: 9007199254740993, ratio: 0.5, count: 2, flag: true, none: null, name: x }
+`)
+	obs := func(body string) []Observation {
+		return []Observation{{Check: "big", HTTP: &HTTPObservation{Status: 200, Body: body}}}
+	}
+	exact := `{"id":9007199254740993,"ratio":0.50,"count":2.0,"flag":true,"none":null,"name":"x"}`
+	if report, err := Grade(s, obs(exact)); err != nil || report.Result != Passed {
+		t.Fatalf("exact values: %v, %v: %+v", report.Result, err, report.Checks)
+	}
+	for name, body := range map[string]string{
+		"neighbouring large integer": `{"id":9007199254740992,"ratio":0.5,"count":2,"flag":true,"none":null,"name":"x"}`,
+		"number as string":           `{"id":"9007199254740993","ratio":0.5,"count":2,"flag":true,"none":null,"name":"x"}`,
+		"null replaced":              `{"id":9007199254740993,"ratio":0.5,"count":2,"flag":true,"none":0,"name":"x"}`,
+		"boolean as number":          `{"id":9007199254740993,"ratio":0.5,"count":2,"flag":1,"none":null,"name":"x"}`,
+	} {
+		if report, _ := Grade(s, obs(body)); report.Result != Failed {
+			t.Errorf("%s graded %s, want failed", name, report.Result)
+		}
+	}
+}

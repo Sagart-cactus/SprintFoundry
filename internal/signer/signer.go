@@ -12,6 +12,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -50,12 +51,46 @@ type Envelope struct {
 	Signatures  []Signature `json:"signatures"`
 }
 
-// Signer signs statements on behalf of the controller.
+// Signer signs in-toto statements on behalf of the controller.
 type Signer interface {
 	// Identity names the signer in a way a verify policy can list.
 	Identity() string
-	// Sign returns an envelope over payload, or ErrPurposeNotAllowed.
-	Sign(ctx context.Context, purpose Purpose, payloadType string, payload []byte) (Envelope, error)
+	// Sign returns an envelope over an in-toto statement. A signer reads the
+	// purpose from the statement itself and returns ErrPurposeNotAllowed if
+	// it may not sign for it, so the purpose is part of what is signed.
+	Sign(ctx context.Context, statement []byte) (Envelope, error)
+}
+
+// PurposeAnnotation is the subject annotation that carries a statement's
+// purpose.
+const PurposeAnnotation = "purpose"
+
+// StatementPurpose returns the purpose an in-toto statement declares. Every
+// subject must carry the same purpose annotation. A statement without one has
+// no purpose and cannot be signed.
+func StatementPurpose(statement []byte) (Purpose, error) {
+	var s struct {
+		Type    string `json:"_type"`
+		Subject []struct {
+			Annotations map[string]string `json:"annotations"`
+		} `json:"subject"`
+	}
+	if err := json.Unmarshal(statement, &s); err != nil {
+		return "", fmt.Errorf("signer: payload is not a statement: %w", err)
+	}
+	if s.Type != "https://in-toto.io/Statement/v1" || len(s.Subject) == 0 {
+		return "", errors.New("signer: payload is not an in-toto v1 statement with a subject")
+	}
+	purpose := Purpose(s.Subject[0].Annotations[PurposeAnnotation])
+	for _, subject := range s.Subject {
+		if Purpose(subject.Annotations[PurposeAnnotation]) != purpose {
+			return "", errors.New("signer: subjects disagree about the purpose")
+		}
+	}
+	if purpose != PurposeDemo && purpose != PurposeProduction {
+		return "", fmt.Errorf("signer: statement declares no known purpose (%q)", purpose)
+	}
+	return purpose, nil
 }
 
 // PAE is the DSSE pre-authentication encoding: the bytes that are signed.
@@ -100,14 +135,18 @@ func (d *Demo) Identity() string {
 	return DemoIdentityPrefix + hex.EncodeToString(sum[:])
 }
 
-func (d *Demo) Sign(_ context.Context, purpose Purpose, payloadType string, payload []byte) (Envelope, error) {
-	if purpose != PurposeDemo {
-		return Envelope{}, fmt.Errorf("%w: demo signer asked to sign for %q", ErrPurposeNotAllowed, purpose)
+func (d *Demo) Sign(_ context.Context, statement []byte) (Envelope, error) {
+	purpose, err := StatementPurpose(statement)
+	if err != nil {
+		return Envelope{}, fmt.Errorf("%w: %v", ErrPurposeNotAllowed, err)
 	}
-	sig := ed25519.Sign(d.key, PAE(payloadType, payload))
+	if purpose != PurposeDemo {
+		return Envelope{}, fmt.Errorf("%w: demo signer given a statement for %q", ErrPurposeNotAllowed, purpose)
+	}
+	sig := ed25519.Sign(d.key, PAE(PayloadTypeInToto, statement))
 	return Envelope{
-		PayloadType: payloadType,
-		Payload:     base64.StdEncoding.EncodeToString(payload),
+		PayloadType: PayloadTypeInToto,
+		Payload:     base64.StdEncoding.EncodeToString(statement),
 		Signatures:  []Signature{{KeyID: d.Identity(), Sig: base64.StdEncoding.EncodeToString(sig)}},
 	}, nil
 }

@@ -50,16 +50,20 @@ Allowed expectations:
 
 | Kind | Expectations |
 |---|---|
-| `http` | `status`, `header` (exact value per name), `body_contains`, `body_not_contains`, `json` (path equals value) |
+| `http` | `status`, `header` (exact value per name; for `content-type` the media type is compared and parameters such as `charset` are ignored), `body_contains`, `body_not_contains`, `json` (dotted path equals a string, boolean, number or null) |
 | `browser` | `visible` and `hidden` by accessible role and name, `text_visible`, `url_matches` |
 
-There are no scripts, no selectors and no arbitrary code. If a criterion cannot be expressed this way, it is recorded as `manual` and a person signs it off.
+There are no scripts, no selectors and no arbitrary code. A request target or page path names the preview only: one leading slash, never another host. A file with more than one YAML document is refused. If a criterion cannot be expressed this way, it is recorded as `manual` and a person signs it off.
 
-The suite digest is the SHA-256 of its canonical JSON form (keys sorted, no insignificant whitespace). Evidence is bound to it.
+The suite digest is the SHA-256 of the suite's JSON encoding: fields in a fixed order, map keys sorted, no insignificant white space. Evidence is bound to it.
+
+A check passes only on facts. A response without a valid HTTP status, a body cut at the runner's size limit when the check looks at the body, or a browser fact the runner did not report makes the check inconclusive, never passed.
 
 ## What the builder learns from a failure
 
 Only the criterion ID and a symptom generated from the check kind, for example "export-owner-only: a request that should be refused was allowed". Never the request, the expected value or the check ID.
+
+Check IDs do not leave the controller either. A signed statement names each check as its criterion plus an opaque hash, so evidence stored beside an image does not reveal the suite. See design 0004.
 
 Checks marked `holdout: true` report nothing to the builder. Their failures go to a person as "holdout failed".
 

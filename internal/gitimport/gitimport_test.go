@@ -128,6 +128,100 @@ func TestImportRejectsEmptyChange(t *testing.T) {
 	if _, err := Import(context.Background(), f.request([]byte("  \n"), tree)); !errors.Is(err, ErrEmptyChange) {
 		t.Fatalf("blank patch: err = %v, want ErrEmptyChange", err)
 	}
+
+	// A patch that applies cleanly and leaves every file as it was.
+	noop := []byte("diff --git a/app.txt b/app.txt\n--- a/app.txt\n+++ b/app.txt\n@@ -1 +1 @@\n-v1\n+v1\n")
+	if _, err := Import(context.Background(), f.request(noop, tree)); !errors.Is(err, ErrEmptyChange) {
+		t.Fatalf("no-op patch: err = %v, want ErrEmptyChange", err)
+	}
+}
+
+func TestImportIgnoresTheCallersGitEnvironment(t *testing.T) {
+	f := newFixture(t)
+	patch, tree := f.change("app.txt", "v1\nv2\n")
+
+	// Variables that would redirect git if the import inherited them.
+	t.Setenv("GIT_OBJECT_DIRECTORY", t.TempDir())
+	t.Setenv("GIT_DIR", t.TempDir())
+	t.Setenv("GIT_WORK_TREE", t.TempDir())
+	t.Setenv("GIT_INDEX_FILE", filepath.Join(t.TempDir(), "elsewhere"))
+
+	got, err := Import(context.Background(), f.request(patch, tree))
+	if err != nil {
+		t.Fatalf("Import with a hostile git environment: %v", err)
+	}
+	if got.Tree != tree {
+		t.Errorf("tree = %s, want %s", got.Tree, tree)
+	}
+}
+
+func TestImportIgnoresReplaceRefs(t *testing.T) {
+	f := newFixture(t)
+	patch, tree := f.change("app.txt", "v1\nv2\n")
+
+	// Someone plants a replace ref so that "parent" silently means a commit
+	// that also carries a backdoor.
+	evil := filepath.Join(t.TempDir(), "evil")
+	f.git(filepath.Dir(evil), "clone", "--quiet", f.store, evil)
+	write(t, filepath.Join(evil, "backdoor.txt"), "x\n")
+	f.git(evil, "add", "-A")
+	f.git(evil, "commit", "--quiet", "-m", "backdoor")
+	f.git(evil, "push", "--quiet", "origin", "HEAD:refs/heads/evil")
+	evilCommit := f.git(evil, "rev-parse", "HEAD")
+	f.git(filepath.Dir(f.store), "--git-dir", f.store, "replace", f.parent, evilCommit)
+
+	got, err := Import(context.Background(), f.request(patch, tree))
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	cmd := exec.Command("git", "--git-dir", f.store, "ls-tree", "-r", "--name-only", got.Commit)
+	cmd.Env = append(os.Environ(), "GIT_NO_REPLACE_OBJECTS=1")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "backdoor.txt") {
+		t.Fatalf("the imported commit contains a file the patch did not add:\n%s", out)
+	}
+}
+
+func TestImportRefusesLinksAndSubmodules(t *testing.T) {
+	t.Run("symbolic link", func(t *testing.T) {
+		f := newFixture(t)
+		if err := os.Symlink("/etc/passwd", filepath.Join(f.builder, "Dockerfile")); err != nil {
+			t.Skipf("cannot create a symbolic link here: %v", err)
+		}
+		f.git(f.builder, "add", "-A")
+		tree := f.git(f.builder, "write-tree")
+		patch := []byte(f.git(f.builder, "diff", "--binary", "--cached", f.parent) + "\n")
+		if _, err := Import(context.Background(), f.request(patch, tree)); !errors.Is(err, ErrForbiddenEntry) {
+			t.Fatalf("err = %v, want ErrForbiddenEntry", err)
+		}
+	})
+	t.Run("submodule entry", func(t *testing.T) {
+		f := newFixture(t)
+		f.git(f.builder, "update-index", "--add", "--cacheinfo", "160000,"+f.parent+",vendor/lib")
+		tree := f.git(f.builder, "write-tree")
+		patch := []byte(f.git(f.builder, "diff", "--binary", "--cached", f.parent) + "\n")
+		if _, err := Import(context.Background(), f.request(patch, tree)); !errors.Is(err, ErrForbiddenEntry) {
+			t.Fatalf("err = %v, want ErrForbiddenEntry", err)
+		}
+	})
+	t.Run(".gitmodules file", func(t *testing.T) {
+		f := newFixture(t)
+		patch, tree := f.change(".gitmodules", "[submodule \"x\"]\n\tpath = x\n\turl = ext::sh -c id\n")
+		if _, err := Import(context.Background(), f.request(patch, tree)); !errors.Is(err, ErrForbiddenEntry) {
+			t.Fatalf("err = %v, want ErrForbiddenEntry", err)
+		}
+	})
+}
+
+func TestImportRefusesAnOversizedPatch(t *testing.T) {
+	f := newFixture(t)
+	huge := bytes.Repeat([]byte("x"), MaxPatchBytes+1)
+	if _, err := Import(context.Background(), f.request(huge, strings.Repeat("a", 40))); !errors.Is(err, ErrPatchTooLarge) {
+		t.Fatalf("err = %v, want ErrPatchTooLarge", err)
+	}
 }
 
 func TestImportNeverRunsHooks(t *testing.T) {
@@ -146,6 +240,9 @@ func TestImportNeverRunsHooks(t *testing.T) {
 		t.Fatalf("control read-tree: %v\n%s", err, out)
 	}
 	if _, err := os.Stat(marker); err != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatalf("the planted hook did not run in the control, so this test proves nothing: %v", err)
+		}
 		t.Skipf("this git does not run post-index-change in a bare repository, so the control is void: %v", err)
 	}
 	if err := os.Remove(marker); err != nil {

@@ -104,9 +104,14 @@ func Run(t *testing.T, newJournal Factory) {
 		const key = "run-2/create-branch"
 
 		// The controller recorded the intent and died before touching the remote.
-		if _, err := j.Begin(ctx, key, "create-branch"); err != nil {
+		first, err := j.Acquire(ctx, key)
+		if err != nil {
 			t.Fatal(err)
 		}
+		if _, err := first.Begin(ctx, "create-branch"); err != nil {
+			t.Fatal(err)
+		}
+		first.Release()
 		a := effect.Action{Key: key, Kind: "create-branch", Find: r.find(key),
 			Do: func(context.Context) ([]byte, error) { return r.create(key), nil }}
 		for i := 0; i < 3; i++ {
@@ -167,29 +172,82 @@ func Run(t *testing.T, newJournal Factory) {
 	t.Run("KeyCannotChangeKind", func(t *testing.T) {
 		ctx := context.Background()
 		j, _ := newJournal(t)
-		if _, err := j.Begin(ctx, "run-5/x", "comment"); err != nil {
+		h, err := j.Acquire(ctx, "run-5/x")
+		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := j.Begin(ctx, "run-5/x", "dispatch-release"); err == nil {
+		defer h.Release()
+		if _, err := h.Begin(ctx, "comment"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.Begin(ctx, "dispatch-release"); err == nil {
 			t.Error("the same key was accepted for a different kind of action")
 		}
-		if err := j.Complete(ctx, "run-5/never-begun", nil); err == nil {
+
+		other, err := j.Acquire(ctx, "run-5/never-begun")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer other.Release()
+		if err := other.Complete(ctx, nil); err == nil {
 			t.Error("a result was recorded for a key with no intent")
 		}
 	})
 
-	t.Run("LockHonoursCancellation", func(t *testing.T) {
+	t.Run("RecordedResultIsNeverOverwritten", func(t *testing.T) {
+		ctx, r := context.Background(), newRemote()
 		j, reopen := newJournal(t)
-		unlock, err := j.Lock(context.Background(), "run-6/k")
+		const key = "run-8/open-pull-request"
+		a := effect.Action{Key: key, Kind: "open-pull-request", Find: r.find(key),
+			Do: func(context.Context) ([]byte, error) { return r.create(key), nil }}
+		if _, err := effect.Perform(ctx, j, a); err != nil {
+			t.Fatal(err)
+		}
+
+		h, err := reopen().Acquire(ctx, key)
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer unlock()
+		if err := h.Complete(ctx, []byte("a different result")); !errors.Is(err, effect.ErrAlreadyDone) {
+			t.Errorf("second Complete: err = %v, want ErrAlreadyDone", err)
+		}
+		rec, err := h.Begin(ctx, "open-pull-request")
+		h.Release()
+		if err != nil || string(rec.Result) != "object-for-"+key {
+			t.Errorf("recorded result = %q, %v; want the first one", rec.Result, err)
+		}
+	})
 
-		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	t.Run("HoldIsExclusiveAndReleaseIsIdempotent", func(t *testing.T) {
+		j, reopen := newJournal(t)
+		const key = "run-6/k"
+		first, err := j.Acquire(context.Background(), key)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		short, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		if _, err := reopen().Acquire(short, key); err == nil {
+			t.Fatal("a second controller took a hold that was taken")
+		}
+		cancel()
+
+		first.Release()
+		second, err := reopen().Acquire(context.Background(), key)
+		if err != nil {
+			t.Fatalf("hold was not free after release: %v", err)
+		}
+		defer second.Release()
+
+		// Releasing the first hold again must not free the second one.
+		first.Release()
+		if err := second.Alive(context.Background()); err != nil {
+			t.Fatalf("a repeated release took the next holder's hold away: %v", err)
+		}
+		short, cancel = context.WithTimeout(context.Background(), 200*time.Millisecond)
 		defer cancel()
-		if _, err := reopen().Lock(ctx, "run-6/k"); err == nil {
-			t.Fatal("a second controller took a lock that was held")
+		if _, err := j.Acquire(short, key); err == nil {
+			t.Fatal("the key was free while the second holder still held it")
 		}
 	})
 }

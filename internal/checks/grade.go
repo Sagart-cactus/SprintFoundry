@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
+	"math/big"
 	"regexp"
 	"sort"
 	"strings"
@@ -26,6 +26,9 @@ type HTTPObservation struct {
 	Status int               `json:"status"`
 	Header map[string]string `json:"header"` // names in lower case
 	Body   string            `json:"body"`
+	// Truncated is set when the runner cut the body at its size limit. A
+	// check that looks at the body is then inconclusive.
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 // BrowserObservation is what the page showed for a browser check.
@@ -73,6 +76,11 @@ type Report struct {
 // observations. An observation for a check that is not in the suite is
 // refused. A suite check without an observation is inconclusive.
 func Grade(s Suite, observations []Observation) (Report, error) {
+	// A suite that did not come through Parse, or an empty one, must not
+	// grade as passed.
+	if err := s.validate(); err != nil {
+		return Report{}, fmt.Errorf("%w: %v", ErrInvalidSuite, err)
+	}
 	byCheck := map[string]Observation{}
 	for _, o := range observations {
 		if _, ok := s.Check(o.Check); !ok {
@@ -127,6 +135,12 @@ func gradeHTTP(e HTTPExpect, o *HTTPObservation) (Outcome, string, string) {
 	if o == nil {
 		return Inconclusive, "", "the runner sent no HTTP observation"
 	}
+	if o.Status < 100 || o.Status > 599 {
+		return Inconclusive, "", fmt.Sprintf("the runner reported status %d, which is not an HTTP status", o.Status)
+	}
+	if o.Truncated && (e.BodyContains != "" || e.BodyNotContains != "" || len(e.JSON) > 0) {
+		return Inconclusive, "", "the response body was cut at the runner's size limit"
+	}
 	if e.Status != nil && o.Status != *e.Status {
 		symptom := symptomWrongResponse
 		switch {
@@ -144,7 +158,7 @@ func gradeHTTP(e HTTPExpect, o *HTTPObservation) (Outcome, string, string) {
 	sort.Strings(names)
 	for _, name := range names {
 		got := o.Header[strings.ToLower(name)]
-		if !strings.EqualFold(strings.TrimSpace(strings.SplitN(got, ";", 2)[0]), e.Header[name]) && got != e.Header[name] {
+		if !headerMatches(name, got, e.Header[name]) {
 			return Failed, symptomMissingContent, fmt.Sprintf("header %s was %q, expected %q", name, got, e.Header[name])
 		}
 	}
@@ -156,7 +170,9 @@ func gradeHTTP(e HTTPExpect, o *HTTPObservation) (Outcome, string, string) {
 	}
 	if len(e.JSON) > 0 {
 		var doc any
-		if err := json.Unmarshal([]byte(o.Body), &doc); err != nil {
+		dec := json.NewDecoder(strings.NewReader(o.Body))
+		dec.UseNumber() // keep numbers exact
+		if err := dec.Decode(&doc); err != nil {
 			return Failed, symptomMissingContent, "body was not JSON"
 		}
 		paths := make([]string, 0, len(e.JSON))
@@ -225,13 +241,59 @@ func lookup(doc any, path string) (any, bool) {
 	return cur, true
 }
 
-// sameJSON compares a decoded JSON value with a value from the YAML suite.
-// Numbers decode as float64 from JSON and as int from YAML.
-func sameJSON(got, want any) bool {
-	if w, ok := want.(int); ok {
-		want = float64(w)
+// headerMatches compares a header value exactly, after trimming white space.
+// Content-Type is the one exception: its media type is compared without
+// regard to case and its parameters (such as charset) are ignored, because
+// that is how the header is defined.
+func headerMatches(name, got, want string) bool {
+	got, want = strings.TrimSpace(got), strings.TrimSpace(want)
+	if strings.EqualFold(name, "content-type") {
+		mediaType := func(v string) string { return strings.TrimSpace(strings.SplitN(v, ";", 2)[0]) }
+		if !strings.Contains(want, ";") {
+			return strings.EqualFold(mediaType(got), want)
+		}
 	}
-	return reflect.DeepEqual(got, want)
+	return got == want
+}
+
+// sameJSON compares a decoded JSON value with a scalar from the suite.
+// Numbers are compared exactly, as rationals, so large integers do not
+// collide and 2 equals 2.0.
+func sameJSON(got, want any) bool {
+	switch w := want.(type) {
+	case nil:
+		return got == nil
+	case string:
+		g, ok := got.(string)
+		return ok && g == w
+	case bool:
+		g, ok := got.(bool)
+		return ok && g == w
+	}
+	num, ok := got.(json.Number)
+	if !ok {
+		return false
+	}
+	g, ok := new(big.Rat).SetString(num.String())
+	if !ok {
+		return false
+	}
+	w := new(big.Rat)
+	switch n := want.(type) {
+	case int:
+		w.SetInt64(int64(n))
+	case int64:
+		w.SetInt64(n)
+	case uint64:
+		w.SetUint64(n)
+	case float64:
+		if w.SetFloat64(n) == nil {
+			return false
+		}
+	default:
+		return false
+	}
+	return g.Cmp(w) == 0
 }
 
 // Symptom is what a builder may learn from one failed check.

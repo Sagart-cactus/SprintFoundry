@@ -13,28 +13,36 @@ Predicate type `https://in-toto.io/attestation/test-result/v0.1`. One statement 
 ```json
 {
   "_type": "https://in-toto.io/Statement/v1",
-  "subject": [{ "name": "registry.example/app", "digest": { "sha256": "<image manifest digest>" } }],
+  "subject": [{ "name": "registry.example/app", "digest": { "sha256": "<image manifest digest>" },
+                "annotations": { "purpose": "demo", "digestKind": "manifest" } }],
   "predicateType": "https://in-toto.io/attestation/test-result/v0.1",
   "predicate": {
     "result": "PASSED",
     "configuration": [
-      { "name": "criteria",   "digest": { "sha256": "..." } },
-      { "name": "check-suite", "digest": { "sha256": "..." } },
-      { "name": "run-spec",   "digest": { "sha256": "..." } },
-      { "name": "runner-image", "digest": { "sha256": "..." } },
-      { "name": "source", "digest": { "gitCommit": "...", "gitTree": "..." },
+      { "name": "criteria",      "digest": { "sha256": "..." } },
+      { "name": "check-suite",   "digest": { "sha256": "..." } },
+      { "name": "run-spec",      "digest": { "sha256": "..." } },
+      { "name": "runner-image",  "digest": { "sha256": "..." } },
+      { "name": "source-commit", "digest": { "gitCommit": "..." },
         "annotations": { "repository": "github.com/owner/repo" } },
-      { "name": "run", "annotations": { "id": "...", "purpose": "demo", "finishedAt": "<RFC 3339>" } }
+      { "name": "source-tree",   "digest": { "gitTree": "..." } },
+      { "name": "run", "uri": "sprintfoundry:run/<run id>",
+        "annotations": { "outcome": "passed", "finishedAt": "<RFC 3339>" } }
     ],
     "url": "<link to the evidence report>",
-    "passedTests": ["export-owner", "export-archived"],
+    "passedTests": ["export-csv/3f9a1c0be771", "export-includes-archived/b20e44d19a05"],
     "warnedTests": [],
     "failedTests": []
   }
 }
 ```
 
-`result` is `PASSED` only when every check passed. An inconclusive evaluation is `WARNED` and never satisfies a policy. The names in the test lists are check IDs.
+Rules that follow from the specifications:
+
+- Every descriptor carries a `uri` or a `digest`, as a ResourceDescriptor must. The commit and the tree are two descriptors, because a digest set describes one object.
+- `result` is `PASSED` only when every check passed. The test-result predicate defines a warned test as one that passed with warnings, so we never use `WARNED`. A failed or an inconclusive evaluation is `FAILED`, its checks are listed under `failedTests`, and `run.annotations.outcome` says which of the two it was.
+- A test name is the check's criterion and a 12-character hash of the suite digest and the check ID. Check IDs, holdouts included, never appear in a signed statement.
+- The purpose is a subject annotation. A signer reads it from the bytes it is about to sign and refuses a purpose it may not sign for, so a demo key cannot produce a statement that says `production`.
 
 ### 2. Decision: may this image be released now
 
@@ -46,23 +54,24 @@ Predicate type `https://slsa.dev/verification_summary/v1`. The controller issues
 | `verifier.id` | The controller's identity |
 | `timeVerified` | Issue time. `verify` rejects a decision older than the policy's `max_decision_age` |
 | `resourceUri` | The repository and environment the release targets |
-| `policy.digest` | Digest of the verify policy below, which fixes the purpose |
+| `policy.uri`, `policy.digest` | Where the verify policy below lives and its digest. The policy fixes the purpose |
 | `inputAttestations` | Digest of the evidence statement |
 | `verificationResult` | `PASSED` or `FAILED` |
+| `verifiedLevels` | `["SPRINTFOUNDRY_CHECKS_PASSED"]` on a pass, empty otherwise. The field is required, and custom values are allowed when they do not start with `SLSA_` |
 
 The controller issues `PASSED` only if the newest evidence for that image and criteria is `PASSED`, is younger than `max_evidence_age`, and has not been superseded by a newer run.
 
 ### Verify policy
 
-A file kept with the deployment configuration, not in the application repository.
+A file kept with the deployment configuration, not in the application repository. The builder can change anything in the application repository, including its workflows, so nothing there may be a trusted signer.
 
 ```yaml
 version: 1
 purpose: production            # a signer marked "demo" never satisfies this
 repository: github.com/owner/repo
 environment: production
-trusted_signers:
-  - identity: https://github.com/owner/repo/.github/workflows/release.yml@refs/heads/main
+trusted_signers:          # the controller's own identity, defined outside the application repository
+  - identity: https://github.com/owner/release-config/.github/workflows/sprintfoundry-controller.yml@refs/heads/main
     issuer: https://token.actions.githubusercontent.com
 expect:
   criteria: sha256:...
@@ -91,4 +100,4 @@ A signing key never enters a sandbox.
 
 ## Known weaker path
 
-Policy engines such as Kyverno can check the evidence statement offline. That path has no revocation before `max_evidence_age` expires. The docs will say so, and the online decision is the default.
+Policy engines such as Kyverno can check the evidence statement offline. That path has no revocation before `max_evidence_age` expires, and it means publishing the evidence beside the image. The evidence is written so that publishing it reveals criteria and opaque test names only. The docs will say that this path is weaker, and the online decision is the default.

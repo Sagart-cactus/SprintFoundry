@@ -1,6 +1,8 @@
 # Behaviour spec
 
-This is what the tests implement. Each rule names the Go test that proves it. A rule without a passing test is not done.
+This is what the tests implement. Each rule names the Go test that proves it. A rule without a passing test is not done, and its test is marked *planned* with the milestone that adds it.
+
+In CI, a test that needs Postgres or a live hook control fails if it would otherwise be skipped, so a skip cannot pass for a proof.
 
 ## Run states
 
@@ -15,9 +17,10 @@ passed -> evidence_signed -> released_decision_issued
 
 | Rule | Test |
 |---|---|
-| A run cannot leave `requested` until the criteria, the check suite and the run spec each have a digest | `TestRunNeedsFrozenInputs` |
-| A third repair round for the same criteria digest moves the run to `needs_owner` | `TestRepairCapIsPerCriteriaDigest` |
-| An inconclusive evaluation never becomes a pass by retrying; it moves to `needs_owner` after its retry budget | `TestInconclusiveNeverPasses` |
+| A run cannot leave `requested` until the criteria, the check suite and the run spec each have a digest | *planned, milestone 1:* `TestRunNeedsFrozenInputs` |
+| A third repair round for the same criteria digest moves the run to `needs_owner` | *planned, milestone 3:* `TestRepairCapIsPerCriteriaDigest` |
+| An evaluation with a check that could not be completed is graded inconclusive, never passed | `TestInconclusiveNeverPasses`, `TestGradeNeedsRealFacts` |
+| An inconclusive run moves to `needs_owner` after its retry budget | *planned, milestone 3* |
 
 ## Mechanism 1: a change is imported as data
 
@@ -30,13 +33,21 @@ The builder's change reaches the controller as a patch plus the tree hash the bu
 | The import fails if the patch changes nothing | `TestImportRejectsEmptyChange` |
 | A hook planted in the patch or the store never runs | `TestImportNeverRunsHooks` |
 | A patch that writes outside the repository is rejected | `TestImportRejectsPathEscape` |
+| Git variables in the controller's environment cannot redirect the import | `TestImportIgnoresTheCallersGitEnvironment` |
+| A replace ref in the store cannot change what the parent commit means | `TestImportIgnoresReplaceRefs` |
+| A patch that adds a symbolic link, a submodule or a `.gitmodules` file is rejected | `TestImportRefusesLinksAndSubmodules` |
+| A patch larger than the limit is rejected | `TestImportRefusesAnOversizedPatch` |
 
 ## Mechanism 2: the thing tested is the thing served
 
 | Rule | Test |
 |---|---|
-| Before evaluation starts, the preview must report the candidate's digest | `TestEvaluationWaitsForCandidateDigest` |
-| After evaluation ends, the preview must still report the same digest, or the result is discarded | `TestEvaluationDiscardedIfPreviewChanged` |
+The controller reads the image identity from the container runtime. It never asks the application, which could answer anything.
+
+| Rule | Test |
+|---|---|
+| Before evaluation starts, the runtime must report that the preview runs the candidate image | *planned, milestone 1:* `TestEvaluationWaitsForCandidateDigest` |
+| After evaluation ends, the runtime must still report the same image, or the result is discarded | *planned, milestone 1:* `TestEvaluationDiscardedIfPreviewChanged` |
 
 ## Mechanism 3: intent before effect
 
@@ -55,21 +66,31 @@ These rules are one shared suite (`internal/effect/effecttest`). It runs against
 | A crash after step 1 and before the effect performs it exactly once on restart | `EffectPerformedOnceAfterEarlyCrash` |
 | Three controllers racing on the same key produce one effect | `EffectSingleUnderRace` |
 | An effect without a remote lookup cannot be registered | `EffectRequiresReconciler` |
-| A lock held by a controller that dies is released by the database | `TestLockIsReleasedWhenTheHolderDies` |
+| A recorded result is never overwritten | `RecordedResultIsNeverOverwritten` |
+| A hold is exclusive, and releasing it twice does not free the next holder's hold | `HoldIsExclusiveAndReleaseIsIdempotent` |
+| A hold whose database session is killed is released, and the next controller gets it | `TestLockIsReleasedWhenTheHolderDies` |
+| A controller that loses its session while performing an effect gets an error and cannot record a result | `TestHolderCannotRecordAfterLosingItsSession` |
+
+One window stays open by design: if a hold is lost while the effect is being performed, another controller may act too. The remote call must therefore be safe to repeat for the same key.
 
 ## Trust rules with tests
 
 | Rule | Test |
 |---|---|
-| A sandbox spec that mounts a credential or passes a secret in its environment is refused | `TestSandboxRefusesSecrets` |
+| A sandbox spec is refused if it mounts anything outside the run's workspace (also through a symbolic link), names an environment variable that is not on its role's list, or carries a credential raw, in base64 or URL-encoded | `TestSandboxRefusesSecrets` |
+| A guard with an empty secret list is refused unless it states that there are no secrets | `TestGuardCannotBeLeftHalfConfigured` |
+| A backend accepts only a spec that passed validation | enforced by the `sandbox.Validated` type |
 | The check runner's output is raw results; the grade is computed by controller code | `TestGradeComputedFromRawResults` |
 | A result that names a check not in the frozen suite is refused | `TestGradeRefusesUnknownCheck` |
+| A header is compared exactly; only `content-type` ignores parameters | `TestHeadersAreComparedExactly` |
+| A suite file with a second document, a target on another host or a non-scalar JSON value is refused | `TestParseRejectsWhatWouldBeDroppedOrLeaveThePreview` |
+| JSON numbers are compared exactly | `TestJSONNumbersAreExact` |
 | Feedback to the builder contains the criterion and a symptom, never the request or the expected value | `TestFeedbackHidesCheckDetails` |
 | A holdout failure sends nothing to the builder | `TestHoldoutFailureIsSilentToBuilder` |
-| A demo signer cannot produce a statement with purpose `production` | `TestDemoSignerCannotSignProduction` |
-| `verify` rejects a decision older than `max_decision_age`, for another image, another policy digest or another repository | `TestVerifyRejectsStaleOrForeignDecision` |
-| Evidence superseded by a newer run cannot back a new decision | `TestSupersededEvidenceCannotRelease` |
+| A demo signer refuses any statement whose own purpose is not `demo`, whatever the caller says | `TestDemoSignerCannotSignProduction` |
+| `verify` rejects a decision older than `max_decision_age`, for another image, another policy digest or another repository | *planned, milestone 1:* `TestVerifyRejectsStaleOrForeignDecision` |
+| Evidence superseded by a newer run cannot back a new decision | *planned, milestone 1:* `TestSupersededEvidenceCannotRelease` |
 
 ## Not carried over from the prototype
 
-Ticket intake from one tracker, the local-model author and the AX task wrapper are specific to the prototype's environment. They are not part of this spec.
+Ticket intake from one tracker, the local-model author and the task wrapper of one sandbox product are specific to the prototype's environment. They are not part of this spec.
