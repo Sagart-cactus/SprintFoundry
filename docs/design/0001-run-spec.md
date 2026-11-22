@@ -13,6 +13,7 @@ The run spec holds:
 | `build.context`, `build.dockerfile` | Paths inside the repository. The files are builder-editable; the choice of paths is not. |
 | `build.args`, `build.platforms` | Fixed build arguments and target platforms. |
 | `build.network` | `none`, or `registries` with an explicit list of package registries reached through the proxy. |
+| `build.base_images` | The only images a Dockerfile may build `FROM`, each pinned by digest. The controller pulls them itself. |
 | `preview.command`, `preview.port`, `preview.env` | How the preview starts. No value comes from the repository. |
 | `preview.health` | Path and expected status that mean "ready". |
 | `preview.network` | Always an internal network shared only with the check runner. |
@@ -23,6 +24,8 @@ The controller hashes the run spec (`run_spec_digest`) and puts the digest in th
 
 The controller, not the builder, starts the build and the preview. Neither runs inside the builder's sandbox, and neither can reach the controller, the store or the internet beyond what `build.network` lists.
 
+`build.network: none` covers the `RUN` steps only. Three other parts of a Dockerfile make the runtime itself reach out, whatever the network setting: a `FROM` line contacts a registry, a `# syntax=` directive downloads and runs another build front end, and `ADD` can fetch a URL. The controller therefore reads the builder's Dockerfile before any build and refuses a base image that is not in `build.base_images`, every parser directive, a remote `ADD`, a `COPY --from` or mount that names an outside image, and `RUN` flags for networking, security or secrets.
+
 ## Rejected
 
 - **Run spec in the repository.** The builder could then change how its own work is built and served.
@@ -30,7 +33,9 @@ The controller, not the builder, starts the build and the preview. Neither runs 
 
 ## What this does not solve
 
-The builder still writes the code and the Dockerfile. An image could behave well only when it detects a test. Two things reduce that risk and neither removes it:
+The builder still writes the code and the Dockerfile. `RUN` steps execute as root inside the runtime's build container, with the runtime's default capabilities and no network, before a person has looked at the Dockerfile. That is as strong as the container runtime is, and no stronger.
+
+An image could also behave well only when it detects a test. Two things reduce that risk and neither removes it:
 
 1. A change to a sensitive path is flagged, and the verdict is not usable for release until a person reviews it.
 2. A person approves release by default.

@@ -17,6 +17,9 @@ Usage:
   sprintfoundry <command>
 
 Commands:
+  demo      Run the built-in demo: one feature, two builders, signed evidence
+  verify    Ask whether an image may be released under a policy
+  down      Stop the local database (add --purge to delete its data)
   version   Print the version
   help      Show this help
 `
@@ -34,6 +37,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "version", "--version":
 		fmt.Fprintln(stdout, version)
 		return 0
+	case "demo":
+		return demoCommand(args[1:], stdout, stderr)
+	case "verify":
+		return verifyCommand(args[1:], stdout, stderr)
+	case "down":
+		return downCommand(args[1:], stdout, stderr)
 	case "help", "--help", "-h":
 		fmt.Fprint(stdout, usage)
 		return 0

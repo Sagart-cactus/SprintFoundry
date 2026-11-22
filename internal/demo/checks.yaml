@@ -1,0 +1,45 @@
+version: 1
+actors:
+  - owner
+  - member
+  - visitor
+checks:
+  - id: export-owner
+    criterion: export-csv
+    http:
+      as: owner
+      request: GET /invoices/export.csv
+      expect:
+        status: 200
+        header: { content-type: text/csv }
+  - id: export-archived
+    criterion: export-includes-archived
+    http:
+      as: owner
+      request: GET /invoices/export.csv
+      expect:
+        body_contains: INV-0007
+  - id: export-denied
+    criterion: export-owner-only
+    http:
+      as: member
+      request: GET /invoices/export.csv
+      expect:
+        status: 403
+  - id: export-signed-out
+    criterion: export-owner-only
+    holdout: true
+    http:
+      as: visitor
+      request: GET /invoices/export.csv
+      expect:
+        status: 401
+  - id: page-still-works
+    criterion: export-csv
+    http:
+      as: member
+      request: GET /invoices
+      expect:
+        status: 200
+        body_contains: INV-0001
+        body_not_contains: INV-0007

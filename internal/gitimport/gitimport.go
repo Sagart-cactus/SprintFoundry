@@ -13,9 +13,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -117,9 +120,11 @@ func Import(ctx context.Context, req Request) (Result, error) {
 // change what the commands do.
 type runner struct {
 	store, index, name, email string
+	// env holds extra variables, for example fixed commit dates.
+	env []string
 }
 
-func (r runner) output(ctx context.Context, stdin []byte, args ...string) (string, error) {
+func (r runner) command(ctx context.Context, args ...string) *exec.Cmd {
 	full := append([]string{
 		"--git-dir", r.store,
 		"-c", "core.hooksPath=" + os.DevNull,
@@ -137,12 +142,20 @@ func (r runner) output(ctx context.Context, stdin []byte, args ...string) (strin
 		"GIT_TERMINAL_PROMPT=0",
 		// A replace ref in the store must not change what a commit ID means.
 		"GIT_NO_REPLACE_OBJECTS=1",
-		"GIT_INDEX_FILE=" + r.index,
 		"GIT_AUTHOR_NAME=" + r.name,
 		"GIT_AUTHOR_EMAIL=" + r.email,
 		"GIT_COMMITTER_NAME=" + r.name,
 		"GIT_COMMITTER_EMAIL=" + r.email,
 	}
+	if r.index != "" {
+		cmd.Env = append(cmd.Env, "GIT_INDEX_FILE="+r.index)
+	}
+	cmd.Env = append(cmd.Env, r.env...)
+	return cmd
+}
+
+func (r runner) output(ctx context.Context, stdin []byte, args ...string) (string, error) {
+	cmd := r.command(ctx, args...)
 	if stdin != nil {
 		cmd.Stdin = bytes.NewReader(stdin)
 	}
@@ -151,7 +164,17 @@ func (r runner) output(ctx context.Context, stdin []byte, args ...string) (strin
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("git %s: %v: %s", args[0], err, strings.TrimSpace(stderr.String()))
 	}
-	return strings.TrimSpace(stdout.String()), nil
+	return strings.TrimRight(stdout.String(), "\n"), nil
+}
+
+func (r runner) stream(ctx context.Context, w io.Writer, args ...string) error {
+	cmd := r.command(ctx, args...)
+	var stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = w, &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("git %s: %v: %s", args[0], err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
 }
 
 // refuseForbiddenEntries rejects a change that adds or modifies a symbolic
@@ -175,4 +198,77 @@ func (r runner) refuseForbiddenEntries(ctx context.Context, parent, tree string)
 		}
 	}
 	return nil
+}
+
+var objectID = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
+
+const controllerName, controllerEmail = "sprintfoundry", "controller@sprintfoundry.invalid"
+
+// Archive writes the files of a commit as a tar stream, for use as a build
+// context. It reads from the bare store and never creates a working tree.
+//
+// The archive honours the commit's own .gitattributes (export-ignore,
+// export-subst), which the builder controls. That lets a builder leave files
+// out of its own build context, which it could also do by not adding them.
+func Archive(ctx context.Context, store, commit string, w io.Writer) error {
+	if !objectID.MatchString(commit) {
+		return fmt.Errorf("gitimport: %q is not a full commit ID", commit)
+	}
+	g := runner{store: store, name: controllerName, email: controllerEmail}
+	return g.stream(ctx, w, "archive", "--format=tar", commit)
+}
+
+// MaxFileBytes bounds what ReadFile returns.
+const MaxFileBytes = 1 << 20
+
+// ReadFile returns one file of a commit, read from the bare store.
+func ReadFile(ctx context.Context, store, commit, path string) ([]byte, error) {
+	if !objectID.MatchString(commit) {
+		return nil, fmt.Errorf("gitimport: %q is not a full commit ID", commit)
+	}
+	if path == "" || strings.HasPrefix(path, "-") || strings.Contains(path, ":") {
+		return nil, fmt.Errorf("gitimport: path %q is not allowed", path)
+	}
+	g := runner{store: store, name: controllerName, email: controllerEmail}
+	size, err := g.output(ctx, nil, "cat-file", "-s", commit+":"+path)
+	if err != nil {
+		return nil, fmt.Errorf("gitimport: %s is not in the commit: %w", path, err)
+	}
+	if n, err := strconv.Atoi(size); err != nil || n > MaxFileBytes {
+		return nil, fmt.Errorf("gitimport: %s is larger than %d bytes", path, MaxFileBytes)
+	}
+	var buf bytes.Buffer
+	if err := g.stream(ctx, &buf, "cat-file", "blob", commit+":"+path); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// ChangedPaths lists the paths that differ between two commits in the store.
+func ChangedPaths(ctx context.Context, store, parent, commit string) ([]string, error) {
+	if !objectID.MatchString(parent) || !objectID.MatchString(commit) {
+		return nil, errors.New("gitimport: parent and commit must be full commit IDs")
+	}
+	g := runner{store: store, name: controllerName, email: controllerEmail}
+	out, err := g.output(ctx, nil, "diff-tree", "--no-commit-id", "--name-only", "--no-renames", "-r", "-z", parent, commit)
+	if err != nil {
+		return nil, fmt.Errorf("gitimport: list changed paths: %w", err)
+	}
+	var paths []string
+	for _, p := range strings.Split(out, "\x00") {
+		if p != "" {
+			paths = append(paths, p)
+		}
+	}
+	return paths, nil
+}
+
+// Plumbing returns a function that runs git against a bare repository with
+// the same scrubbed environment Import uses: no user, system or repository
+// configuration, no hooks, no network protocols, no replace refs. A non-empty
+// index path makes commands use that private index file. Extra environment
+// entries ("NAME=value") are added last.
+func Plumbing(store, index string, env ...string) func(ctx context.Context, stdin []byte, args ...string) (string, error) {
+	r := runner{store: store, index: index, name: controllerName, email: controllerEmail, env: env}
+	return r.output
 }

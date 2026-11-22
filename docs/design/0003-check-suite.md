@@ -67,7 +67,7 @@ Check IDs do not leave the controller either. A signed statement names each chec
 
 Checks marked `holdout: true` report nothing to the builder. Their failures go to a person as "holdout failed".
 
-Repair rounds are counted per criteria digest, not per run, so a builder cannot learn the suite by starting new runs.
+Evaluations are counted per repository and criteria digest, not per run: one attempt and two repair rounds, ever. A new run draws on the same allowance, its first attempt included. A builder can neither learn the suite nor retry until it passes by luck by starting new runs. Once the allowance is used up, a person decides what happens next.
 
 ## Rejected
 

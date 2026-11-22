@@ -41,7 +41,7 @@ Rules that follow from the specifications:
 
 - Every descriptor carries a `uri` or a `digest`, as a ResourceDescriptor must. The commit and the tree are two descriptors, because a digest set describes one object.
 - `result` is `PASSED` only when every check passed. The test-result predicate defines a warned test as one that passed with warnings, so we never use `WARNED`. A failed or an inconclusive evaluation is `FAILED`, its checks are listed under `failedTests`, and `run.annotations.outcome` says which of the two it was.
-- A test name is the check's criterion and a 12-character hash of the suite digest and the check ID. Check IDs, holdouts included, never appear in a signed statement.
+- A test name is the check's criterion and 12 characters of a keyed hash (HMAC) of the suite digest and the check ID. The key never leaves the controller, so a reader cannot confirm a guessed check ID. A holdout check is named `holdout/...` and does not show its criterion. Check IDs never appear in a signed statement.
 - The purpose is a subject annotation. A signer reads it from the bytes it is about to sign and refuses a purpose it may not sign for, so a demo key cannot produce a statement that says `production`.
 
 ### 2. Decision: may this image be released now
@@ -60,6 +60,8 @@ Predicate type `https://slsa.dev/verification_summary/v1`. The controller issues
 | `verifiedLevels` | `["SPRINTFOUNDRY_CHECKS_PASSED"]` on a pass, empty otherwise. The field is required, and custom values are allowed when they do not start with `SLSA_` |
 
 The controller issues `PASSED` only if the newest evidence for that image and criteria is `PASSED`, is younger than `max_evidence_age`, and has not been superseded by a newer run.
+
+What was tested and what happened is read from the signed evidence, which the controller verifies again. Three facts come from the controller's database instead: which evidence is newest, whether a newer run exists, and whether a person approved a flagged change. Someone who can write to that database can therefore withhold or approve, though not forge a passing evaluation. The database is part of what must be trusted.
 
 ### Verify policy
 
