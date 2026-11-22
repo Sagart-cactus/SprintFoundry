@@ -14,19 +14,29 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  test:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+  linux:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: ci-only
+          POSTGRES_DB: sprintfoundry_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      SPRINTFOUNDRY_TEST_DATABASE_URL: postgres://postgres:ci-only@127.0.0.1:5432/sprintfoundry_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
       - name: Format
-        if: matrix.os == 'ubuntu-latest'
         run: |
           unformatted=$(gofmt -l .)
           if [ -n "$unformatted" ]; then
@@ -37,6 +47,52 @@ jobs:
       - name: Vet
         run: go vet ./...
       - name: Test
-        run: go test -race ./...
+        run: go test -race -count=1 -timeout 5m ./...
+      - name: Build
+        run: go build ./cmd/sprintfoundry
+
+  binaries:
+    # Builds what a release would ship and keeps it as a workflow artifact.
+    # Nothing is published from here.
+    needs: linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Cross-compile
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            os=${target%/*}; arch=${target#*/}
+            GOOS=$os GOARCH=$arch go build -trimpath \
+              -ldflags "-s -w -X main.version=v1-dev+${GITHUB_SHA::12}" \
+              -o "dist/sprintfoundry-$os-$arch" ./cmd/sprintfoundry
+          done
+          (cd dist && sha256sum sprintfoundry-* > SHA256SUMS && cat SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sprintfoundry-binaries
+          path: dist/
+          retention-days: 14
+
+  macos:
+    # No service containers on macOS runners. Tests that need Postgres refuse
+    # to be skipped in CI unless a job says so explicitly, as this one does.
+    runs-on: macos-latest
+    env:
+      SPRINTFOUNDRY_NO_POSTGRES: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test -race -count=1 -timeout 5m ./...
       - name: Build
         run: go build ./cmd/sprintfoundry
