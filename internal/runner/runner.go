@@ -37,6 +37,56 @@ type Job struct {
 	Checks         []checks.Check   `json:"checks"`
 	TimeoutSeconds int              `json:"timeout_seconds"`
 	Browser        BrowserConfig    `json:"browser"`
+	// Ready says how to tell that the preview is up before checks start.
+	Ready Ready `json:"ready"`
+}
+
+// Ready is a readiness probe: a path that must answer with a status.
+type Ready struct {
+	Path        string `json:"path"`
+	Status      int    `json:"status"`
+	WaitSeconds int    `json:"wait_seconds"`
+}
+
+// WaitReady polls the preview until the readiness probe answers as expected.
+// It returns an error if the wait runs out.
+func WaitReady(ctx context.Context, job Job) error {
+	if job.Ready.Path == "" {
+		return nil
+	}
+	target, err := resolve(job.BaseURL, job.Ready.Path)
+	if err != nil {
+		return err
+	}
+	wait := time.Duration(job.Ready.WaitSeconds) * time.Second
+	if wait <= 0 {
+		wait = 60 * time.Second
+	}
+	deadline := time.Now().Add(wait)
+	client := &http.Client{Timeout: 3 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	last := "no answer"
+	for time.Now().Before(deadline) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+		if err != nil {
+			return fmt.Errorf("readiness probe could not be built")
+		}
+		if resp, err := client.Do(req); err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == job.Ready.Status {
+				return nil
+			}
+			last = fmt.Sprintf("status %d", resp.StatusCode)
+		} else {
+			last = trimError(err)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+	return fmt.Errorf("preview was not ready after %s: %s", wait, last)
 }
 
 // BrowserConfig says how browser checks run. An empty value means this

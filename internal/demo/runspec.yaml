@@ -1,0 +1,18 @@
+version: 1
+build:
+  dockerfile: Dockerfile
+  network: none
+preview:
+  port: 8080
+  health: { path: /healthz, status: 200 }
+actors:
+  owner:   { headers: { Cookie: session=owner-session } }
+  member:  { headers: { Cookie: session=member-session } }
+  visitor: { headers: {} }
+sensitive_paths:
+  - Dockerfile
+  - "test_*.py"
+  - "*_test.py"
+  - ".github/workflows/*"
+  - "requirements*.txt"
+  - pyproject.toml

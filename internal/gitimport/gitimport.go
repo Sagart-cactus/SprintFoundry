@@ -245,3 +245,12 @@ func Plumbing(store, index string, env ...string) func(ctx context.Context, stdi
 	r := runner{store: store, index: index, name: controllerName, email: controllerEmail, env: env}
 	return r.output
 }
+
+// Plumbing returns a function that runs git against a bare repository with
+// the same scrubbed environment Import uses: no user, system or repository
+// configuration, no hooks, no network protocols. A non-empty index path makes
+// commands use that private index file.
+func Plumbing(store, index string) func(ctx context.Context, stdin []byte, args ...string) (string, error) {
+	r := runner{store: store, index: index, name: "sprintfoundry", email: "controller@sprintfoundry.invalid"}
+	return r.output
+}

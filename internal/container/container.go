@@ -102,6 +102,26 @@ func (c CLI) Available(ctx context.Context) error {
 	return nil
 }
 
+// Arch returns the CPU architecture containers run on, in Go's naming
+// ("amd64", "arm64"), or "" if the runtime does not say.
+func (c CLI) Arch(ctx context.Context) string {
+	for _, format := range []string{"{{.Server.Arch}}", "{{.Server.OsArch}}"} {
+		res, err := c.run(ctx, nil, "version", "--format", format)
+		if err != nil || res.ExitCode != 0 {
+			continue
+		}
+		out := strings.TrimSpace(string(res.Stdout))
+		out = out[strings.LastIndex(out, "/")+1:]
+		switch out {
+		case "amd64", "x86_64":
+			return "amd64"
+		case "arm64", "aarch64":
+			return "arm64"
+		}
+	}
+	return ""
+}
+
 // BuildOptions says how an image is built. Every field comes from the run
 // spec, never from the repository being built.
 type BuildOptions struct {
@@ -154,20 +174,20 @@ type RunOptions struct {
 	PIDs     int
 }
 
-// Run starts a detached container with no added capabilities and returns its
-// ID.
-func (c CLI) Run(ctx context.Context, opts RunOptions) (string, error) {
+// runArgs builds the arguments shared by detached and one-shot runs.
+func runArgs(mode []string, opts RunOptions) ([]string, error) {
 	if !nameOK.MatchString(opts.Name) {
-		return "", fmt.Errorf("container: name %q is not allowed", opts.Name)
+		return nil, fmt.Errorf("container: name %q is not allowed", opts.Name)
 	}
 	if opts.Network != "none" && !nameOK.MatchString(opts.Network) {
-		return "", fmt.Errorf("container: network %q is not allowed", opts.Network)
+		return nil, fmt.Errorf("container: network %q is not allowed", opts.Network)
 	}
 	if opts.Image == "" || strings.HasPrefix(opts.Image, "-") {
-		return "", fmt.Errorf("container: image %q is not allowed", opts.Image)
+		return nil, fmt.Errorf("container: image %q is not allowed", opts.Image)
 	}
-	args := []string{"run", "--detach", "--name", opts.Name, "--network", opts.Network,
-		"--cap-drop=ALL", "--security-opt", "no-new-privileges"}
+	args := append([]string{"run"}, mode...)
+	args = append(args, "--name", opts.Name, "--network", opts.Network,
+		"--cap-drop=ALL", "--security-opt", "no-new-privileges")
 	if !opts.Writable {
 		args = append(args, "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m")
 	}
@@ -190,8 +210,27 @@ func (c CLI) Run(ctx context.Context, opts RunOptions) (string, error) {
 	}
 	args = append(args, labelArgs(opts.Labels)...)
 	args = append(args, opts.Image)
-	args = append(args, opts.Args...)
+	return append(args, opts.Args...), nil
+}
+
+// Run starts a detached container with no added capabilities and returns its
+// ID.
+func (c CLI) Run(ctx context.Context, opts RunOptions) (string, error) {
+	args, err := runArgs([]string{"--detach"}, opts)
+	if err != nil {
+		return "", err
+	}
 	return c.must(ctx, nil, args...)
+}
+
+// RunOnce runs a container to completion with stdin attached, removes it, and
+// returns what it wrote. It is how the controller runs the check runner.
+func (c CLI) RunOnce(ctx context.Context, opts RunOptions, stdin io.Reader) (Result, error) {
+	args, err := runArgs([]string{"--rm", "--interactive"}, opts)
+	if err != nil {
+		return Result{}, err
+	}
+	return c.run(ctx, stdin, args...)
 }
 
 // Exec runs a command inside a running container.
