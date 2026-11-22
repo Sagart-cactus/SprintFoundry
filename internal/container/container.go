@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -363,6 +364,9 @@ type ServiceOptions struct {
 	Name  string
 	Image string // name@sha256:digest
 	Env   map[string]string
+	// EnvFile is a file of NAME=value lines. Secrets go here and not in Env,
+	// so they never appear on a command line.
+	EnvFile string
 	// Publish maps a port on 127.0.0.1 of the host to a port in the
 	// container.
 	HostPort, ContainerPort int
@@ -387,6 +391,12 @@ func (c CLI) RunService(ctx context.Context, opts ServiceOptions) error {
 		"--publish", fmt.Sprintf("127.0.0.1:%d:%d", opts.HostPort, opts.ContainerPort),
 		"--volume", opts.Volume + ":" + opts.MountPath,
 		"--security-opt", "no-new-privileges"}
+	if opts.EnvFile != "" {
+		if strings.HasPrefix(opts.EnvFile, "-") || !filepath.IsAbs(opts.EnvFile) {
+			return fmt.Errorf("container: env file %q must be an absolute path", opts.EnvFile)
+		}
+		args = append(args, "--env-file", opts.EnvFile)
+	}
 	names := make([]string, 0, len(opts.Env))
 	for name := range opts.Env {
 		names = append(names, name)
@@ -435,14 +445,56 @@ func (c CLI) VolumeRemove(ctx context.Context, names ...string) error {
 	return nil
 }
 
-// PruneImages deletes images that carry the label and that no container
-// uses. Images are shared between runs when their content is identical, so
-// SprintFoundry never deletes an image by ID while runs may be in progress;
-// it only prunes on request.
+var labelOK = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{0,62}=[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$`)
+
+// PruneImages deletes images that carry the label (name=value) and that no
+// container uses. Images are shared between runs when their content is
+// identical, so SprintFoundry never deletes an image by ID while runs may be
+// in progress; it only prunes on request.
 func (c CLI) PruneImages(ctx context.Context, label string) error {
-	if !nameOK.MatchString(label) {
+	if !labelOK.MatchString(label) {
 		return fmt.Errorf("container: label %q is not allowed", label)
 	}
 	_, err := c.must(ctx, nil, "image", "prune", "--all", "--force", "--filter", "label="+label)
 	return err
 }
+
+// RemoveByLabel stops and deletes every container that carries the label
+// (name=value), then every network that carries it. It is how leftovers of an
+// interrupted run are cleaned up.
+func (c CLI) RemoveByLabel(ctx context.Context, label string) error {
+	if !labelOK.MatchString(label) {
+		return fmt.Errorf("container: label %q is not allowed", label)
+	}
+	ids, err := c.must(ctx, nil, "ps", "--all", "--quiet", "--filter", "label="+label)
+	if err != nil {
+		return err
+	}
+	if fields := strings.Fields(ids); len(fields) > 0 {
+		if _, err := c.run(ctx, nil, append([]string{"rm", "--force", "--volumes"}, fields...)...); err != nil {
+			return err
+		}
+	}
+	nets, err := c.must(ctx, nil, "network", "ls", "--quiet", "--filter", "label="+label)
+	if err != nil {
+		return err
+	}
+	for _, id := range strings.Fields(nets) {
+		if _, err := c.run(ctx, nil, "network", "rm", id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Pull fetches an image the controller itself chose, pinned by digest. It is
+// never called with a reference a builder wrote.
+func (c CLI) Pull(ctx context.Context, image string) error {
+	if !pinnedRef.MatchString(image) {
+		return fmt.Errorf("container: image %q must be pinned as name@sha256:<64 hex>", image)
+	}
+	_, err := c.must(ctx, nil, "pull", "--quiet", image)
+	return err
+}
+
+var pinnedRef = regexp.MustCompile(`^[a-zA-Z0-9][^@\s]*@sha256:[0-9a-f]{64}$`)

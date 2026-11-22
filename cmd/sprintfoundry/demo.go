@@ -2,12 +2,16 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/sagart-cactus/sprintfoundry/internal/controller"
@@ -36,7 +40,11 @@ func demoCommand(args []string, stdout, stderr io.Writer) int {
 
 func runDemo(homeDir string, out io.Writer) error {
 	started := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	// Stop cleanly on Ctrl-C or a termination signal: the run is cancelled
+	// and every evaluation removes the containers and the network it started.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Minute)
 	defer cancel()
 	say := func(format string, args ...any) { fmt.Fprintf(out, format+"\n", args...) }
 	step := func(format string, args ...any) { fmt.Fprintf(out, "  "+format+"\n", args...) }
@@ -54,7 +62,7 @@ func runDemo(homeDir string, out io.Writer) error {
 	defer env.store.Close()
 
 	step("Building the check runner image (one static binary, no model)")
-	runnerImage, err := runnerimage.Build(ctx, env.cli)
+	runnerImage, err := runnerimage.Build(ctx, env.cli, env.home.Labels())
 	if err != nil {
 		return err
 	}
@@ -76,7 +84,17 @@ func runDemo(homeDir string, out io.Writer) error {
 	fmt.Fprintf(out, "\n%s\n", indent(string(demo.Criteria())))
 	say("A check suite was approved with it and frozen. No builder ever sees it.")
 
-	stamp := strconv.FormatInt(started.Unix(), 36)
+	// Each demo is its own repository. The evaluation allowance and the rule
+	// that a newer run supersedes an older one are both per repository and
+	// criteria, and they never reset, so a second demo must not inherit the
+	// first one's history.
+	nonce := make([]byte, 4)
+	if _, err := rand.Read(nonce); err != nil {
+		return err
+	}
+	stamp := strconv.FormatInt(started.Unix(), 36) + "-" + hex.EncodeToString(nonce)
+	repository := demo.Repository + "-" + stamp
+
 	scenario := func(title, id string, variants ...string) (controller.Result, error) {
 		say("")
 		say("%s", title)
@@ -89,10 +107,10 @@ func runDemo(homeDir string, out io.Writer) error {
 			},
 			Now: time.Now, Log: step,
 		}, controller.Request{
-			RunID: id, Repository: demo.Repository, StoreDir: storeDir, Parent: parent,
+			RunID: id, Repository: repository, StoreDir: storeDir, Parent: parent,
 			Criteria: demo.Criteria(), Suite: demo.Checks(), RunSpec: demo.RunSpec(),
-			Purpose: signer.PurposeDemo, ImageName: demo.Repository, DigestKind: evidence.ImageConfig,
-			RunnerImage: runnerImage,
+			Purpose: signer.PurposeDemo, ImageName: repository, DigestKind: evidence.ImageConfig,
+			RunnerImage: runnerImage, NameKey: env.nameKey, Labels: env.home.Labels(),
 		})
 		if err != nil {
 			return controller.Result{}, err
@@ -105,41 +123,13 @@ func runDemo(homeDir string, out io.Writer) error {
 		return result, nil
 	}
 
-	tamper, err := scenario("Builder 1 implements the feature and also rewrites a test and the Dockerfile",
-		"demo-"+stamp+"-a", "tamper")
-	if err != nil {
-		return err
-	}
-	main, err := scenario("Builder 2 ships a defect, gets it back, and repairs it",
-		"demo-"+stamp+"-b", "defect", "fixed")
-	if err != nil {
-		return err
-	}
-	if len(tamper.Rounds) != 1 || len(main.Rounds) != 2 || main.State != controller.Passed || tamper.State != controller.NeedsOwner {
-		return fmt.Errorf("the demo did not play out as designed: builder 1 ended %s after %d round(s), builder 2 ended %s after %d round(s)",
-			tamper.State, len(tamper.Rounds), main.State, len(main.Rounds))
-	}
-
 	policyPath := filepath.Join(work, "verify-policy.yaml")
-	policyBytes := demoPolicy(env.signer, demo.Repository, main.CriteriaDigest, main.SuiteDigest, main.RunSpecDigest)
-	if err := os.WriteFile(policyPath, policyBytes, 0o600); err != nil {
-		return err
-	}
-	policy, err := verify.ParsePolicy(policyBytes)
-	if err != nil {
-		return err
-	}
-
-	say("")
-	say("The release gate: may this exact image be released?")
-	asked := []struct{ label, image string }{
-		{"the repaired image", main.Rounds[1].Image},
-		{"the image with the defect", main.Rounds[0].Image},
-		{"the image from the builder that rewrote the tests", tamper.Rounds[0].Image},
-	}
+	var policy verify.Policy
 	var verifications []report.Verification
-	for _, a := range asked {
-		ok, reason, err := env.decide(ctx, policy, policyPath, verify.Image{Digest: a.image}, time.Now())
+	// ask puts one question to the release gate and checks the answer is the
+	// one the demo is built to show.
+	ask := func(label, image string, wantAccepted bool) error {
+		ok, reason, err := env.decide(ctx, policy, policyPath, verify.Image{Digest: image}, time.Now())
 		if err != nil {
 			return err
 		}
@@ -147,12 +137,51 @@ func runDemo(homeDir string, out io.Writer) error {
 		if ok {
 			answer = "ACCEPTED"
 		}
-		step("%s  %s  %s", answer, a.image[:12], a.label)
+		step("%s  %s  %s", answer, image[:12], label)
 		step("          %s", reason)
-		verifications = append(verifications, report.Verification{Label: a.label, Image: a.image, Accepted: ok, Reason: reason})
+		verifications = append(verifications, report.Verification{Label: label, Image: image, Accepted: ok, Reason: reason})
+		if ok != wantAccepted {
+			return fmt.Errorf("the release gate gave an unexpected answer for %s", label)
+		}
+		return nil
 	}
-	if !verifications[0].Accepted || verifications[1].Accepted || verifications[2].Accepted {
-		return fmt.Errorf("the release gate gave an unexpected answer; see the lines above")
+
+	tamper, err := scenario("Builder 1 implements the feature and also rewrites a test and the Dockerfile",
+		"demo-"+stamp+"-a", "tamper")
+	if err != nil {
+		return err
+	}
+	if len(tamper.Rounds) != 1 || tamper.State != controller.NeedsOwner {
+		return fmt.Errorf("the demo did not play out as designed: builder 1 ended %s after %d round(s): %s", tamper.State, len(tamper.Rounds), tamper.Reason)
+	}
+	policyBytes := demoPolicy(env.signer, repository, tamper.CriteriaDigest, tamper.SuiteDigest, tamper.RunSpecDigest)
+	if err := os.WriteFile(policyPath, policyBytes, 0o600); err != nil {
+		return err
+	}
+	if policy, err = verify.ParsePolicy(policyBytes); err != nil {
+		return err
+	}
+	say("")
+	say("The release gate: may builder 1's image be released? Its checks passed.")
+	if err := ask("builder 1's image, which rewrote a test and the Dockerfile", tamper.Rounds[0].Image, false); err != nil {
+		return err
+	}
+
+	main, err := scenario("Builder 2 ships a defect, gets it back, and repairs it",
+		"demo-"+stamp+"-b", "defect", "fixed")
+	if err != nil {
+		return err
+	}
+	if len(main.Rounds) != 2 || main.State != controller.Passed {
+		return fmt.Errorf("the demo did not play out as designed: builder 2 ended %s after %d round(s): %s", main.State, len(main.Rounds), main.Reason)
+	}
+	say("")
+	say("The release gate: may these exact images be released?")
+	if err := ask("builder 2's repaired image", main.Rounds[1].Image, true); err != nil {
+		return err
+	}
+	if err := ask("builder 2's image with the defect", main.Rounds[0].Image, false); err != nil {
+		return err
 	}
 
 	reportPath := filepath.Join(work, "report.html")

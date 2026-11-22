@@ -190,3 +190,27 @@ func TestRunnerCapsTheBody(t *testing.T) {
 		t.Fatalf("body length = %d, truncated = %v; want the cap %d and the flag", len(obs[0].HTTP.Body), obs[0].HTTP.Truncated, MaxBodyBytes)
 	}
 }
+
+func TestRunnerReportsEncodingAndRepeatedHeaders(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Accept-Encoding"); got != "identity" {
+			t.Errorf("Accept-Encoding = %q, want identity", got)
+		}
+		w.Header().Add("Cache-Control", "no-store")
+		w.Header().Add("Cache-Control", "public, max-age=3600")
+		w.Header().Set("Content-Encoding", "deflate")
+		w.Write([]byte{0x78, 0x9c, 0x01, 0x02})
+	}))
+	defer srv.Close()
+	j, _ := job(t, srv.URL)
+	j.Checks = j.Checks[:1]
+
+	obs := Run(context.Background(), j, nil)
+	got := obs[0].HTTP
+	if got == nil || got.ContentEncoding != "deflate" {
+		t.Fatalf("observation = %+v, want the content encoding reported", got)
+	}
+	if len(got.RepeatedHeaders) != 1 || got.RepeatedHeaders[0] != "cache-control" {
+		t.Errorf("repeated headers = %v, want [cache-control]", got.RepeatedHeaders)
+	}
+}

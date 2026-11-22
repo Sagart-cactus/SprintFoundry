@@ -18,6 +18,7 @@ import (
 
 	"github.com/sagart-cactus/sprintfoundry/internal/agent"
 	"github.com/sagart-cactus/sprintfoundry/internal/checks"
+	"github.com/sagart-cactus/sprintfoundry/internal/dockerfile"
 	"github.com/sagart-cactus/sprintfoundry/internal/evaluate"
 	"github.com/sagart-cactus/sprintfoundry/internal/evidence"
 	"github.com/sagart-cactus/sprintfoundry/internal/gitimport"
@@ -37,7 +38,8 @@ const (
 )
 
 // DefaultRepairRounds is how many times a failure goes back to the builder
-// for one criteria digest.
+// for one criteria digest. Together with the first attempt that allows three
+// evaluations for a set of criteria, across all runs, ever.
 const DefaultRepairRounds = 2
 
 // Store is what the controller needs from its store.
@@ -46,7 +48,7 @@ type Store interface {
 	PutInputAs(ctx context.Context, kind, digest string, content []byte) error
 	BeginRun(ctx context.Context, r postgres.Run) error
 	PutEvidence(ctx context.Context, e postgres.Evidence) error
-	AddRepairRound(ctx context.Context, repository, criteriaDigest string) (int, error)
+	TakeEvaluation(ctx context.Context, repository, criteriaDigest string, limit int) (bool, error)
 }
 
 // Deps are the controller's collaborators. Build and Evaluate are functions
@@ -85,6 +87,11 @@ type Request struct {
 	RunnerImage  string
 	RepairRounds int
 	ReportURL    string
+	// NameKey is the controller's secret for naming checks in signed
+	// statements.
+	NameKey []byte
+	// Labels are put on everything the run starts in the container runtime.
+	Labels map[string]string
 }
 
 // Round is one build and evaluation.
@@ -175,15 +182,18 @@ func Run(ctx context.Context, d Deps, req Request) (Result, error) {
 
 	var feedback []agent.Feedback
 	for number := 1; ; number++ {
-		if number > 1 {
-			used, err := d.Store.AddRepairRound(ctx, req.Repository, res.CriteriaDigest)
-			if err != nil {
-				return Result{}, err
-			}
-			if used > req.RepairRounds {
-				res.State, res.Reason = NeedsOwner, fmt.Sprintf("the repair limit of %d rounds for these criteria is used up", req.RepairRounds)
-				return res, nil
-			}
+		// Every evaluation draws on one allowance per criteria digest, the
+		// first attempt of a new run included. Without that, a builder could
+		// start run after run and get one more look, or one more lucky try,
+		// each time.
+		allowed, err := d.Store.TakeEvaluation(ctx, req.Repository, res.CriteriaDigest, 1+req.RepairRounds)
+		if err != nil {
+			return Result{}, err
+		}
+		if !allowed {
+			res.State = NeedsOwner
+			res.Reason = fmt.Sprintf("the repair limit for these criteria is used up (one attempt and %d repair rounds, across all runs)", req.RepairRounds)
+			return res, nil
 		}
 
 		logf("Round %d: asking the builder (%s) for a change", number, d.Agent.Name())
@@ -211,6 +221,18 @@ func Run(ctx context.Context, d Deps, req Request) (Result, error) {
 			logf("Round %d: the change touches protected paths: %v", number, round.SensitivePaths)
 		}
 
+		// The builder wrote the Dockerfile. Check it before the runtime reads
+		// it: only listed base images, nothing fetched from outside.
+		content, err := gitimport.ReadFile(ctx, req.StoreDir, imported.Commit, spec.Build.Dockerfile)
+		if err == nil {
+			err = dockerfile.Check(content, spec.Build.BaseImages)
+		}
+		if err != nil {
+			res.Rounds = append(res.Rounds, round)
+			res.State, res.Reason = NeedsOwner, "the Dockerfile was refused before any build: "+err.Error()
+			return res, nil
+		}
+
 		if round.Image, err = d.Build(ctx, req.StoreDir, imported.Commit, spec); err != nil {
 			res.Rounds = append(res.Rounds, round)
 			res.State, res.Reason = NeedsOwner, "the candidate could not be built: "+err.Error()
@@ -220,7 +242,7 @@ func Run(ctx context.Context, d Deps, req Request) (Result, error) {
 
 		eval, err := d.Evaluate(ctx, evaluate.Request{
 			RunID: fmt.Sprintf("%s-r%d", req.RunID, number), Candidate: round.Image,
-			RunnerImage: req.RunnerImage, Spec: spec, Suite: suite,
+			RunnerImage: req.RunnerImage, Spec: spec, Suite: suite, Labels: req.Labels,
 		})
 		if err != nil {
 			res.Rounds = append(res.Rounds, round)
@@ -239,7 +261,7 @@ func Run(ctx context.Context, d Deps, req Request) (Result, error) {
 			CriteriaDigest: res.CriteriaDigest, SuiteDigest: res.SuiteDigest, RunSpecDigest: res.RunSpecDigest,
 			RunnerImage: req.RunnerImage, Repository: req.Repository, Commit: imported.Commit, Tree: imported.Tree,
 			RunID: req.RunID, Purpose: req.Purpose, FinishedAt: d.Now(), ReportURL: req.ReportURL,
-			ReviewRequired: review, Report: eval.Report,
+			ReviewRequired: review, Report: eval.Report, NameKey: req.NameKey,
 		})
 		if err != nil {
 			return Result{}, err

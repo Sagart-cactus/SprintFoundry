@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -44,7 +45,7 @@ func newWorld(t *testing.T) *world {
 
 	w := &world{cli: cli, images: map[string]string{}}
 	var err error
-	if w.runner, err = runnerimage.Build(ctx, cli); err != nil {
+	if w.runner, err = runnerimage.Build(ctx, cli, nil); err != nil {
 		if errors.Is(err, runnerimage.ErrNotEmbedded) {
 			t.Skipf("%v", err)
 		}
@@ -196,10 +197,55 @@ func TestEvaluationDiscardedIfPreviewChanged(t *testing.T) {
 	})
 }
 
+// stubRuntime returns a CLI whose binary records every call and succeeds, so
+// a test can tell "refused before the runtime was asked" from "the runtime
+// happened to fail".
+func stubRuntime(t *testing.T) (container.CLI, func() string) {
+	t.Helper()
+	dir := t.TempDir()
+	log := filepath.Join(dir, "calls.log")
+	script := filepath.Join(dir, "runtime")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho \"$@\" >> '"+log+"'\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return container.CLI{Bin: script}, func() string {
+		data, _ := os.ReadFile(log)
+		return string(data)
+	}
+}
+
 func TestRunRefusesOddRunIDs(t *testing.T) {
 	for _, id := range []string{"", "Run 1", "--rm", "a/b", "x;y"} {
-		if _, err := Run(context.Background(), container.CLI{Bin: "definitely-not-a-runtime"}, Request{RunID: id}); err == nil {
-			t.Errorf("run ID %q was accepted", id)
+		cli, calls := stubRuntime(t)
+		_, err := Run(context.Background(), cli, Request{RunID: id})
+		if err == nil || !strings.Contains(err.Error(), "is not allowed") {
+			t.Errorf("run ID %q: err = %v, want a refusal", id, err)
 		}
+		if got := calls(); got != "" {
+			t.Errorf("run ID %q reached the container runtime: %s", id, got)
+		}
+	}
+}
+
+func TestEvaluationsWithTheSameRunIDDoNotCollide(t *testing.T) {
+	w := newWorld(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	// A second evaluation starts under the same run ID while the first one
+	// is between its start and its final check.
+	first := w.request("fixed")
+	var inner error
+	interfere := func(ctx context.Context, _, _ string) {
+		second := w.request("fixed")
+		second.RunID = first.RunID
+		_, inner = Run(ctx, w.cli, second)
+	}
+	res, err := run(ctx, w.cli, first, hooks{beforeFinalCheck: interfere})
+	if inner != nil {
+		t.Errorf("the second evaluation failed: %v", inner)
+	}
+	if err != nil || res.Report.Result != checks.Passed {
+		t.Fatalf("the first evaluation was disturbed by the second: %v, result %q", err, res.Report.Result)
 	}
 }

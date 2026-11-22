@@ -1,6 +1,8 @@
 package evidence
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -28,6 +30,7 @@ func evaluation(outcomes ...checks.Outcome) Evaluation {
 		Commit: strings.Repeat("a", 40), Tree: strings.Repeat("b", 40),
 		RunID: "run-1", Purpose: signer.PurposeDemo,
 		FinishedAt: time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC),
+		NameKey:    []byte("a controller secret of 32 bytes!"),
 		Report:     report(outcomes...),
 	}
 }
@@ -137,6 +140,8 @@ func TestEvidenceRefusesIncompleteInput(t *testing.T) {
 		"unknown purpose":          func(e *Evaluation) { e.Purpose = "staging" },
 		"missing finish time":      func(e *Evaluation) { e.FinishedAt = time.Time{} },
 		"report without any check": func(e *Evaluation) { e.Report = checks.Report{Result: checks.Passed} },
+		"no key for naming checks": func(e *Evaluation) { e.NameKey = nil },
+		"a short naming key":       func(e *Evaluation) { e.NameKey = []byte("short") },
 	}
 	for name, breakIt := range breakers {
 		t.Run(name, func(t *testing.T) {
@@ -169,10 +174,35 @@ func TestSignedStatementsNeverNameChecks(t *testing.T) {
 	if len(pred.FailedTests) != 2 || len(pred.PassedTests) != 1 {
 		t.Errorf("passed %v, failed %v", pred.PassedTests, pred.FailedTests)
 	}
-	// The same check under another suite digest gets another name.
-	a, b := TestName("sha256:"+h("3"), e.Report.Checks[0]), TestName("sha256:"+h("4"), e.Report.Checks[0])
-	if a == b || !strings.HasPrefix(a, "c/") {
-		t.Errorf("test names %q and %q", a, b)
+	// A holdout check does not even show its criterion.
+	for _, name := range append(pred.PassedTests, pred.FailedTests...) {
+		if !strings.HasPrefix(name, "c/") && !strings.HasPrefix(name, "holdout/") {
+			t.Errorf("unexpected test name %q", name)
+		}
+	}
+	holdouts := 0
+	for _, name := range pred.FailedTests {
+		if strings.HasPrefix(name, "holdout/") {
+			holdouts++
+		}
+	}
+	if holdouts != 1 {
+		t.Errorf("failed tests %v: want exactly one named as a holdout", pred.FailedTests)
+	}
+
+	// Names depend on the suite and on the controller's key. Without the key
+	// a reader cannot confirm a guessed check ID.
+	key, grade := e.NameKey, e.Report.Checks[0]
+	name := TestName(key, e.SuiteDigest, grade)
+	if name == TestName(key, "sha256:"+h("4"), grade) {
+		t.Error("the same check has the same name under another suite digest")
+	}
+	if name == TestName([]byte("another secret, also 32 bytes!!!"), e.SuiteDigest, grade) {
+		t.Error("the name does not depend on the controller's key")
+	}
+	unkeyed := sha256.Sum256([]byte(e.SuiteDigest + "\x00" + grade.ID))
+	if strings.HasSuffix(name, hex.EncodeToString(unkeyed[:])[:12]) {
+		t.Error("the name is a plain hash that anyone can recompute from a guessed check ID")
 	}
 
 	inconclusive, _ := NewEvidence(evaluation(checks.Passed, checks.Inconclusive))

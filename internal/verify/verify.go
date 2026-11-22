@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/sagart-cactus/sprintfoundry/internal/evidence"
@@ -32,8 +31,15 @@ type EvidenceStore interface {
 // Decide is the controller side. It looks at the newest evidence for the
 // image, decides whether it may back a release under the policy right now,
 // and returns a signed decision either way, together with the reasons for a
-// refusal. Everything it relies on is read from the signed evidence
-// statement, not from the store's columns.
+// refusal.
+//
+// What was tested and what happened is read from the signed evidence
+// statement, which the controller re-verifies, not from the store's columns.
+// Three things do come from the store: which evidence is newest, whether a
+// newer run has superseded it, and whether a person approved a flagged
+// change. The controller's database is therefore part of what must be
+// trusted; someone who can write to it can withhold or approve, though not
+// forge a passing evaluation.
 func Decide(ctx context.Context, store EvidenceStore, sgn signer.Signer, policy Policy, policyURI string, image Image, now time.Time) (signer.Envelope, []string, error) {
 	row, err := store.LatestEvidence(ctx, policy.Repository, image.Digest)
 	if errors.Is(err, postgres.ErrNotFound) {
@@ -66,6 +72,9 @@ func Decide(ctx context.Context, store EvidenceStore, sgn signer.Signer, policy 
 
 	if subject.Digest["sha256"] != image.Digest {
 		refuse("the evidence is for another image")
+	}
+	if source, _ := result.Config("source-commit"); source.Annotations["repository"] != policy.Repository {
+		refuse("the evidence is for another repository")
 	}
 	if result.Result != "PASSED" || len(result.FailedTests) > 0 || len(result.WarnedTests) > 0 {
 		run, _ := result.Config("run")
@@ -192,11 +201,11 @@ func Check(envelope signer.Envelope, policy Policy, image Image, now time.Time) 
 	case now.Sub(issued) > time.Duration(policy.MaxDecisionAge):
 		return reject("the decision is older than %s", time.Duration(policy.MaxDecisionAge))
 	}
+	if len(vsa.InputAttestations) != 1 || !sha256Ref.MatchString("sha256:"+vsa.InputAttestations[0].Digest["sha256"]) {
+		return reject("the decision does not name the evidence it rests on")
+	}
 	if vsa.VerificationResult != "PASSED" {
 		return reject("the controller refused the release")
-	}
-	if len(vsa.InputAttestations) != 1 || !strings.HasPrefix("sha256:"+vsa.InputAttestations[0].Digest["sha256"], "sha256:") || len(vsa.InputAttestations[0].Digest["sha256"]) != 64 {
-		return reject("the decision does not name the evidence it rests on")
 	}
 	return nil
 }

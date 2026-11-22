@@ -29,6 +29,14 @@ type HTTPObservation struct {
 	// Truncated is set when the runner cut the body at its size limit. A
 	// check that looks at the body is then inconclusive.
 	Truncated bool `json:"truncated,omitempty"`
+	// ContentEncoding is the response's Content-Encoding, if it had one. The
+	// body is then not what a browser would show after decoding, so a check
+	// that looks at the body is inconclusive.
+	ContentEncoding string `json:"content_encoding,omitempty"`
+	// RepeatedHeaders lists header names, in lower case, that the response
+	// sent more than once. Which value a client honours differs, so a check
+	// on such a header is inconclusive.
+	RepeatedHeaders []string `json:"repeated_headers,omitempty"`
 }
 
 // BrowserObservation is what the page showed for a browser check.
@@ -138,8 +146,19 @@ func gradeHTTP(e HTTPExpect, o *HTTPObservation) (Outcome, string, string) {
 	if o.Status < 100 || o.Status > 599 {
 		return Inconclusive, "", fmt.Sprintf("the runner reported status %d, which is not an HTTP status", o.Status)
 	}
-	if o.Truncated && (e.BodyContains != "" || e.BodyNotContains != "" || len(e.JSON) > 0) {
+	looksAtBody := e.BodyContains != "" || e.BodyNotContains != "" || len(e.JSON) > 0
+	if o.Truncated && looksAtBody {
 		return Inconclusive, "", "the response body was cut at the runner's size limit"
+	}
+	if o.ContentEncoding != "" && looksAtBody {
+		return Inconclusive, "", fmt.Sprintf("the response body was sent with Content-Encoding %q, so its bytes are not what a client would show", o.ContentEncoding)
+	}
+	for name := range e.Header {
+		for _, repeated := range o.RepeatedHeaders {
+			if strings.EqualFold(name, repeated) {
+				return Inconclusive, "", fmt.Sprintf("the response sent the header %s more than once", name)
+			}
+		}
 	}
 	if e.Status != nil && o.Status != *e.Status {
 		symptom := symptomWrongResponse

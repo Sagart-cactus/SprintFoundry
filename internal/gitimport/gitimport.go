@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -215,6 +216,32 @@ func Archive(ctx context.Context, store, commit string, w io.Writer) error {
 	}
 	g := runner{store: store, name: controllerName, email: controllerEmail}
 	return g.stream(ctx, w, "archive", "--format=tar", commit)
+}
+
+// MaxFileBytes bounds what ReadFile returns.
+const MaxFileBytes = 1 << 20
+
+// ReadFile returns one file of a commit, read from the bare store.
+func ReadFile(ctx context.Context, store, commit, path string) ([]byte, error) {
+	if !objectID.MatchString(commit) {
+		return nil, fmt.Errorf("gitimport: %q is not a full commit ID", commit)
+	}
+	if path == "" || strings.HasPrefix(path, "-") || strings.Contains(path, ":") {
+		return nil, fmt.Errorf("gitimport: path %q is not allowed", path)
+	}
+	g := runner{store: store, name: controllerName, email: controllerEmail}
+	size, err := g.output(ctx, nil, "cat-file", "-s", commit+":"+path)
+	if err != nil {
+		return nil, fmt.Errorf("gitimport: %s is not in the commit: %w", path, err)
+	}
+	if n, err := strconv.Atoi(size); err != nil || n > MaxFileBytes {
+		return nil, fmt.Errorf("gitimport: %s is larger than %d bytes", path, MaxFileBytes)
+	}
+	var buf bytes.Buffer
+	if err := g.stream(ctx, &buf, "cat-file", "blob", commit+":"+path); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 // ChangedPaths lists the paths that differ between two commits in the store.

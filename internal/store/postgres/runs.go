@@ -60,30 +60,27 @@ type Run struct {
 	RunSpecDigest  string
 }
 
-// BeginRun records a run and supersedes the evidence of earlier runs for the
-// same repository and criteria: once a new attempt starts, an older result
-// can no longer back a release.
+// ErrRunExists is returned when a run ID is used a second time.
+var ErrRunExists = errors.New("postgres: a run with this ID already exists")
+
+// BeginRun records a run. A run ID can be used once: a second run with the
+// same ID is an error, never a silent no-op.
+//
+// Beginning a run is what supersedes older evidence: from now on, evidence
+// from any earlier run for the same repository and criteria can no longer
+// back a release. See LatestEvidence.
 func (s *Store) BeginRun(ctx context.Context, r Run) error {
-	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx,
-			`INSERT INTO sf_runs (id, repository, criteria_digest, suite_digest, runspec_digest)
-			 VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO NOTHING`,
-			r.ID, r.Repository, r.CriteriaDigest, r.SuiteDigest, r.RunSpecDigest)
-		if err != nil {
-			return fmt.Errorf("postgres: record run: %w", err)
-		}
-		if tag.RowsAffected() == 0 {
-			return nil // the run was already begun; do not supersede again
-		}
-		_, err = tx.Exec(ctx,
-			`UPDATE sf_evidence SET superseded_at = now()
-			 WHERE repository = $1 AND criteria_digest = $2 AND run_id <> $3 AND superseded_at IS NULL`,
-			r.Repository, r.CriteriaDigest, r.ID)
-		if err != nil {
-			return fmt.Errorf("postgres: supersede older evidence: %w", err)
-		}
-		return nil
-	})
+	tag, err := s.pool.Exec(ctx,
+		`INSERT INTO sf_runs (id, repository, criteria_digest, suite_digest, runspec_digest)
+		 VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO NOTHING`,
+		r.ID, r.Repository, r.CriteriaDigest, r.SuiteDigest, r.RunSpecDigest)
+	if err != nil {
+		return fmt.Errorf("postgres: record run: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w: %s", ErrRunExists, r.ID)
+	}
+	return nil
 }
 
 // Evidence is one stored evaluation.
@@ -121,24 +118,33 @@ func (s *Store) PutEvidence(ctx context.Context, e Evidence) error {
 }
 
 // LatestEvidence returns the newest evidence for an image in a repository.
+//
+// Superseded is worked out here, not stored: evidence is superseded when a
+// run that began after its own run exists for the same repository and
+// criteria. That holds whenever the evidence was written, so a slow older
+// run cannot slip a result in after a newer run has started.
 func (s *Store) LatestEvidence(ctx context.Context, repository, imageDigest string) (Evidence, error) {
 	var e Evidence
-	var superseded *time.Time
 	err := s.pool.QueryRow(ctx,
-		`SELECT digest, run_id, round, repository, image_digest, digest_kind, criteria_digest, suite_digest,
-			runspec_digest, purpose, outcome, review_required, review_approved_by, envelope, created_at, superseded_at
-		 FROM sf_evidence WHERE repository = $1 AND image_digest = $2
-		 ORDER BY created_at DESC, digest LIMIT 1`, repository, imageDigest).
+		`SELECT e.digest, e.run_id, e.round, e.repository, e.image_digest, e.digest_kind, e.criteria_digest,
+			e.suite_digest, e.runspec_digest, e.purpose, e.outcome, e.review_required, e.review_approved_by,
+			e.envelope, e.created_at,
+			EXISTS (SELECT 1 FROM sf_runs newer
+			        WHERE newer.repository = mine.repository
+			          AND newer.criteria_digest = mine.criteria_digest
+			          AND newer.seq > mine.seq)
+		 FROM sf_evidence e JOIN sf_runs mine ON mine.id = e.run_id
+		 WHERE e.repository = $1 AND e.image_digest = $2
+		 ORDER BY e.seq DESC LIMIT 1`, repository, imageDigest).
 		Scan(&e.Digest, &e.RunID, &e.Round, &e.Repository, &e.ImageDigest, &e.DigestKind, &e.CriteriaDigest,
 			&e.SuiteDigest, &e.RunSpecDigest, &e.Purpose, &e.Outcome, &e.ReviewRequired, &e.ReviewApprovedBy,
-			&e.Envelope, &e.CreatedAt, &superseded)
+			&e.Envelope, &e.CreatedAt, &e.Superseded)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Evidence{}, ErrNotFound
 	}
 	if err != nil {
 		return Evidence{}, fmt.Errorf("postgres: read evidence: %w", err)
 	}
-	e.Superseded = superseded != nil
 	return e, nil
 }
 
@@ -171,28 +177,25 @@ func (s *Store) PutDecision(ctx context.Context, digest, evidenceDigest string, 
 	return nil
 }
 
-// AddRepairRound counts one repair round for a criteria digest and returns
-// the new total.
-func (s *Store) AddRepairRound(ctx context.Context, repository, criteriaDigest string) (int, error) {
-	var rounds int
-	err := s.pool.QueryRow(ctx,
-		`INSERT INTO sf_repair_rounds (repository, criteria_digest, rounds) VALUES ($1, $2, 1)
-		 ON CONFLICT (repository, criteria_digest) DO UPDATE SET rounds = sf_repair_rounds.rounds + 1
-		 RETURNING rounds`, repository, criteriaDigest).Scan(&rounds)
-	if err != nil {
-		return 0, fmt.Errorf("postgres: count repair round: %w", err)
+// TakeEvaluation uses one evaluation from the allowance of a repository and
+// criteria digest. It returns false, and uses nothing, when limit evaluations
+// have already been taken. The count never resets: a new run for the same
+// criteria draws on the same allowance.
+func (s *Store) TakeEvaluation(ctx context.Context, repository, criteriaDigest string, limit int) (bool, error) {
+	if limit < 1 {
+		return false, errors.New("postgres: evaluation limit must be at least 1")
 	}
-	return rounds, nil
-}
-
-// RepairRounds returns how many repair rounds a criteria digest has used.
-func (s *Store) RepairRounds(ctx context.Context, repository, criteriaDigest string) (int, error) {
-	var rounds int
+	var used int
 	err := s.pool.QueryRow(ctx,
-		`SELECT rounds FROM sf_repair_rounds WHERE repository = $1 AND criteria_digest = $2`,
-		repository, criteriaDigest).Scan(&rounds)
+		`INSERT INTO sf_evaluations (repository, criteria_digest, used) VALUES ($1, $2, 1)
+		 ON CONFLICT (repository, criteria_digest) DO UPDATE SET used = sf_evaluations.used + 1
+		 WHERE sf_evaluations.used < $3
+		 RETURNING used`, repository, criteriaDigest, limit).Scan(&used)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return 0, nil
+		return false, nil
 	}
-	return rounds, err
+	if err != nil {
+		return false, fmt.Errorf("postgres: take evaluation: %w", err)
+	}
+	return true, nil
 }

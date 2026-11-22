@@ -2,6 +2,8 @@ package verify
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -91,6 +93,7 @@ func (f *fixture) evaluation() evidence.Evaluation {
 		RunnerImage: h("5"), Repository: "local/invoices",
 		Commit: strings.Repeat("a", 40), Tree: strings.Repeat("b", 40),
 		RunID: "run-1", Purpose: signer.PurposeDemo, FinishedAt: now.Add(-time.Hour),
+		NameKey: []byte("a controller secret of 32 bytes!"),
 		Report: checks.Report{Result: checks.Passed, Checks: []checks.CheckGrade{
 			{ID: "export-owner", Criterion: "export-csv", Outcome: checks.Passed},
 			{ID: "export-denied", Criterion: "export-owner-only", Outcome: checks.Passed},
@@ -346,4 +349,221 @@ func TestParseImageNeverAcceptsATag(t *testing.T) {
 			t.Errorf("ParseImage(%q) was accepted", ref)
 		}
 	}
+}
+
+// productionSigner stands in for a real controller identity. Unlike the demo
+// signer it may sign for any purpose.
+type productionSigner struct {
+	key ed25519.PrivateKey
+	id  string
+}
+
+func newProductionSigner(t *testing.T, id string) *productionSigner {
+	t.Helper()
+	_, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &productionSigner{key: key, id: id}
+}
+
+func (p *productionSigner) Identity() string { return p.id }
+func (p *productionSigner) public() string {
+	return base64.StdEncoding.EncodeToString(p.key.Public().(ed25519.PublicKey))
+}
+
+func (p *productionSigner) signAs(payloadType string, payload []byte) signer.Envelope {
+	return signer.Envelope{
+		PayloadType: payloadType,
+		Payload:     base64.StdEncoding.EncodeToString(payload),
+		Signatures: []signer.Signature{{KeyID: p.id,
+			Sig: base64.StdEncoding.EncodeToString(ed25519.Sign(p.key, signer.PAE(payloadType, payload)))}},
+	}
+}
+
+func (p *productionSigner) Sign(_ context.Context, statement []byte) (signer.Envelope, error) {
+	return p.signAs(signer.PayloadTypeInToto, statement), nil
+}
+
+func (p *productionSigner) Verify(env signer.Envelope) ([]byte, error) {
+	return signer.VerifyEd25519(env, p.key.Public().(ed25519.PublicKey))
+}
+
+func productionPolicy(t *testing.T, sgn *productionSigner) Policy {
+	t.Helper()
+	p, err := ParsePolicy([]byte(fmt.Sprintf(`version: 1
+purpose: production
+repository: local/invoices
+environment: production
+trusted_signers:
+  - identity: %s
+    public_key: %s
+expect:
+  criteria: sha256:%s
+  check_suite: sha256:%s
+  run_spec: sha256:%s
+max_evidence_age: 24h
+max_decision_age: 15m
+`, sgn.Identity(), sgn.public(), h("2"), h("3"), h("4"))))
+	if err != nil {
+		t.Fatalf("ParsePolicy: %v", err)
+	}
+	return p
+}
+
+// putSigned stores evidence signed by any signer.
+func (f *fixture) putSigned(e evidence.Evaluation, sgn signer.Signer) {
+	f.t.Helper()
+	st, err := evidence.NewEvidence(e)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	payload, _ := st.Marshal()
+	env, err := sgn.Sign(context.Background(), payload)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	raw, _ := json.Marshal(env)
+	f.store.rows[e.ImageDigest] = postgres.Evidence{Digest: evidence.Digest(payload), RunID: e.RunID,
+		Repository: e.Repository, ImageDigest: e.ImageDigest, Envelope: raw, CreatedAt: e.FinishedAt}
+}
+
+func TestProductionRules(t *testing.T) {
+	prod := newProductionSigner(t, "https://controller.example/sprintfoundry")
+
+	t.Run("a production release on production evidence with a manifest digest is authorised", func(t *testing.T) {
+		f := newFixture(t)
+		policy := productionPolicy(t, prod)
+		e := f.evaluation()
+		e.Purpose, e.DigestKind = signer.PurposeProduction, evidence.Manifest
+		f.putSigned(e, prod)
+		env, reasons, err := Decide(context.Background(), f.store, prod, policy, "file:p.yaml", f.image, now)
+		if err != nil || len(reasons) != 0 {
+			t.Fatalf("Decide: %v, %v", err, reasons)
+		}
+		if err := Check(env, policy, f.image, now); err != nil {
+			t.Fatalf("Check: %v", err)
+		}
+	})
+
+	t.Run("demo evidence cannot back a production release", func(t *testing.T) {
+		f := newFixture(t)
+		policy := productionPolicy(t, prod)
+		e := f.evaluation() // purpose demo
+		e.DigestKind = evidence.Manifest
+		f.putSigned(e, prod)
+		_, reasons, err := Decide(context.Background(), f.store, prod, policy, "file:p.yaml", f.image, now)
+		if err != nil || !strings.Contains(strings.Join(reasons, " | "), `produced for purpose "demo"`) {
+			t.Fatalf("reasons = %v, %v", reasons, err)
+		}
+	})
+
+	t.Run("a production release needs a registry manifest digest", func(t *testing.T) {
+		f := newFixture(t)
+		policy := productionPolicy(t, prod)
+		e := f.evaluation()
+		e.Purpose = signer.PurposeProduction // DigestKind stays a local image ID
+		f.putSigned(e, prod)
+		_, reasons, err := Decide(context.Background(), f.store, prod, policy, "file:p.yaml", f.image, now)
+		if err != nil || !strings.Contains(strings.Join(reasons, " | "), "manifest digest") {
+			t.Fatalf("reasons = %v, %v", reasons, err)
+		}
+	})
+
+	t.Run("evidence for another repository is refused", func(t *testing.T) {
+		f := newFixture(t)
+		e := f.evaluation()
+		e.Repository = "local/other"
+		f.put(e, f.sgn, func(r *postgres.Evidence) { r.Repository = "local/invoices" }) // misfiled in the store
+		_, reasons, err := f.decide()
+		if err != nil || !strings.Contains(strings.Join(reasons, " | "), "another repository") {
+			t.Fatalf("reasons = %v, %v", reasons, err)
+		}
+	})
+}
+
+// decisionFor builds a passing decision for the fixture's image and lets a
+// test change it before it is signed.
+func decisionFor(t *testing.T, policy Policy, verifierID string, purpose signer.Purpose, image string, edit func(*evidence.VerificationSummary)) []byte {
+	t.Helper()
+	st, err := evidence.NewDecision(evidence.Decision{
+		ImageName: "local/invoices", ImageDigest: image, DigestKind: evidence.Manifest, Purpose: purpose,
+		VerifierID: verifierID, ResourceURI: policy.ResourceURI(), PolicyURI: "file:p.yaml",
+		PolicyDigest: policy.Digest(), EvidenceDigest: "sha256:" + h("7"), Passed: true, At: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if edit != nil {
+		var vsa evidence.VerificationSummary
+		if err := json.Unmarshal(st.Predicate, &vsa); err != nil {
+			t.Fatal(err)
+		}
+		edit(&vsa)
+		st.Predicate, _ = json.Marshal(vsa)
+	}
+	payload, _ := st.Marshal()
+	return payload
+}
+
+func TestVerifierChecksWhoDecidedAndForWhat(t *testing.T) {
+	prod := newProductionSigner(t, "https://controller.example/sprintfoundry")
+	policy := productionPolicy(t, prod)
+	image := Image{Digest: h("1")}
+
+	good := prod.signAs(signer.PayloadTypeInToto, decisionFor(t, policy, prod.id, signer.PurposeProduction, image.Digest, nil))
+	if err := Check(good, policy, image, now); err != nil {
+		t.Fatalf("a correct production decision was rejected: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		env  signer.Envelope
+		want string
+	}{
+		{"a decision whose statement says demo", prod.signAs(signer.PayloadTypeInToto,
+			decisionFor(t, policy, prod.id, signer.PurposeDemo, image.Digest, nil)), `purpose "demo"`},
+		{"a decision that names another verifier than its signer", prod.signAs(signer.PayloadTypeInToto,
+			decisionFor(t, policy, "https://someone-else.example", signer.PurposeProduction, image.Digest, nil)), "names verifier"},
+		{"a decision in an envelope of another type", prod.signAs("text/plain",
+			decisionFor(t, policy, prod.id, signer.PurposeProduction, image.Digest, nil)), "does not hold an in-toto statement"},
+		{"a decision that names no evidence", prod.signAs(signer.PayloadTypeInToto,
+			decisionFor(t, policy, prod.id, signer.PurposeProduction, image.Digest,
+				func(v *evidence.VerificationSummary) { v.InputAttestations = nil })), "does not name the evidence"},
+		{"a decision whose evidence digest is not a digest", prod.signAs(signer.PayloadTypeInToto,
+			decisionFor(t, policy, prod.id, signer.PurposeProduction, image.Digest,
+				func(v *evidence.VerificationSummary) { v.InputAttestations[0].Digest["sha256"] = "abc" })), "does not name the evidence"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := Check(tt.env, policy, image, now)
+			if !errors.Is(err, ErrRejected) {
+				t.Fatalf("err = %v, want ErrRejected", err)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("err = %q, want it to mention %q", err, tt.want)
+			}
+		})
+	}
+
+	t.Run("a demo signer under a production policy, even if a policy lists it", func(t *testing.T) {
+		demo, _ := signer.NewDemo()
+		// ParsePolicy refuses this combination, so build the policy by hand,
+		// as a careless or hostile caller could.
+		forged := policy
+		forged.TrustedSigners = []TrustedSigner{{Identity: demo.Identity(), PublicKey: base64.StdEncoding.EncodeToString(demo.PublicKey())}}
+		payload := decisionFor(t, forged, demo.Identity(), signer.PurposeProduction, image.Digest, nil)
+		env := signer.Envelope{PayloadType: signer.PayloadTypeInToto, Payload: base64.StdEncoding.EncodeToString(payload)}
+		// The demo signer itself refuses to sign it.
+		if _, err := demo.Sign(context.Background(), payload); !errors.Is(err, signer.ErrPurposeNotAllowed) {
+			t.Fatalf("the demo signer signed a production decision: %v", err)
+		}
+		// And if someone signs it with the demo key anyway, the verifier refuses it.
+		raw := ed25519.Sign(ed25519.NewKeyFromSeed(demo.Seed()), signer.PAE(signer.PayloadTypeInToto, payload))
+		env.Signatures = []signer.Signature{{KeyID: demo.Identity(), Sig: base64.StdEncoding.EncodeToString(raw)}}
+		err := Check(env, forged, image, now)
+		if !errors.Is(err, ErrRejected) || !strings.Contains(err.Error(), "demo signer cannot authorise a production release") {
+			t.Fatalf("err = %v", err)
+		}
+	})
 }

@@ -57,9 +57,12 @@ func (m *memoryStore) PutEvidence(_ context.Context, e postgres.Evidence) error 
 	return nil
 }
 
-func (m *memoryStore) AddRepairRound(_ context.Context, repository, criteria string) (int, error) {
+func (m *memoryStore) TakeEvaluation(_ context.Context, repository, criteria string, limit int) (bool, error) {
+	if m.repairs[repository+"|"+criteria] >= limit {
+		return false, nil
+	}
 	m.repairs[repository+"|"+criteria]++
-	return m.repairs[repository+"|"+criteria], nil
+	return true, nil
 }
 
 // scriptedBuilder plays recorded builders in order and remembers every task
@@ -162,7 +165,7 @@ func newWorld(t *testing.T, variants []string, apps ...app) *world {
 		RunID: "run-1", Repository: demo.Repository, StoreDir: storeDir, Parent: parent,
 		Criteria: demo.Criteria(), Suite: demo.Checks(), RunSpec: demo.RunSpec(),
 		Purpose: signer.PurposeDemo, ImageName: demo.Repository, DigestKind: evidence.ImageConfig,
-		RunnerImage: strings.Repeat("5", 64),
+		RunnerImage: strings.Repeat("5", 64), NameKey: []byte("a controller secret of 32 bytes!"),
 	}
 	return w
 }
@@ -265,24 +268,35 @@ func TestRepairCapIsPerCriteriaDigest(t *testing.T) {
 	if first.State != NeedsOwner || !strings.Contains(first.Reason, "repair limit") || len(first.Rounds) != 3 {
 		t.Fatalf("first run: state %s (%s), %d rounds; want needs_owner after the first try and two repairs", first.State, first.Reason, len(first.Rounds))
 	}
+	if len(w.builder.tasks) != 3 {
+		t.Errorf("the builder was asked %d times, want 3", len(w.builder.tasks))
+	}
 
-	// A new run for the same criteria does not get a fresh allowance.
-	second := newWorld(t, always, leaky)
-	second.store = w.store
-	second.deps.Store = w.store
-	second.req.RunID = "run-2"
-	res := second.run()
-	if res.State != NeedsOwner || !strings.Contains(res.Reason, "repair limit") || len(res.Rounds) != 1 {
-		t.Fatalf("second run: state %s (%s), %d rounds; want needs_owner after one round", res.State, res.Reason, len(res.Rounds))
+	// A new run for the same criteria gets nothing: no build, no evaluation,
+	// no feedback, and above all no chance to pass. Even a correct change is
+	// not evaluated once the allowance is gone.
+	for i, variants := range [][]string{always, {"fixed"}, {"fixed"}} {
+		again := newWorld(t, variants)
+		again.store = w.store
+		again.deps.Store = w.store
+		again.req.RunID = "run-again-" + string(rune('a'+i))
+		res := again.run()
+		if res.State != NeedsOwner || !strings.Contains(res.Reason, "repair limit") {
+			t.Fatalf("run %d after exhaustion: state %s (%s)", i, res.State, res.Reason)
+		}
+		if len(res.Rounds) != 0 || again.builds != 0 || len(again.evals) != 0 || len(again.builder.tasks) != 0 {
+			t.Fatalf("run %d after exhaustion still worked: %d rounds, %d builds, %d evaluations, %d builder tasks",
+				i, len(res.Rounds), again.builds, len(again.evals), len(again.builder.tasks))
+		}
 	}
 
 	// Different criteria have their own allowance.
-	third := newWorld(t, []string{"defect", "fixed"}, leaky, app{})
-	third.store = w.store
-	third.deps.Store = w.store
-	third.req.RunID = "run-3"
-	third.req.Criteria = append(append([]byte(nil), demo.Criteria()...), []byte("\n- **export-fast**: The export answers within two seconds.\n")...)
-	if res := third.run(); res.State != Passed {
+	other := newWorld(t, []string{"defect", "fixed"}, leaky, app{})
+	other.store = w.store
+	other.deps.Store = w.store
+	other.req.RunID = "run-other"
+	other.req.Criteria = append(append([]byte(nil), demo.Criteria()...), []byte("\n- **export-fast**: The export answers within two seconds.\n")...)
+	if res := other.run(); res.State != Passed {
 		t.Fatalf("run with other criteria: state %s (%s)", res.State, res.Reason)
 	}
 }
@@ -333,5 +347,16 @@ func TestARefusedImportStopsTheRun(t *testing.T) {
 	res := w.run()
 	if res.State != NeedsOwner || !strings.Contains(res.Reason, "refused on import") || w.builds != 0 {
 		t.Fatalf("state %s (%s), builds %d", res.State, res.Reason, w.builds)
+	}
+}
+
+func TestAnUnlistedBaseImageIsRefusedBeforeAnyBuild(t *testing.T) {
+	w := newWorld(t, []string{"badbase"})
+	res := w.run()
+	if res.State != NeedsOwner || !strings.Contains(res.Reason, "Dockerfile was refused") || !strings.Contains(res.Reason, "not in the run spec's list") {
+		t.Fatalf("state %s (%s)", res.State, res.Reason)
+	}
+	if w.builds != 0 || len(w.evals) != 0 || len(w.store.evidence) != 0 {
+		t.Errorf("work happened on a refused Dockerfile: %d builds, %d evaluations, %d evidence rows", w.builds, len(w.evals), len(w.store.evidence))
 	}
 }

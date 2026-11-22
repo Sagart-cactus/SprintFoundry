@@ -43,11 +43,30 @@ func TestDemoEndToEnd(t *testing.T) {
 		_ = home.Down(ctx, cli, true)
 	})
 
+	// The demo must work every time on one machine, not only the first time.
+	// Evaluation allowances and supersession never reset, so each demo has to
+	// keep clear of the ones before it.
 	var out bytes.Buffer
-	if err := runDemo(home.Dir, &out); err != nil {
-		t.Fatalf("demo failed: %v\n%s", err, out.String())
+	for i := 1; i <= 3; i++ {
+		out.Reset()
+		if err := runDemo(home.Dir, &out); err != nil {
+			t.Fatalf("demo run %d failed: %v\n%s", i, err, out.String())
+		}
 	}
 	transcript := out.String()
+
+	// Builder 1 is refused for one reason only: a person has not reviewed it.
+	// Its checks passed and nothing has superseded it at that point.
+	refusal := regexp.MustCompile(`REJECTED  [0-9a-f]{12}  builder 1's image[^\n]*\n\s+([^\n]+)`).FindStringSubmatch(transcript)
+	if refusal == nil {
+		t.Fatalf("no refusal of builder 1's image in the transcript:\n%s", transcript)
+	}
+	if !strings.HasPrefix(refusal[1], "a person must review this change first") || strings.Contains(refusal[1], "superseded") || strings.Contains(refusal[1], ";") && !strings.Contains(refusal[1], "change touches") {
+		t.Errorf("builder 1's image was refused for %q; want the review rule alone", refusal[1])
+	}
+	if strings.Contains(refusal[1], "did not pass") {
+		t.Errorf("builder 1's image is reported as failing its checks: %q", refusal[1])
+	}
 	for _, want := range []string{
 		"Round 1: the change touches protected paths: [Dockerfile test_app.py]",
 		"Round 1: evaluation failed",

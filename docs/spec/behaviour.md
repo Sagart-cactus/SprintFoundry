@@ -18,7 +18,9 @@ passed -> evidence_signed -> released_decision_issued
 | Rule | Test |
 |---|---|
 | A run cannot leave `requested` until the criteria, the check suite and the run spec each have a digest | `TestRunNeedsFrozenInputs` |
-| A third repair round for the same criteria digest moves the run to `needs_owner` | `TestRepairCapIsPerCriteriaDigest` |
+| A set of criteria gets one attempt and two repair rounds across all runs; after that no run for it builds or evaluates anything | `TestRepairCapIsPerCriteriaDigest`, `TestEvaluationAllowance` |
+| A run ID can be used once | `TestRunIDIsSingleUse` |
+| A Dockerfile that names an unlisted base image or reaches outside the build is refused before any build | `TestAnUnlistedBaseImageIsRefusedBeforeAnyBuild`, `TestCheckRefusesWhatReachesOutsideTheBuild` |
 | An evaluation with a check that could not be completed is graded inconclusive, never passed | `TestInconclusiveNeverPasses`, `TestGradeNeedsRealFacts` |
 | An inconclusive evaluation goes to a person and never starts a repair round | `TestInconclusiveEvaluationGoesToAPerson` |
 | An inconclusive run is retried within a budget before it goes to a person | *planned, milestone 3* |
@@ -96,16 +98,23 @@ One window stays open by design: if a hold is lost while the effect is being per
 
 | Rule | Test |
 |---|---|
-| The controller decides from the signed evidence statement, not from its store's columns, and refuses evidence it did not sign | `TestControllerDoesNotTrustItsOwnStoreBlindly`, `TestControllerRefusesToAuthorise` |
+| What was tested and what happened is read from the signed evidence statement, and evidence the controller did not sign is refused. Which evidence is newest, whether it is superseded and whether a review was approved come from the controller's database | `TestControllerDoesNotTrustItsOwnStoreBlindly`, `TestControllerRefusesToAuthorise` |
+| Evidence is superseded once a newer run exists for the same repository and criteria, also when the older run stores it late | `TestSupersessionIsWorkedOutWhenEvidenceIsRead` |
+| The newest evidence for an image is the one written last | `TestLatestEvidenceIsTheLastOneWritten` |
+| Demo evidence cannot back a production release, and a production release needs a registry manifest digest | `TestProductionRules` |
+| A decision is refused if it names another verifier than its signer, sits in another envelope type, or names no evidence | `TestVerifierChecksWhoDecidedAndForWhat` |
 | A change that touched a protected path cannot be released until a person approves the review | `TestProtectedPathsNeedAPersonEvenWhenChecksPass`, `TestReviewApprovalUnblocksAFlaggedChange` |
 | A holdout failure goes to a person and never starts a repair round | `TestHoldoutFailureGoesToAPersonNotTheBuilder` |
-| A signed statement never names a check | `TestSignedStatementsNeverNameChecks` |
+| A signed statement never names a check, and its test names cannot be recomputed without the controller's key | `TestSignedStatementsNeverNameChecks` |
+| A body sent with a content encoding, or a header sent twice, makes the check inconclusive | `TestEncodedBodiesAndRepeatedHeadersAreInconclusive` |
+| Two evaluations never share a container or network name | `TestEvaluationsWithTheSameRunIDDoNotCollide` |
+| Options that a container runtime would read as flags never reach it | `TestOptionsThatCouldBecomeFlagsAreRefused` |
 | A production policy cannot trust a demo signer, and a decision may not live longer than an hour | `TestPolicyRules` |
 | `verify` never accepts a tag | `TestParseImageNeverAcceptsATag` |
 
 ## The whole slice
 
-`TestDemoEndToEnd` runs the demo on a real container runtime and then asks the gate from a separate command. It is the milestone 1 exit test. In CI it runs on Linux with Docker.
+`TestDemoEndToEnd` runs the demo three times in a row on a real container runtime and then asks the gate from a separate command. It is the milestone 1 exit test. In CI it runs on Linux with Docker.
 
 ## Not carried over from the prototype
 

@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -156,6 +157,9 @@ func observeHTTP(ctx context.Context, client *http.Client, job Job, check checks
 	for name, value := range actor.Headers {
 		req.Header.Set(name, value)
 	}
+	// Ask for the body as it is. A response that is encoded anyway is
+	// reported as such, and the controller does not grade its body.
+	req.Header.Set("Accept-Encoding", "identity")
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -174,12 +178,18 @@ func observeHTTP(ctx context.Context, client *http.Client, job Job, check checks
 		body = body[:MaxBodyBytes]
 	}
 	header := make(map[string]string, len(resp.Header))
+	var repeated []string
 	for name, values := range resp.Header {
 		if len(values) > 0 {
 			header[strings.ToLower(name)] = values[0]
 		}
+		if len(values) > 1 {
+			repeated = append(repeated, strings.ToLower(name))
+		}
 	}
-	obs.HTTP = &checks.HTTPObservation{Status: resp.StatusCode, Header: header, Body: string(body), Truncated: truncated}
+	sort.Strings(repeated)
+	obs.HTTP = &checks.HTTPObservation{Status: resp.StatusCode, Header: header, Body: string(body), Truncated: truncated,
+		ContentEncoding: resp.Header.Get("Content-Encoding"), RepeatedHeaders: repeated}
 	return obs
 }
 

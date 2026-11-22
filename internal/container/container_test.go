@@ -13,34 +13,87 @@ import (
 	"time"
 )
 
-func TestOptionsThatCouldBecomeFlagsAreRefused(t *testing.T) {
-	ctx, c := context.Background(), CLI{Bin: "definitely-not-a-runtime"}
+// stubRuntime returns a CLI whose binary records every call and succeeds, so
+// a test can tell "refused before the runtime was asked" from "the runtime
+// happened to fail".
+func stubRuntime(t *testing.T) (CLI, func() string) {
+	t.Helper()
+	dir := t.TempDir()
+	log := filepath.Join(dir, "calls.log")
+	script := filepath.Join(dir, "runtime")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho \"$@\" >> '"+log+"'\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return CLI{Bin: script}, func() string {
+		data, _ := os.ReadFile(log)
+		return string(data)
+	}
+}
 
-	if _, err := c.Build(ctx, strings.NewReader(""), BuildOptions{Dockerfile: "--output=/etc", Network: "none"}); err == nil {
-		t.Error("a Dockerfile path that looks like a flag was accepted")
-	}
-	if _, err := c.Build(ctx, strings.NewReader(""), BuildOptions{Dockerfile: "../../Dockerfile", Network: "none"}); err == nil {
-		t.Error("a Dockerfile path outside the context was accepted")
-	}
-	if _, err := c.Build(ctx, strings.NewReader(""), BuildOptions{Dockerfile: "Dockerfile", Network: "host"}); err == nil {
-		t.Error("a build with host networking was accepted")
+func TestOptionsThatCouldBecomeFlagsAreRefused(t *testing.T) {
+	ctx := context.Background()
+	c, calls := stubRuntime(t)
+	id := strings.Repeat("a", 64)
+	pinned := "registry.example/app@sha256:" + id
+
+	refused := map[string]func() error{
+		"Dockerfile path that looks like a flag": func() error {
+			_, err := c.Build(ctx, strings.NewReader(""), BuildOptions{Dockerfile: "--output=/etc", Network: "none"})
+			return err
+		},
+		"Dockerfile path outside the context": func() error {
+			_, err := c.Build(ctx, strings.NewReader(""), BuildOptions{Dockerfile: "../../Dockerfile", Network: "none"})
+			return err
+		},
+		"build with host networking": func() error {
+			_, err := c.Build(ctx, strings.NewReader(""), BuildOptions{Dockerfile: "Dockerfile", Network: "host"})
+			return err
+		},
+		"image that looks like a flag": func() error {
+			_, err := c.Run(ctx, RunOptions{Name: "ok", Image: "--volume=/:/host", Network: "none"})
+			return err
+		},
+		"network that is not a plain name": func() error {
+			_, err := c.Run(ctx, RunOptions{Name: "ok", Image: id, Network: "host;x"})
+			return err
+		},
+		"image ID that looks like a flag": func() error { return c.ImageRemove(ctx, "--all") },
+		"pull of an image by tag":         func() error { return c.Pull(ctx, "registry.example/app:latest") },
+		"pull that looks like a flag":     func() error { return c.Pull(ctx, "--all-tags@sha256:"+id) },
+		"prune with a filter expression":  func() error { return c.PruneImages(ctx, "x=y,until=1h") },
+		"cleanup with a bare label":       func() error { return c.RemoveByLabel(ctx, "sprintfoundry.home") },
+		"service image by tag": func() error {
+			return c.RunService(ctx, ServiceOptions{Name: "db", Volume: "data", Image: "postgres:17", HostPort: 5432, ContainerPort: 5432, MountPath: "/data"})
+		},
+		"service with a relative env file": func() error {
+			return c.RunService(ctx, ServiceOptions{Name: "db", Volume: "data", Image: pinned, HostPort: 5432, ContainerPort: 5432, MountPath: "/data", EnvFile: "env"})
+		},
+		"exec in a container named as flag": func() error { _, err := c.Exec(ctx, "--privileged", nil, "true"); return err },
 	}
 	for _, name := range []string{"", "--privileged", "a b", "x;rm -rf", "../x"} {
-		if _, err := c.Run(ctx, RunOptions{Name: name, Image: strings.Repeat("a", 64), Network: "none"}); err == nil {
-			t.Errorf("container name %q was accepted", name)
+		name := name
+		refused["container name "+name] = func() error {
+			_, err := c.Run(ctx, RunOptions{Name: name, Image: id, Network: "none"})
+			return err
 		}
-		if err := c.NetworkCreate(ctx, name, true, nil); err == nil {
-			t.Errorf("network name %q was accepted", name)
+		refused["network name "+name] = func() error { return c.NetworkCreate(ctx, name, true, nil) }
+	}
+	for what, call := range refused {
+		if err := call(); err == nil {
+			t.Errorf("%s was accepted", what)
 		}
 	}
-	if _, err := c.Run(ctx, RunOptions{Name: "ok", Image: "--volume=/:/host", Network: "none"}); err == nil {
-		t.Error("an image that looks like a flag was accepted")
+	// None of the refused calls may have reached the runtime.
+	if got := calls(); got != "" {
+		t.Errorf("refused options reached the container runtime:\n%s", got)
 	}
-	if _, err := c.Run(ctx, RunOptions{Name: "ok", Image: strings.Repeat("a", 64), Network: "host;x"}); err == nil {
-		t.Error("a network that is not a plain name was accepted")
+
+	// Control: the stub is live, so a valid call does reach it.
+	if err := c.NetworkCreate(ctx, "sf-ok", true, nil); err != nil {
+		t.Fatalf("a valid call failed against the stub: %v", err)
 	}
-	if err := c.ImageRemove(ctx, "--all"); err == nil {
-		t.Error("an image ID that looks like a flag was accepted")
+	if got := calls(); !strings.Contains(got, "network create --internal sf-ok") {
+		t.Errorf("the stub did not record a valid call: %q", got)
 	}
 }
 

@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/sagart-cactus/sprintfoundry/internal/container"
@@ -22,10 +24,11 @@ import (
 
 // environment is what every local command needs.
 type environment struct {
-	home   local.Home
-	cli    container.CLI
-	store  *postgres.Store
-	signer *signer.Demo
+	home    local.Home
+	cli     container.CLI
+	store   *postgres.Store
+	signer  *signer.Demo
+	nameKey []byte
 }
 
 func homeFlag(fs *flag.FlagSet) *string {
@@ -48,6 +51,10 @@ func open(ctx context.Context, homeDir string, logf func(string, ...any)) (*envi
 	if err != nil {
 		return nil, err
 	}
+	nameKey, err := home.NameKey()
+	if err != nil {
+		return nil, err
+	}
 	logf("Starting the local database (first run pulls a small Postgres image)")
 	url, err := home.Postgres(ctx, cli)
 	if err != nil {
@@ -57,20 +64,28 @@ func open(ctx context.Context, homeDir string, logf func(string, ...any)) (*envi
 	if err != nil {
 		return nil, err
 	}
-	return &environment{home: home, cli: cli, store: store, signer: sgn}, nil
+	return &environment{home: home, cli: cli, store: store, signer: sgn, nameKey: nameKey}, nil
 }
 
 // build turns a commit in the controller's store into an image. The build
 // context is the commit's own tree, streamed from the bare repository, and
 // the build has no network.
 func (e *environment) build(ctx context.Context, storeDir, commit string, spec runspec.Spec) (string, error) {
+	// Fetch the listed base images ourselves, so the build finds them locally
+	// and a Dockerfile never decides which registry the runtime talks to.
+	for _, base := range spec.Build.BaseImages {
+		if err := e.cli.Pull(ctx, base); err != nil {
+			return "", err
+		}
+	}
 	var tarball bytes.Buffer
 	if err := gitimport.Archive(ctx, storeDir, commit, &tarball); err != nil {
 		return "", err
 	}
+	labels := e.home.Labels()
+	labels["sprintfoundry.component"] = "candidate"
 	return e.cli.Build(ctx, &tarball, container.BuildOptions{
-		Dockerfile: spec.Build.Dockerfile, Network: spec.Build.Network,
-		Labels: map[string]string{local.ImageLabel: "candidate"},
+		Dockerfile: spec.Build.Dockerfile, Network: spec.Build.Network, Labels: labels,
 	})
 }
 
@@ -149,7 +164,9 @@ func verifyCommand(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
 	env, err := open(ctx, *home, func(string, ...any) {})
 	if err != nil {
@@ -175,7 +192,7 @@ func downCommand(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("down", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	homeDir := homeFlag(fs)
-	purge := fs.Bool("purge", false, "also delete the database's data, its stored password and unused SprintFoundry images")
+	purge := fs.Bool("purge", false, "also delete the database's data, its stored password and the images this home built")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -193,6 +210,6 @@ func downCommand(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "sprintfoundry: %v\n", err)
 		return 1
 	}
-	fmt.Fprintln(stdout, "The local database is stopped.")
+	fmt.Fprintln(stdout, "The local database and any leftovers of interrupted runs are removed.")
 	return 0
 }

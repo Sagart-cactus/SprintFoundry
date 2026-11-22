@@ -43,8 +43,8 @@ func Binary(arch string) ([]byte, error) {
 }
 
 // Build builds the runner image for the runtime's architecture and returns
-// its image ID.
-func Build(ctx context.Context, cli container.CLI) (string, error) {
+// its image ID. The labels are added to the image.
+func Build(ctx context.Context, cli container.CLI, labels map[string]string) (string, error) {
 	arch := cli.Arch(ctx)
 	if arch == "" {
 		arch = runtime.GOARCH
@@ -70,8 +70,11 @@ func Build(ctx context.Context, cli container.CLI) (string, error) {
 	if err := tw.Close(); err != nil {
 		return "", err
 	}
-	id, err := cli.Build(ctx, &buf, container.BuildOptions{Dockerfile: "Dockerfile", Network: "none",
-		Labels: map[string]string{"sprintfoundry.component": "runner"}})
+	all := map[string]string{"sprintfoundry.component": "runner"}
+	for name, value := range labels {
+		all[name] = value
+	}
+	id, err := cli.Build(ctx, &buf, container.BuildOptions{Dockerfile: "Dockerfile", Network: "none", Labels: all})
 	if err != nil {
 		return "", fmt.Errorf("runnerimage: build: %w", err)
 	}

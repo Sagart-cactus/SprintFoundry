@@ -7,6 +7,8 @@ package evaluate
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -48,6 +50,9 @@ type Request struct {
 	RunnerImage string
 	Spec        runspec.Spec
 	Suite       checks.Suite
+	// Labels are added to the containers and the network, so that leftovers
+	// of an interrupted run can be found and removed.
+	Labels map[string]string
 }
 
 // Result is a graded evaluation.
@@ -75,21 +80,36 @@ func run(ctx context.Context, cli container.CLI, req Request, h hooks) (res Resu
 	if !runIDPattern.MatchString(req.RunID) {
 		return Result{}, fmt.Errorf("evaluate: run ID %q is not allowed", req.RunID)
 	}
-	network := "sf-" + req.RunID + "-eval"
-	preview := "sf-" + req.RunID + "-preview"
-	runnerName := "sf-" + req.RunID + "-runner"
+	// Random bytes keep two evaluations apart even if they share a run ID.
+	nonce := make([]byte, 4)
+	if _, err := rand.Read(nonce); err != nil {
+		return Result{}, fmt.Errorf("evaluate: random name: %w", err)
+	}
+	base := "sf-" + req.RunID + "-" + hex.EncodeToString(nonce)
+	network, preview, runnerName := base+"-eval", base+"-preview", base+"-runner"
 	labels := map[string]string{"sprintfoundry.run": req.RunID}
+	for name, value := range req.Labels {
+		labels[name] = value
+	}
 
+	// Clean up only what this call created, with a fresh context so that a
+	// cancelled run still tidies up.
+	var networkCreated, previewCreated bool
 	defer func() {
-		// Clean up with a fresh context so a cancelled run still tidies up.
 		bg := context.WithoutCancel(ctx)
-		_ = cli.Remove(bg, preview, runnerName)
-		_ = cli.NetworkRemove(bg, network)
+		if previewCreated {
+			_ = cli.Remove(bg, preview, runnerName)
+		}
+		if networkCreated {
+			_ = cli.NetworkRemove(bg, network)
+		}
 	}()
 
 	if err := cli.NetworkCreate(ctx, network, true, labels); err != nil {
 		return Result{}, fmt.Errorf("evaluate: create network: %w", err)
 	}
+	networkCreated = true
+	previewCreated = true // set before the call: a failed start can still leave a container
 	if _, err := cli.Run(ctx, container.RunOptions{
 		Name: preview, Image: req.Candidate, Network: network, Env: req.Spec.Preview.Env,
 		Labels: labels, MemoryMB: 512, CPUs: 1, PIDs: 256,

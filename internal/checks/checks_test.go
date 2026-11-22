@@ -477,3 +477,60 @@ checks:
 		}
 	}
 }
+
+func TestEncodedBodiesAndRepeatedHeadersAreInconclusive(t *testing.T) {
+	s := mustParse(t, `
+version: 1
+actors: [member]
+checks:
+  - id: no-archived
+    criterion: privacy
+    http:
+      as: member
+      request: GET /invoices
+      expect:
+        status: 200
+        body_not_contains: INV-0007
+  - id: no-cache
+    criterion: caching
+    http:
+      as: member
+      request: GET /invoices
+      expect:
+        header: { cache-control: no-store }
+`)
+	clean := func() []Observation {
+		return []Observation{
+			{Check: "no-archived", HTTP: &HTTPObservation{Status: 200, Body: "<td>INV-0001</td>"}},
+			{Check: "no-cache", HTTP: &HTTPObservation{Status: 200, Header: map[string]string{"cache-control": "no-store"}}},
+		}
+	}
+	if report, err := Grade(s, clean()); err != nil || report.Result != Passed {
+		t.Fatalf("plain response: %v, %v", report.Result, err)
+	}
+
+	// A compressed body can carry text the raw bytes do not show.
+	encoded := clean()
+	encoded[0].HTTP.ContentEncoding = "deflate"
+	encoded[0].HTTP.Body = "\x78\x9c opaque bytes"
+	report, _ := Grade(s, encoded)
+	if report.Result != Inconclusive || report.Checks[0].Outcome != Inconclusive {
+		t.Errorf("encoded body: result %s, check %s; want inconclusive", report.Result, report.Checks[0].Outcome)
+	}
+
+	// A header sent twice, where the first value satisfies the check and the
+	// second undoes it.
+	repeated := clean()
+	repeated[1].HTTP.RepeatedHeaders = []string{"cache-control"}
+	report, _ = Grade(s, repeated)
+	if report.Result != Inconclusive || report.Checks[1].Outcome != Inconclusive {
+		t.Errorf("repeated header: result %s, check %s; want inconclusive", report.Result, report.Checks[1].Outcome)
+	}
+
+	// An encoding does not matter to a check that never looks at the body.
+	statusOnly := clean()
+	statusOnly[1].HTTP.ContentEncoding = "br"
+	if report, _ = Grade(s, statusOnly); report.Checks[1].Outcome != Passed {
+		t.Errorf("header check on an encoded response: %s, want passed", report.Checks[1].Outcome)
+	}
+}

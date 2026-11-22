@@ -4,6 +4,7 @@
 package evidence
 
 import (
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -91,6 +92,9 @@ type Evaluation struct {
 	FinishedAt time.Time
 	ReportURL  string
 
+	// NameKey is the controller's secret for naming checks in the statement.
+	NameKey []byte
+
 	// ReviewRequired lists why a person must look before this evidence can
 	// back a release, for example "change touches Dockerfile".
 	ReviewRequired []string
@@ -120,16 +124,24 @@ func (e Evaluation) validate() error {
 		return fmt.Errorf("%w: finish time is required", errInvalid)
 	case len(e.Report.Checks) == 0:
 		return fmt.Errorf("%w: report has no checks", errInvalid)
+	case len(e.NameKey) < 16:
+		return fmt.Errorf("%w: the key for naming checks is missing or shorter than 16 bytes", errInvalid)
 	}
 	return nil
 }
 
-// TestName is how a signed statement names a check: its criterion and an
-// opaque hash of the suite digest and the check ID. Check IDs, holdouts
-// included, never leave the controller.
-func TestName(suiteDigest string, g checks.CheckGrade) string {
-	sum := sha256.Sum256([]byte(suiteDigest + "\x00" + g.ID))
-	return g.Criterion + "/" + hex.EncodeToString(sum[:])[:12]
+// TestName is how a signed statement names a check: its criterion and a
+// keyed hash of the suite digest and the check ID. The key never leaves the
+// controller, so a reader of the statement cannot confirm a guessed check ID.
+// A holdout check does not show its criterion either.
+func TestName(key []byte, suiteDigest string, g checks.CheckGrade) string {
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(suiteDigest + "\x00" + g.ID))
+	prefix := g.Criterion
+	if g.Holdout {
+		prefix = "holdout"
+	}
+	return prefix + "/" + hex.EncodeToString(mac.Sum(nil))[:12]
 }
 
 // Outcome values recorded in the run descriptor.
@@ -147,7 +159,7 @@ func NewEvidence(e Evaluation) (Statement, error) {
 	pred := TestResult{URL: e.ReportURL, PassedTests: []string{}, WarnedTests: []string{}, FailedTests: []string{}}
 	failed, inconclusive := 0, 0
 	for _, g := range e.Report.Checks {
-		name := TestName(e.SuiteDigest, g)
+		name := TestName(e.NameKey, e.SuiteDigest, g)
 		switch g.Outcome {
 		case checks.Passed:
 			pred.PassedTests = append(pred.PassedTests, name)

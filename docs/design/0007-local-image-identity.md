@@ -4,7 +4,7 @@ Status: decided on 22 November 2026 after a probe. Changes step 6 of milestone 1
 
 ## Decision
 
-On a laptop, the controller identifies a candidate by its **image ID**: the SHA-256 of the image configuration, which covers every layer. The preview is started from that ID, the controller reads the ID back from the running container before and after evaluation, and the evidence names it as the subject with `digestKind: image-config`.
+On a laptop, the controller identifies a candidate by its **image ID**, as the container runtime reports it. On Podman and on Docker's classic image store that is the SHA-256 of the image configuration, which covers every layer. On Docker's containerd image store it is a manifest digest. Either way it is a content hash the runtime will run exactly. The preview is started from that ID, the controller reads the ID back from the running container before and after evaluation, and the evidence names it as the subject with `digestKind: image-config`.
 
 When a real registry is involved (milestone 2 onward), the subject is the **manifest digest**, because that is what a registry and a deployment refer to.
 

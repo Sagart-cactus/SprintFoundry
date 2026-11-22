@@ -35,6 +35,10 @@ type Spec struct {
 type Build struct {
 	Dockerfile string `yaml:"dockerfile" json:"dockerfile"`
 	Network    string `yaml:"network" json:"network"` // only "none" for now
+	// BaseImages are the only images a Dockerfile may build FROM, each
+	// pinned by digest. The controller pulls them itself; the builder's
+	// Dockerfile never makes the runtime contact a registry of its choosing.
+	BaseImages []string `yaml:"base_images" json:"base_images"`
 }
 
 // Preview says how the candidate is started for evaluation.
@@ -56,7 +60,10 @@ type Actor struct {
 	Headers map[string]string `yaml:"headers" json:"headers"`
 }
 
-var actorName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+var (
+	actorName   = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+	pinnedImage = regexp.MustCompile(`^[a-zA-Z0-9][^@\s]*@sha256:[0-9a-f]{64}$`)
+)
 
 // Parse reads and validates a run spec. Unknown fields are errors.
 func Parse(data []byte) (Spec, error) {
@@ -82,6 +89,11 @@ func (s Spec) validate() error {
 	}
 	if s.Build.Network != "none" {
 		return fmt.Errorf("build.network %q is not supported; use \"none\"", s.Build.Network)
+	}
+	for _, image := range s.Build.BaseImages {
+		if !pinnedImage.MatchString(image) {
+			return fmt.Errorf("build.base_images: %q must be pinned as name@sha256:<64 hex>", image)
+		}
 	}
 	if s.Preview.Port < 1 || s.Preview.Port > 65535 {
 		return fmt.Errorf("preview.port %d is not a port", s.Preview.Port)

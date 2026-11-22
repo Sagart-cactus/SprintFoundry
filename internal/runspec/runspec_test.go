@@ -85,7 +85,10 @@ func TestParseRejects(t *testing.T) {
 		},
 		"bad port":                     func(s string) string { return strings.Replace(s, "port: 8080", "port: 0", 1) },
 		"health without leading slash": func(s string) string { return strings.Replace(s, "path: /healthz", "path: healthz", 1) },
-		"version 2":                    func(s string) string { return strings.Replace(s, "version: 1", "version: 2", 1) },
+		"base image by tag": func(s string) string {
+			return strings.Replace(s, "network: none", "network: none\n  base_images: [\"docker.io/library/python:3.13-alpine\"]", 1)
+		},
+		"version 2": func(s string) string { return strings.Replace(s, "version: 1", "version: 2", 1) },
 	}
 	for name, edit := range tests {
 		t.Run(name, func(t *testing.T) {

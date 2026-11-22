@@ -14,7 +14,7 @@ The builder never sees the checks and never grades its own work.
 
 ## Try the demo
 
-You need Go 1.25 or newer, `make`, and Docker or Podman. Nothing else is installed and no API key is used.
+You need Go 1.25 or newer, `make`, `git`, and Docker or Podman. Nothing else is installed and no API key is used.
 
 ```bash
 make build
@@ -29,7 +29,7 @@ The demo plays two recorded builders against one feature request:
 1. The first implements the feature and also rewrites a test and the Dockerfile. Its checks pass, and it is still held for a person to review.
 2. The second ships a defect. The check runner catches it on that exact image, the builder is told only which criterion failed and what a user would notice, and its repair passes.
 
-It then asks the release gate about all three images, writes an evidence report, and prints two `sprintfoundry verify` commands you can run yourself. The first run takes under a minute once the Postgres and Python base images are pulled.
+It asks the release gate about all three images, writes an evidence report, and prints two `sprintfoundry verify` commands you can run yourself. A run takes under a minute once the Postgres and Python base images are pulled, and you can run it as often as you like.
 
 ```bash
 ./sprintfoundry down --purge
