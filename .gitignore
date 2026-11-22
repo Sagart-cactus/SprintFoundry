@@ -1,0 +1,6 @@
+/sprintfoundry
+/dist/
+/.sprintfoundry/
+*.test
+*.out
+.DS_Store
