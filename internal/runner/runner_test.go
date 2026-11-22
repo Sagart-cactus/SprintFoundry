@@ -114,6 +114,8 @@ func TestRunnerDoesNotFollowRedirects(t *testing.T) {
 	defer srv.Close()
 	j, _ := job(t, srv.URL)
 	j.Checks = []checks.Check{{ID: "old-path", Criterion: "c", HTTP: &checks.HTTPCheck{As: "owner", Request: "GET /old"}}}
+	// The redirect target is on the same host; the point is that the runner
+	// reports the 302 and does not follow it.
 
 	obs := Run(context.Background(), j, nil)
 	if obs[0].HTTP == nil || obs[0].HTTP.Status != http.StatusFound {
@@ -184,7 +186,7 @@ func TestRunnerCapsTheBody(t *testing.T) {
 	j.Checks = j.Checks[:1]
 
 	obs := Run(context.Background(), j, nil)
-	if obs[0].HTTP == nil || len(obs[0].HTTP.Body) != MaxBodyBytes {
-		t.Fatalf("body length = %d, want the cap %d", len(obs[0].HTTP.Body), MaxBodyBytes)
+	if obs[0].HTTP == nil || len(obs[0].HTTP.Body) != MaxBodyBytes || !obs[0].HTTP.Truncated {
+		t.Fatalf("body length = %d, truncated = %v; want the cap %d and the flag", len(obs[0].HTTP.Body), obs[0].HTTP.Truncated, MaxBodyBytes)
 	}
 }

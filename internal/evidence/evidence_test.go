@@ -40,7 +40,7 @@ func TestEvidenceResultFollowsTheChecks(t *testing.T) {
 	}{
 		{"all passed", []checks.Outcome{checks.Passed, checks.Passed}, "PASSED"},
 		{"one failed", []checks.Outcome{checks.Passed, checks.Failed}, "FAILED"},
-		{"one inconclusive", []checks.Outcome{checks.Passed, checks.Inconclusive}, "WARNED"},
+		{"one inconclusive", []checks.Outcome{checks.Passed, checks.Inconclusive}, "FAILED"},
 		{"failed outranks inconclusive", []checks.Outcome{checks.Inconclusive, checks.Failed}, "FAILED"},
 	}
 	for _, tt := range tests {
@@ -80,8 +80,20 @@ func TestEvidenceCarriesEveryBinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if parsed.Subject[0].Digest["sha256"] != h("1") || parsed.Subject[0].Annotations["digestKind"] != "image-config" {
+	if parsed.Subject[0].Digest["sha256"] != h("1") || parsed.Subject[0].Annotations["digestKind"] != "image-config" ||
+		parsed.Subject[0].Annotations["purpose"] != "demo" {
 		t.Errorf("subject = %+v", parsed.Subject[0])
+	}
+	if purpose, err := signer.StatementPurpose(payload); err != nil || purpose != signer.PurposeDemo {
+		t.Errorf("a signer reads purpose %q, %v from the statement", purpose, err)
+	}
+	for _, d := range pred.Configuration {
+		if d.URI == "" && len(d.Digest) == 0 {
+			t.Errorf("descriptor %q has neither a uri nor a digest", d.Name)
+		}
+		if len(d.Digest) > 1 {
+			t.Errorf("descriptor %q mixes digests of different objects: %v", d.Name, d.Digest)
+		}
 	}
 	want := map[string]string{"criteria": h("2"), "check-suite": h("3"), "run-spec": h("4"), "runner-image": h("5")}
 	for name, digest := range want {
@@ -90,12 +102,13 @@ func TestEvidenceCarriesEveryBinding(t *testing.T) {
 			t.Errorf("%s = %+v, want digest %s", name, d, digest)
 		}
 	}
-	src, _ := pred.Config("source")
-	if src.Digest["gitCommit"] != e.Commit || src.Digest["gitTree"] != e.Tree || src.Annotations["repository"] != "local/invoices" {
-		t.Errorf("source = %+v", src)
+	commit, _ := pred.Config("source-commit")
+	tree, _ := pred.Config("source-tree")
+	if commit.Digest["gitCommit"] != e.Commit || tree.Digest["gitTree"] != e.Tree || commit.Annotations["repository"] != "local/invoices" {
+		t.Errorf("source = %+v %+v", commit, tree)
 	}
 	run, _ := pred.Config("run")
-	if run.Annotations["purpose"] != "demo" || run.Annotations["id"] != "run-1" || run.Annotations["finishedAt"] != "2026-11-22T10:00:00Z" {
+	if run.URI != "sprintfoundry:run/run-1" || run.Annotations["outcome"] != "passed" || run.Annotations["finishedAt"] != "2026-11-22T10:00:00Z" {
 		t.Errorf("run = %+v", run)
 	}
 	if run.Annotations["reviewRequired"] != "change touches Dockerfile; change touches test_app.py" {
@@ -136,9 +149,43 @@ func TestEvidenceRefusesIncompleteInput(t *testing.T) {
 	}
 }
 
+func TestSignedStatementsNeverNameChecks(t *testing.T) {
+	e := evaluation(checks.Passed, checks.Failed, checks.Inconclusive)
+	e.Report.Checks[1].Holdout = true
+	st, err := NewEvidence(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := st.Marshal()
+	for _, g := range e.Report.Checks {
+		if strings.Contains(string(payload), g.ID) {
+			t.Errorf("the statement contains the check ID %q", g.ID)
+		}
+	}
+	_, pred, _ := ParseTestResult(payload)
+	if len(pred.WarnedTests) != 0 {
+		t.Errorf("warnedTests = %v; an inconclusive check must not be listed as passed with warnings", pred.WarnedTests)
+	}
+	if len(pred.FailedTests) != 2 || len(pred.PassedTests) != 1 {
+		t.Errorf("passed %v, failed %v", pred.PassedTests, pred.FailedTests)
+	}
+	// The same check under another suite digest gets another name.
+	a, b := TestName("sha256:"+h("3"), e.Report.Checks[0]), TestName("sha256:"+h("4"), e.Report.Checks[0])
+	if a == b || !strings.HasPrefix(a, "c/") {
+		t.Errorf("test names %q and %q", a, b)
+	}
+
+	inconclusive, _ := NewEvidence(evaluation(checks.Passed, checks.Inconclusive))
+	raw, _ := inconclusive.Marshal()
+	_, pred, _ = ParseTestResult(raw)
+	if run, _ := pred.Config("run"); run.Annotations["outcome"] != "inconclusive" {
+		t.Errorf("outcome = %q, want inconclusive", run.Annotations["outcome"])
+	}
+}
+
 func decision(passed bool) Decision {
 	return Decision{
-		ImageName: "local/invoices", ImageDigest: h("1"), DigestKind: ImageConfig,
+		ImageName: "local/invoices", ImageDigest: h("1"), DigestKind: ImageConfig, Purpose: signer.PurposeDemo,
 		VerifierID: "demo:ed25519:" + h("9"), ResourceURI: "local/invoices#demo",
 		PolicyURI: "file:verify-policy.yaml", PolicyDigest: "sha256:" + h("6"),
 		EvidenceDigest: "sha256:" + h("7"), Passed: passed,
@@ -203,6 +250,7 @@ func TestStatementsAreNotInterchangeable(t *testing.T) {
 		"no time":            func(d *Decision) { d.At = time.Time{} },
 		"no resource":        func(d *Decision) { d.ResourceURI = "" },
 		"tag as digest":      func(d *Decision) { d.ImageDigest = "v1.2.3" },
+		"no purpose":         func(d *Decision) { d.Purpose = "" },
 	} {
 		d := decision(true)
 		breakIt(&d)

@@ -163,10 +163,15 @@ func observeHTTP(ctx context.Context, client *http.Client, job Job, check checks
 		return obs
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, MaxBodyBytes))
+	// Read one byte past the cap to learn whether the body was longer.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, MaxBodyBytes+1))
 	if err != nil {
 		obs.Error = "reading the response failed: " + trimError(err)
 		return obs
+	}
+	truncated := len(body) > MaxBodyBytes
+	if truncated {
+		body = body[:MaxBodyBytes]
 	}
 	header := make(map[string]string, len(resp.Header))
 	for name, values := range resp.Header {
@@ -174,7 +179,7 @@ func observeHTTP(ctx context.Context, client *http.Client, job Job, check checks
 			header[strings.ToLower(name)] = values[0]
 		}
 	}
-	obs.HTTP = &checks.HTTPObservation{Status: resp.StatusCode, Header: header, Body: string(body)}
+	obs.HTTP = &checks.HTTPObservation{Status: resp.StatusCode, Header: header, Body: string(body), Truncated: truncated}
 	return obs
 }
 

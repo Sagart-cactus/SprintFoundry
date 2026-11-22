@@ -145,10 +145,15 @@ func writeTree(ctx context.Context, store, base, root string) (string, error) {
 	return git(ctx, nil, "write-tree")
 }
 
+// seedDate fixes the commit time of the seed commit, so its ID is the same in
+// every store and in every builder's scratch copy.
+const seedDate = "2026-01-01T00:00:00Z"
+
 func commitTree(ctx context.Context, store, tree, parent, message string) (string, error) {
-	args := []string{"-c", "user.name=SprintFoundry Demo", "commit-tree", tree, "-m", message}
+	args := []string{"commit-tree", tree, "-m", message}
 	if parent != "" {
 		args = append(args, "-p", parent)
 	}
-	return gitimport.Plumbing(store, "")(ctx, nil, args...)
+	git := gitimport.Plumbing(store, "", "GIT_AUTHOR_DATE="+seedDate, "GIT_COMMITTER_DATE="+seedDate)
+	return git(ctx, nil, args...)
 }

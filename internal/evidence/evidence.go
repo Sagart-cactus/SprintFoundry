@@ -124,36 +124,59 @@ func (e Evaluation) validate() error {
 	return nil
 }
 
+// TestName is how a signed statement names a check: its criterion and an
+// opaque hash of the suite digest and the check ID. Check IDs, holdouts
+// included, never leave the controller.
+func TestName(suiteDigest string, g checks.CheckGrade) string {
+	sum := sha256.Sum256([]byte(suiteDigest + "\x00" + g.ID))
+	return g.Criterion + "/" + hex.EncodeToString(sum[:])[:12]
+}
+
+// Outcome values recorded in the run descriptor.
+const (
+	OutcomePassed       = "passed"
+	OutcomeFailed       = "failed"
+	OutcomeInconclusive = "inconclusive"
+)
+
 // NewEvidence builds the evidence statement for one evaluation.
 func NewEvidence(e Evaluation) (Statement, error) {
 	if err := e.validate(); err != nil {
 		return Statement{}, err
 	}
 	pred := TestResult{URL: e.ReportURL, PassedTests: []string{}, WarnedTests: []string{}, FailedTests: []string{}}
+	failed, inconclusive := 0, 0
 	for _, g := range e.Report.Checks {
+		name := TestName(e.SuiteDigest, g)
 		switch g.Outcome {
 		case checks.Passed:
-			pred.PassedTests = append(pred.PassedTests, g.ID)
+			pred.PassedTests = append(pred.PassedTests, name)
 		case checks.Failed:
-			pred.FailedTests = append(pred.FailedTests, g.ID)
+			failed++
+			pred.FailedTests = append(pred.FailedTests, name)
 		default:
-			pred.WarnedTests = append(pred.WarnedTests, g.ID)
+			// The predicate defines a warned test as one that passed with
+			// warnings, so a check that could not be completed is listed as
+			// failed and the run's outcome says why.
+			inconclusive++
+			pred.FailedTests = append(pred.FailedTests, name)
 		}
 	}
-	// The result is derived from the per-check lists, not copied from the
-	// report, so the two can never disagree.
+	sort.Strings(pred.PassedTests)
+	sort.Strings(pred.FailedTests)
+	// The result is derived from the per-check grades, not copied from the
+	// report's headline, so the two can never disagree.
+	outcome := OutcomePassed
+	pred.Result = "PASSED"
 	switch {
-	case len(pred.FailedTests) > 0:
-		pred.Result = "FAILED"
-	case len(pred.WarnedTests) > 0:
-		pred.Result = "WARNED"
-	default:
-		pred.Result = "PASSED"
+	case failed > 0:
+		outcome, pred.Result = OutcomeFailed, "FAILED"
+	case inconclusive > 0:
+		outcome, pred.Result = OutcomeInconclusive, "FAILED"
 	}
 
 	run := map[string]string{
-		"id":         e.RunID,
-		"purpose":    string(e.Purpose),
+		"outcome":    outcome,
 		"finishedAt": e.FinishedAt.UTC().Format(time.RFC3339),
 	}
 	if len(e.ReviewRequired) > 0 {
@@ -166,9 +189,10 @@ func NewEvidence(e Evaluation) (Statement, error) {
 		{Name: "check-suite", Digest: map[string]string{"sha256": strings.TrimPrefix(e.SuiteDigest, "sha256:")}},
 		{Name: "run-spec", Digest: map[string]string{"sha256": strings.TrimPrefix(e.RunSpecDigest, "sha256:")}},
 		{Name: "runner-image", Digest: map[string]string{"sha256": e.RunnerImage}},
-		{Name: "source", Digest: map[string]string{"gitCommit": e.Commit, "gitTree": e.Tree},
+		{Name: "source-commit", Digest: map[string]string{"gitCommit": e.Commit},
 			Annotations: map[string]string{"repository": e.Repository}},
-		{Name: "run", Annotations: run},
+		{Name: "source-tree", Digest: map[string]string{"gitTree": e.Tree}},
+		{Name: "run", URI: RunURI(e.RunID), Annotations: run},
 	}
 
 	raw, err := json.Marshal(pred)
@@ -176,15 +200,27 @@ func NewEvidence(e Evaluation) (Statement, error) {
 		return Statement{}, fmt.Errorf("evidence: encode predicate: %w", err)
 	}
 	return Statement{
-		Type: StatementType,
-		Subject: []ResourceDescriptor{{
-			Name:        e.ImageName,
-			Digest:      map[string]string{"sha256": e.ImageDigest},
-			Annotations: map[string]string{"digestKind": string(e.DigestKind)},
-		}},
+		Type:          StatementType,
+		Subject:       []ResourceDescriptor{subject(e.ImageName, e.ImageDigest, e.DigestKind, e.Purpose)},
 		PredicateType: TestResultType,
 		Predicate:     raw,
 	}, nil
+}
+
+// RunURI names a run in a statement.
+func RunURI(runID string) string { return "sprintfoundry:run/" + runID }
+
+// subject builds the one subject of a statement. The purpose sits here so
+// that it is part of the signed bytes and a signer can read it.
+func subject(name, digest string, kind DigestKind, purpose signer.Purpose) ResourceDescriptor {
+	return ResourceDescriptor{
+		Name:   name,
+		Digest: map[string]string{"sha256": digest},
+		Annotations: map[string]string{
+			"digestKind":             string(kind),
+			signer.PurposeAnnotation: string(purpose),
+		},
+	}
 }
 
 // Marshal returns the statement's bytes: the DSSE payload.

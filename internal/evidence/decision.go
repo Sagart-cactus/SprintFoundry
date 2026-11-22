@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/sagart-cactus/sprintfoundry/internal/signer"
 )
 
 // VerificationSummary is the SLSA verification summary v1 predicate, limited
@@ -31,6 +33,8 @@ type Decision struct {
 	ImageName   string
 	ImageDigest string
 	DigestKind  DigestKind
+	// Purpose must equal the purpose of the evidence the decision rests on.
+	Purpose signer.Purpose
 
 	// VerifierID is the controller's identity.
 	VerifierID string
@@ -59,6 +63,8 @@ func NewDecision(d Decision) (Statement, error) {
 		return Statement{}, fmt.Errorf("%w: policy and evidence digests must look like sha256:<64 hex>", errInvalid)
 	case d.At.IsZero():
 		return Statement{}, fmt.Errorf("%w: decision time is required", errInvalid)
+	case d.Purpose != signer.PurposeDemo && d.Purpose != signer.PurposeProduction:
+		return Statement{}, fmt.Errorf("%w: purpose %q", errInvalid, d.Purpose)
 	}
 	pred := VerificationSummary{
 		Verifier:     Verifier{ID: d.VerifierID},
@@ -81,12 +87,8 @@ func NewDecision(d Decision) (Statement, error) {
 		return Statement{}, fmt.Errorf("evidence: encode decision: %w", err)
 	}
 	return Statement{
-		Type: StatementType,
-		Subject: []ResourceDescriptor{{
-			Name:        d.ImageName,
-			Digest:      map[string]string{"sha256": d.ImageDigest},
-			Annotations: map[string]string{"digestKind": string(d.DigestKind)},
-		}},
+		Type:          StatementType,
+		Subject:       []ResourceDescriptor{subject(d.ImageName, d.ImageDigest, d.DigestKind, d.Purpose)},
 		PredicateType: VerificationType,
 		Predicate:     raw,
 	}, nil
