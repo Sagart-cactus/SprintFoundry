@@ -59,6 +59,10 @@ type Signer interface {
 	// purpose from the statement itself and returns ErrPurposeNotAllowed if
 	// it may not sign for it, so the purpose is part of what is signed.
 	Sign(ctx context.Context, statement []byte) (Envelope, error)
+	// Verify checks that this signer signed the envelope and returns the
+	// statement. The controller uses it to re-check evidence it reads back
+	// from its own store before relying on it.
+	Verify(env Envelope) (statement []byte, err error)
 }
 
 // PurposeAnnotation is the subject annotation that carries a statement's
@@ -149,6 +153,10 @@ func (d *Demo) Sign(_ context.Context, statement []byte) (Envelope, error) {
 		Payload:     base64.StdEncoding.EncodeToString(statement),
 		Signatures:  []Signature{{KeyID: d.Identity(), Sig: base64.StdEncoding.EncodeToString(sig)}},
 	}, nil
+}
+
+func (d *Demo) Verify(env Envelope) ([]byte, error) {
+	return VerifyEd25519(env, d.PublicKey())
 }
 
 // IsDemoIdentity reports whether an identity belongs to a demo signer.
