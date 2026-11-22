@@ -62,6 +62,38 @@ func TestSandboxRefusesSecrets(t *testing.T) {
 	}
 }
 
+func TestPlaceholdersHoldOnlyThePublicConstant(t *testing.T) {
+	guard := sandbox.Guard{WorkspaceRoot: "/var/lib/sprintfoundry/runs/run-1"}
+
+	spec := safeSpec()
+	spec.Placeholders = []string{"ANTHROPIC_AUTH_TOKEN"}
+	if err := spec.Validate(guard); err != nil {
+		t.Fatalf("a placeholder was refused: %v", err)
+	}
+	env := spec.EffectiveEnv()
+	if env["ANTHROPIC_AUTH_TOKEN"] != sandbox.PlaceholderValue {
+		t.Errorf("placeholder value = %q", env["ANTHROPIC_AUTH_TOKEN"])
+	}
+	if env["LANG"] != "C.UTF-8" {
+		t.Error("EffectiveEnv dropped an ordinary variable")
+	}
+	if _, leaked := spec.Env["ANTHROPIC_AUTH_TOKEN"]; leaked {
+		t.Error("EffectiveEnv changed the spec's own Env")
+	}
+
+	// A caller cannot use the placeholder list to pick the value itself.
+	clash := safeSpec()
+	clash.Placeholders = []string{"HTTPS_PROXY"}
+	if err := clash.Validate(guard); !errors.Is(err, sandbox.ErrUnsafeSpec) {
+		t.Errorf("a name in both lists: err = %v, want ErrUnsafeSpec", err)
+	}
+	odd := safeSpec()
+	odd.Placeholders = []string{"X=real-secret"}
+	if err := odd.Validate(guard); !errors.Is(err, sandbox.ErrUnsafeSpec) {
+		t.Errorf("a placeholder that smuggles a value: err = %v, want ErrUnsafeSpec", err)
+	}
+}
+
 func TestValidateNeedsWorkspaceRoot(t *testing.T) {
 	if err := safeSpec().Validate(sandbox.Guard{}); !errors.Is(err, sandbox.ErrUnsafeSpec) {
 		t.Fatalf("err = %v, want ErrUnsafeSpec", err)

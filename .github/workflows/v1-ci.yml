@@ -51,6 +51,34 @@ jobs:
       - name: Build
         run: go build ./cmd/sprintfoundry
 
+  binaries:
+    # Builds what a release would ship and keeps it as a workflow artifact.
+    # Nothing is published from here.
+    needs: linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Cross-compile
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            os=${target%/*}; arch=${target#*/}
+            GOOS=$os GOARCH=$arch go build -trimpath \
+              -ldflags "-s -w -X main.version=v1-dev+${GITHUB_SHA::12}" \
+              -o "dist/sprintfoundry-$os-$arch" ./cmd/sprintfoundry
+          done
+          (cd dist && sha256sum sprintfoundry-* > SHA256SUMS && cat SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sprintfoundry-binaries
+          path: dist/
+          retention-days: 14
+
   macos:
     # No service containers on macOS runners, so tests that need Postgres skip here.
     runs-on: macos-latest

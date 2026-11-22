@@ -46,9 +46,29 @@ type Spec struct {
 	Image   string // must be pinned by digest: name@sha256:...
 	Workdir string
 	Env     map[string]string
-	Mounts  []Mount
-	Network Network
-	Limits  Limits
+	// Placeholders names credential variables an agent refuses to start
+	// without. Each is set to PlaceholderValue, never to a real credential:
+	// the proxy replaces the header the agent builds from it.
+	Placeholders []string
+	Mounts       []Mount
+	Network      Network
+	Limits       Limits
+}
+
+// PlaceholderValue is the public constant every placeholder variable holds.
+const PlaceholderValue = "placeholder-not-a-key"
+
+// EffectiveEnv returns the environment a backend gives the sandbox: Env plus
+// every placeholder name set to PlaceholderValue.
+func (s Spec) EffectiveEnv() map[string]string {
+	env := make(map[string]string, len(s.Env)+len(s.Placeholders))
+	for name, value := range s.Env {
+		env[name] = value
+	}
+	for _, name := range s.Placeholders {
+		env[name] = PlaceholderValue
+	}
+	return env
 }
 
 // Guard is what the controller knows that a Spec must not contain.
@@ -66,6 +86,7 @@ var ErrUnsafeSpec = errors.New("sandbox: unsafe spec")
 var (
 	pinned      = regexp.MustCompile(`^[^@\s]+@sha256:[0-9a-f]{64}$`)
 	secretNames = regexp.MustCompile(`(?i)(token|secret|passw(or)?d|api[_-]?key|credential|private[_-]?key)`)
+	envName     = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
 )
 
 // Validate refuses a Spec that could hand a credential to untrusted code or
@@ -85,6 +106,14 @@ func (s Spec) Validate(g Guard) error {
 		src := filepath.Clean(m.Source)
 		if !filepath.IsAbs(src) || (src != root && !strings.HasPrefix(src, root+string(filepath.Separator))) {
 			return fmt.Errorf("%w: mount source %q is outside the workspace", ErrUnsafeSpec, m.Source)
+		}
+	}
+	for _, name := range s.Placeholders {
+		if !envName.MatchString(name) {
+			return fmt.Errorf("%w: placeholder %q is not a variable name", ErrUnsafeSpec, name)
+		}
+		if _, clash := s.Env[name]; clash {
+			return fmt.Errorf("%w: %q is both a placeholder and an environment variable", ErrUnsafeSpec, name)
 		}
 	}
 	for name, value := range s.Env {
