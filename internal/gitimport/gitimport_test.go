@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fixture is a bare store holding one parent commit, plus a builder-side
@@ -100,6 +101,28 @@ func TestImportAppliesPatchWithoutWorktree(t *testing.T) {
 	}
 	if bare := f.git(filepath.Dir(f.store), "--git-dir", f.store, "rev-parse", "--is-bare-repository"); bare != "true" {
 		t.Errorf("store is not bare")
+	}
+}
+
+func TestImportWithAFixedDateGivesTheSameCommitAgain(t *testing.T) {
+	f := newFixture(t)
+	patch, tree := f.change("app.txt", "v1\nv2\n")
+	req := f.request(patch, tree)
+	req.Date = time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)
+	first, err := Import(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(1100 * time.Millisecond) // a commit without a fixed date would differ by now
+	second, err := Import(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Commit != second.Commit {
+		t.Errorf("the same change imported twice gave %s and %s", first.Commit, second.Commit)
+	}
+	if date := f.git(filepath.Dir(f.store), "--git-dir", f.store, "log", "-1", "--format=%at %ct", first.Commit); date != "1795428000 1795428000" {
+		t.Errorf("commit dates = %q", date)
 	}
 }
 

@@ -42,3 +42,22 @@ func (s *Store) Registered(ctx context.Context, repository string) (Registration
 	}
 	return r, err
 }
+
+// Registrations lists every registered repository.
+func (s *Store) Registrations(ctx context.Context) ([]Registration, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT repository, criteria_digest, suite_digest, runspec_digest, branch FROM sf_registrations ORDER BY repository`)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: list registrations: %w", err)
+	}
+	defer rows.Close()
+	var out []Registration
+	for rows.Next() {
+		var r Registration
+		if err := rows.Scan(&r.Repository, &r.CriteriaDigest, &r.SuiteDigest, &r.RunSpecDigest, &r.Branch); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}

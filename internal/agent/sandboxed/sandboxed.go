@@ -91,7 +91,9 @@ func (a *Agent) Run(ctx context.Context, _ sandbox.Sandbox, _ string, task agent
 	defer a.Sandbox.Destroy(context.WithoutCancel(ctx), id)
 
 	inputs := map[string][]byte{"repo.bundle": bundle, "task.md": []byte(TaskText(task))}
-	if a.previous != nil {
+	if task.Previous != nil {
+		inputs["previous.patch"] = task.Previous
+	} else if a.previous != nil {
 		inputs["previous.patch"] = a.previous.Patch
 	}
 	if err := a.Sandbox.CopyIn(ctx, id, "/sf", tarOf(inputs)); err != nil {

@@ -147,6 +147,40 @@ One window stays open by design: if a hold is lost while the effect is being per
 | The GitHub adapter validates every reference and cuts status descriptions to GitHub's limit | `TestPullRequestAndStatus`, `TestReferencesAreValidated` |
 | On a real repository: advisory statuses on pull requests, after a squash merge only the release check's image is accepted, and a later pull request check changes neither | `TestGitHubExit` (runs when `SPRINTFOUNDRY_GITHUB_TESTBED` is set) |
 
+## Durable controller
+
+| Rule | Test |
+|---|---|
+| A job is created once per issue and criteria and is its own run | `TestAJobIsCreatedOnceAndIsItsOwnRun` |
+| Only one controller holds a job; a lease can be renewed only by its holder | `TestOnlyOneControllerHoldsAJob` |
+| An expired lease is taken over and the old holder can no longer write | `TestAnExpiredLeaseIsTakenOverAndTheOldHolderCannotWrite` |
+| A round keeps the first change and the first result stored for it | `TestRoundsKeepTheFirstChangeAndResult` |
+| Rounds draw on the evaluation allowance, and builder attempts on the request cap, across jobs | `TestRoundsDrawOnTheAllowanceAndTheRequestCapAcrossJobs` |
+| Importing the same change with the same date gives the same commit | `TestImportWithAFixedDateGivesTheSameCommitAgain` |
+| Killed at any of its steps with two jobs in flight, the controller resumes and every job ends once: one branch, one pull request, no evaluation taken twice | `TestRecoveryAfterAKillAtEveryStep` |
+| A round whose builder attempts ran out goes to a person and reserves nothing more | `TestARoundOutOfBuilderAttemptsGoesToAPerson` |
+| Two controllers holding one job each, one killed at a named step, still finish every job once | `TestTwoControllersAtOnce` |
+| A lease lost between a lookup and the push, or the pull request, stops that call and is not counted as a failure | `TestALeaseLostJustBeforeARemoteCallStopsIt` |
+| Approval to publish does not let a change to protected paths through | `TestApprovalDoesNotPublishAProtectedChange` |
+| A build that fails once is tried again; one that never works goes to a person after three tries, in its first round | `TestABuildThatFailsIsTriedAgain` |
+| Publishing is approved only from `awaiting_publish`, with a fresh claim budget | `TestPublishApprovalOnlyFromAwaitingPublishAndWithAFreshBudget` |
+| `retry` works only for jobs that stopped because of errors; stored reasons are valid UTF-8 without NUL | `TestRequeueOnlyForJobsThatStoppedBecauseOfErrors` |
+| CI configuration the run spec misses still makes a change sensitive | `TestSensitivePathsIncludeCIConfigTheRunSpecMisses` |
+| A passing change waits for a person to approve publishing it; once approved it is pushed once without evaluating again | `TestAPassingChangeWaitsForAPersonToPublishIt` |
+| A stored commit its stored change does not import to stops the job before anything is pushed | `TestAStoredCommitThatDoesNotMatchItsChangeStopsTheJob` |
+| A builder or an evaluation that fails once because of the machine is tried again without spending the round | `TestAMachineHiccupIsTriedAgain` |
+| CI configuration counts as a protected path whatever the run spec says | `TestCIConfigIsAlwaysProtected` |
+| Fetches into one store take turns across processes | `TestStoreLockIsExclusiveAndGivesUpWithItsContext` |
+| Text from issues, builders and job reasons is escaped before it reaches the terminal | `TestPrintableEscapesWhatATerminalWouldActOn`, `TestShellQuote` |
+| A passing change to protected paths or CI configuration is never pushed; holdout, inconclusive, a builder that never hands over a change and the repair limit end with a person and post nothing | `TestJobOutcomesThatGoToAPerson` |
+| A branch already at another commit is not moved and sends the job to a person at once | `TestABranchAlreadyThereStopsTheJob` |
+| A job that keeps failing goes to a person after three tries without evaluating again, and `retry` queues it again; one the controller keeps dying on goes to a person after ten claims | `TestAJobThatKeepsFailingGoesToAPerson`, `TestAJobTheControllerKeepsDyingOnGoesToAPerson` |
+| A controller that lost its lease stores nothing, even for a round the new holder stored | `TestALostLeaseStoresNothingEvenForAStoredRound` |
+| Failures are counted, with a backoff, and permanent errors end the job at once | `TestFailuresSendAJobToAPersonAfterALimit` |
+| Evidence and the round result are stored together, by the leaseholder only | `TestEvidenceAndRoundResultAreStoredTogether` |
+| The push only creates the job's branch, never moves one | `TestPushBranchOnlyCreatesTheBranch` |
+| `approve` refuses issue text a terminal would show differently; job IDs depend on the repository | `TestIssueCriteriaRefusesTextATerminalWouldHide`, `TestJobIDsDependOnTheRepository` |
+
 ## The whole slice
 
 `TestDemoEndToEnd` runs the demo three times in a row on a real container runtime and then asks the gate from a separate command. It is the milestone 1 exit test. In CI it runs on Linux with Docker.

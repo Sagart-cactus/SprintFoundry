@@ -81,6 +81,36 @@ After merging, check the merged commit. Its image is the release candidate, and 
 
 Both use your `gh` login. The token stays with SprintFoundry and never reaches a sandbox. See `docs/design/0008-github-with-the-operators-login.md`.
 
+## Build from GitHub issues
+
+Label an issue `sprintfoundry`. Nothing happens until you approve it: read the text SprintFoundry would freeze as the criteria, then approve exactly that text with the check suite you wrote for it:
+
+```bash
+./sprintfoundry approve --repo owner/app --issue 42 --checks checks.yaml
+```
+
+```bash
+./sprintfoundry approve --repo owner/app --issue 42 --checks checks.yaml --digest sha256:...
+```
+
+Run the controller. It builds each approved issue with Codex CLI in a sandbox and checks every candidate on its exact image. Stop or kill it at any point; on the next start each job carries on from where it was:
+
+```bash
+./sprintfoundry serve --workers 2
+```
+
+A passing change waits for you: pushing it runs the repository's own CI on it. Look at the commit, then let the controller push the branch and open the pull request (or start `serve --auto-publish` to skip this):
+
+```bash
+./sprintfoundry jobs
+```
+
+```bash
+./sprintfoundry publish --job job-42-1a2b3c4d
+```
+
+A job that stopped because of errors, for example during an outage, can be queued again with `./sprintfoundry retry --job ID`. See `docs/design/0009-durable-controller.md`.
+
 ## Layout
 
 | Path | What it holds |

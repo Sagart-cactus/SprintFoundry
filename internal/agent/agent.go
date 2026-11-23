@@ -25,6 +25,10 @@ type Task struct {
 	Feedback []Feedback
 	// Workdir is the repository checkout inside the sandbox.
 	Workdir string
+	// Previous is the patch of the previous round, against the same
+	// starting commit, when the controller keeps it. A builder that keeps
+	// its own previous change uses this one instead.
+	Previous []byte
 }
 
 // Change is what a builder hands back: data only.

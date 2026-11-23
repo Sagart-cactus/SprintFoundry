@@ -18,8 +18,7 @@ var ErrNotFound = errors.New("postgres: not found")
 // content again is a no-op: inputs are addressed by what they contain and can
 // never be changed in place.
 func (s *Store) PutInput(ctx context.Context, kind string, content []byte) (string, error) {
-	sum := sha256.Sum256(content)
-	digest := "sha256:" + hex.EncodeToString(sum[:])
+	digest := Digest(content)
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO sf_inputs (digest, kind, content) VALUES ($1, $2, $3) ON CONFLICT (digest) DO NOTHING`,
 		digest, kind, content)
@@ -27,6 +26,12 @@ func (s *Store) PutInput(ctx context.Context, kind string, content []byte) (stri
 		return "", fmt.Errorf("postgres: store input: %w", err)
 	}
 	return digest, nil
+}
+
+// Digest is the address PutInput stores content under.
+func Digest(content []byte) string {
+	sum := sha256.Sum256(content)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 // PutInputAs stores a frozen input under a digest computed by the caller,

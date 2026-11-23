@@ -21,6 +21,11 @@ Commands:
   run       Run Codex CLI on a repository in a keyless sandbox, check and sign
   register  Register the criteria, checks and run spec for a GitHub repository
   check     Check a pull request or a merged commit and post a commit status
+  approve   Approve a GitHub issue's text as the criteria of a job
+  serve     Run approved jobs; a job survives the controller being stopped
+  jobs      List jobs and where each one stands
+  publish   Approve pushing a job's passing change and opening its pull request
+  retry     Queue a job that stopped because of errors again
   verify    Ask whether an image may be released under a policy
   down      Stop the local database (add --purge to delete its data)
   version   Print the version
@@ -48,6 +53,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return registerCommand(args[1:], stdout, stderr)
 	case "check":
 		return checkCommand(args[1:], stdout, stderr)
+	case "approve":
+		return approveCommand(args[1:], stdout, stderr)
+	case "serve":
+		return serveCommand(args[1:], stdout, stderr)
+	case "jobs":
+		return jobsCommand(args[1:], stdout, stderr)
+	case "publish":
+		return publishCommand(args[1:], stdout, stderr)
+	case "retry":
+		return retryCommand(args[1:], stdout, stderr)
 	case "verify":
 		return verifyCommand(args[1:], stdout, stderr)
 	case "down":

@@ -236,7 +236,7 @@ func runLive(opts liveOptions, out io.Writer) (controller.Result, error) {
 	if err != nil {
 		return controller.Result{}, err
 	}
-	forwarded := net.Forwarded(ctx)
+	forwarded := net.Forwarded(context.WithoutCancel(ctx))
 	if result.Reason != "" {
 		step("Result: %s. %s", result.State, result.Reason)
 	} else {
