@@ -8,6 +8,7 @@ import (
 	"github.com/sagart-cactus/sprintfoundry/internal/evidence"
 	"github.com/sagart-cactus/sprintfoundry/internal/gitimport"
 	"github.com/sagart-cactus/sprintfoundry/internal/signer"
+	"github.com/sagart-cactus/sprintfoundry/internal/store/postgres"
 )
 
 // CheckRequest is a commit someone else wrote, already in the controller's
@@ -31,21 +32,33 @@ type CheckRequest struct {
 	NameKey     []byte
 	Labels      map[string]string
 
-	// Allowance bounds how many checks may run for these criteria in this
-	// repository, across all pull requests, because each check tells its
-	// author which criteria failed. Zero means the check is not counted, as
-	// for a release check after merge, whose result goes to no author.
+	// PullRequest marks a check of a pull request's head. Otherwise the
+	// commit is a release candidate after merge.
+	PullRequest bool
+	// Allowance bounds how many pull request checks may run for these
+	// criteria in this repository, across all pull requests, because each
+	// tells its author which criteria failed. A release check tells no
+	// author anything and is not counted.
 	Allowance int
 }
 
 // Check evaluates one commit and returns a result with one round.
+//
+// A pull request check is recorded only once the allowance granted it, and
+// its evidence is marked as such: it never supersedes a release check and
+// never backs a release.
 func Check(ctx context.Context, d Deps, req CheckRequest) (Result, error) {
-	in, err := freeze(ctx, d, req.RunID, req.Repository, req.Criteria, req.Suite, req.RunSpec)
+	in, err := storeInputs(ctx, d, req.RunID, req.Criteria, req.Suite, req.RunSpec)
 	if err != nil {
 		return Result{}, err
 	}
 	res := Result{RunID: req.RunID, CriteriaDigest: in.criteria, SuiteDigest: in.suiteDigest, RunSpecDigest: in.specDigest}
-	if req.Allowance > 0 {
+	kind, check := postgres.RunRelease, evidence.CheckRelease
+	if req.PullRequest {
+		kind, check = postgres.RunPullRequest, evidence.CheckPullRequest
+		if req.Allowance < 1 {
+			return Result{}, fmt.Errorf("controller: a pull request check needs an allowance")
+		}
 		allowed, err := d.Store.TakeEvaluation(ctx, req.Repository, in.criteria, req.Allowance)
 		if err != nil {
 			return Result{}, err
@@ -56,6 +69,9 @@ func Check(ctx context.Context, d Deps, req CheckRequest) (Result, error) {
 			return res, nil
 		}
 	}
+	if err := beginRun(ctx, d, req.RunID, req.Repository, kind, in); err != nil {
+		return Result{}, err
+	}
 	tree, err := gitimport.Plumbing(req.StoreDir, "")(ctx, nil, "rev-parse", "--verify", req.Commit+"^{tree}")
 	if err != nil {
 		return Result{}, fmt.Errorf("controller: %s is not in the store: %w", req.Commit, err)
@@ -65,6 +81,7 @@ func Check(ctx context.Context, d Deps, req CheckRequest) (Result, error) {
 		Base: req.Base, Commit: req.Commit, Tree: tree,
 		Purpose: req.Purpose, ImageName: req.ImageName, DigestKind: req.DigestKind,
 		RunnerImage: req.RunnerImage, ReportURL: req.ReportURL, NameKey: req.NameKey, Labels: req.Labels,
+		Check: check,
 	})
 	if err != nil {
 		return Result{}, err
@@ -72,6 +89,7 @@ func Check(ctx context.Context, d Deps, req CheckRequest) (Result, error) {
 	res.Rounds = []Round{round}
 	if stop != "" {
 		res.State, res.Reason = NeedsOwner, stop
+		res.Incomplete = strings.HasPrefix(stop, stopEvaluationIncomplete)
 		return res, nil
 	}
 	round.Feedback = round.Report.BuilderFeedback()

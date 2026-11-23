@@ -80,6 +80,10 @@ func Decide(ctx context.Context, store EvidenceStore, sgn signer.Signer, policy 
 		run, _ := result.Config("run")
 		refuse("the evaluation did not pass (outcome: %s)", run.Annotations["outcome"])
 	}
+	if run, _ := result.Config("run"); evidence.CheckKind(run.Annotations["check"]) != evidence.CheckBuilder &&
+		evidence.CheckKind(run.Annotations["check"]) != evidence.CheckRelease {
+		refuse("the evidence is from a %q check; only a builder run or a release check of the merged commit can back a release", run.Annotations["check"])
+	}
 	if row.Superseded {
 		refuse("a newer run for the same criteria has started, so this result is superseded")
 	}

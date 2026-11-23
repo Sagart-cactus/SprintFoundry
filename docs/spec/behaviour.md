@@ -136,10 +136,16 @@ One window stays open by design: if a hold is lost while the effect is being per
 | Rule | Test |
 |---|---|
 | A commit someone else wrote is built and checked against the registered inputs; a failure names criteria and symptoms only; protected paths need a person | `TestCheckOfAPullRequestHead` |
-| Pull request checks draw on an allowance per repository and criteria; release checks are not counted | `TestCheckAllowance` |
+| Pull request checks draw on an allowance per repository and criteria, and a refused check records no run; release checks are not counted | `TestCheckAllowance` |
+| A check whose app cannot be reached is inconclusive; a failing holdout tells the author nothing | `TestCheckOfAnAppThatCannotBeReachedOrFailsAHoldout` |
+| Evidence says whether a builder run, a pull request check or a release check produced it | `TestEvidenceRecordsWhatKindOfCheckItWas` |
+| A pull request check supersedes nothing and its evidence is never an image's evidence for a release | `TestPullRequestChecksNeitherSupersedeNorBackARelease` |
+| The gate refuses pull request evidence from the signed statement alone | `TestControllerRefusesToAuthorise` |
+| Only pull requests to the registered branch are checked, measured from where they left it; a release check is only for a merged commit on that branch, measured from its pull request's base | `TestResolveCheck` |
+| A failed release check names nothing; an evaluation that could not run posts `error` | `TestCheckStatus` |
 | A repository's registered inputs can be replaced only by registering again, and only with stored inputs | `TestRegistration` |
 | The GitHub adapter validates every reference and cuts status descriptions to GitHub's limit | `TestPullRequestAndStatus`, `TestReferencesAreValidated` |
-| On a real repository: advisory statuses on pull requests, and after a squash merge only the release check's image is accepted | `TestGitHubExit` (runs when `SPRINTFOUNDRY_GITHUB_TESTBED` is set) |
+| On a real repository: advisory statuses on pull requests, after a squash merge only the release check's image is accepted, and a later pull request check changes neither | `TestGitHubExit` (runs when `SPRINTFOUNDRY_GITHUB_TESTBED` is set) |
 
 ## The whole slice
 

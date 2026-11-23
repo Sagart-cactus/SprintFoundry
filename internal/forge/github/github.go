@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"regexp"
@@ -45,6 +46,8 @@ func TokenFromGH(ctx context.Context) (string, error) {
 var (
 	repoName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$`)
 	sha      = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	// refName is a branch name or a commit ID, as the compare API takes.
+	refName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$`)
 )
 
 // ValidRepo reports whether s looks like owner/name.
@@ -161,6 +164,74 @@ func (c *Client) FirstParent(ctx context.Context, repo, commit string) (string, 
 		return "", fmt.Errorf("github: %s has no parent", commit[:12])
 	}
 	return raw.Parents[0].SHA, nil
+}
+
+// DefaultBranch returns the repository's default branch.
+func (c *Client) DefaultBranch(ctx context.Context, repo string) (string, error) {
+	if !ValidRepo(repo) {
+		return "", fmt.Errorf("github: %q is not a repository", repo)
+	}
+	var raw struct {
+		DefaultBranch string `json:"default_branch"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/repos/"+repo, nil, &raw); err != nil {
+		return "", err
+	}
+	if raw.DefaultBranch == "" {
+		return "", fmt.Errorf("github: %s has no default branch", repo)
+	}
+	return raw.DefaultBranch, nil
+}
+
+// Comparison is how head relates to base.
+type Comparison struct {
+	// Status is ahead, behind, identical or diverged: head relative to base.
+	Status    string
+	MergeBase string
+}
+
+// Compare compares two commits or branches of a repository.
+func (c *Client) Compare(ctx context.Context, repo, base, head string) (Comparison, error) {
+	if !ValidRepo(repo) || !refName.MatchString(base) || !refName.MatchString(head) {
+		return Comparison{}, fmt.Errorf("github: %q %q...%q is not a comparison", repo, base, head)
+	}
+	var raw struct {
+		Status    string `json:"status"`
+		MergeBase struct {
+			SHA string `json:"sha"`
+		} `json:"merge_base_commit"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/repos/"+repo+"/compare/"+url.PathEscape(base)+"..."+url.PathEscape(head)+"?per_page=1", nil, &raw); err != nil {
+		return Comparison{}, err
+	}
+	if !sha.MatchString(raw.MergeBase.SHA) {
+		return Comparison{}, fmt.Errorf("github: comparison has no merge base")
+	}
+	return Comparison{Status: raw.Status, MergeBase: raw.MergeBase.SHA}, nil
+}
+
+// MergedPullRequest returns the pull request that was merged as commit: the
+// one whose merge commit it is.
+func (c *Client) MergedPullRequest(ctx context.Context, repo, commit string) (PullRequest, bool, error) {
+	if !ValidRepo(repo) || !sha.MatchString(commit) {
+		return PullRequest{}, false, fmt.Errorf("github: %q %q is not a commit reference", repo, commit)
+	}
+	var raw []struct {
+		Number int `json:"number"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/repos/"+repo+"/commits/"+commit+"/pulls", nil, &raw); err != nil {
+		return PullRequest{}, false, err
+	}
+	for _, r := range raw {
+		pr, err := c.GetPullRequest(ctx, repo, r.Number)
+		if err != nil {
+			return PullRequest{}, false, err
+		}
+		if pr.Merged && pr.MergeSHA == commit {
+			return pr, true, nil
+		}
+	}
+	return PullRequest{}, false, nil
 }
 
 // CreatePullRequest opens a pull request and returns its number. The

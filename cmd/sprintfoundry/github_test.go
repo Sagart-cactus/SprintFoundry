@@ -101,7 +101,8 @@ func TestGitHubExit(t *testing.T) {
 	demoDir := filepath.Join("..", "..", "internal", "demo")
 	var out bytes.Buffer
 	if code := run([]string{"register", "--home", home.Dir, "--repo", repo, "--criteria", filepath.Join(demoDir, "criteria.md"),
-		"--checks", filepath.Join(demoDir, "checks.yaml"), "--runspec", filepath.Join(demoDir, "runspec.yaml")}, &out, &out); code != 0 {
+		"--checks", filepath.Join(demoDir, "checks.yaml"), "--runspec", filepath.Join(demoDir, "runspec.yaml"),
+		"--branch", stamp + "-base"}, &out, &out); code != 0 {
 		t.Fatalf("register: %s", out.String())
 	}
 
@@ -206,6 +207,23 @@ func TestGitHubExit(t *testing.T) {
 	}
 	if code := verify(strings.Repeat("e", 64)); code != 1 {
 		t.Errorf("an image nobody checked: verify exit %d, want 1", code)
+	}
+
+	// 5. A pull request check after the release check neither withdraws the
+	// candidate's verdict nor gets its own head image accepted.
+	out.Reset()
+	again, err := runCheck(home.Dir, repo, defectPR, "", 10, &out)
+	if err != nil || again.State == controller.Passed || len(again.Rounds) != 1 {
+		t.Fatalf("second check of the defective pull request: %v, %s (%s)", err, again.State, again.Reason)
+	}
+	if code := verify(candidate); code != 0 {
+		t.Errorf("the release candidate after a later pull request check: verify exit %d, want 0", code)
+	}
+	if code := verify(again.Rounds[0].Image); code != 1 {
+		t.Errorf("a pull request head's image: verify exit %d, want 1", code)
+	}
+	if code := verify(good.Rounds[0].Image); code != 1 && good.Rounds[0].Image != candidate {
+		t.Errorf("the good pull request's own image: verify exit %d, want 1", code)
 	}
 }
 

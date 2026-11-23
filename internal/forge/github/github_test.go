@@ -36,9 +36,40 @@ func fakeGitHub(t *testing.T, statuses *[]Status) *Client {
 	mux.HandleFunc("GET /repos/o/r/commits/"+head, func(w http.ResponseWriter, _ *http.Request) {
 		io.WriteString(w, `{"parents":[{"sha":"`+base+`"}]}`)
 	})
+	mux.HandleFunc("GET /repos/o/r", func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, `{"default_branch":"main"}`)
+	})
+	mux.HandleFunc("GET /repos/o/r/compare/main..."+head, func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, `{"status":"behind","merge_base_commit":{"sha":"`+head+`"}}`)
+	})
+	mux.HandleFunc("GET /repos/o/r/commits/"+head+"/pulls", func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, `[{"number":7},{"number":8}]`)
+	})
+	mux.HandleFunc("GET /repos/o/r/pulls/8", func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, `{"number":8,"state":"closed","merged":true,"merge_commit_sha":"`+head+`",
+			"head":{"sha":"3333333333333333333333333333333333333333"},"base":{"ref":"main","sha":"`+base+`"}}`)
+	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return &Client{Base: srv.URL, Token: "tok"}
+}
+
+func TestDefaultBranchCompareAndMergedPullRequest(t *testing.T) {
+	c := fakeGitHub(t, &[]Status{})
+	ctx := context.Background()
+	if b, err := c.DefaultBranch(ctx, "o/r"); err != nil || b != "main" {
+		t.Fatalf("default branch = %q, %v", b, err)
+	}
+	if cmp, err := c.Compare(ctx, "o/r", "main", head); err != nil || cmp.Status != "behind" || cmp.MergeBase != head {
+		t.Fatalf("compare = %+v, %v", cmp, err)
+	}
+	pr, found, err := c.MergedPullRequest(ctx, "o/r", head)
+	if err != nil || !found || pr.Number != 8 || pr.BaseSHA != base {
+		t.Fatalf("merged pull request = %+v %v %v", pr, found, err)
+	}
+	if _, err := c.Compare(ctx, "o/r", "main", "../../x"); err == nil {
+		t.Error("a path was accepted as a ref")
+	}
 }
 
 func TestPullRequestAndStatus(t *testing.T) {

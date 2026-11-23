@@ -93,7 +93,7 @@ func (f *fixture) evaluation() evidence.Evaluation {
 		RunnerImage: h("5"), Repository: "local/invoices",
 		Commit: strings.Repeat("a", 40), Tree: strings.Repeat("b", 40),
 		RunID: "run-1", Purpose: signer.PurposeDemo, FinishedAt: now.Add(-time.Hour),
-		NameKey: []byte("a controller secret of 32 bytes!"),
+		NameKey: []byte("a controller secret of 32 bytes!"), Check: evidence.CheckBuilder,
 		Report: checks.Report{Result: checks.Passed, Checks: []checks.CheckGrade{
 			{ID: "export-owner", Criterion: "export-csv", Outcome: checks.Passed},
 			{ID: "export-denied", Criterion: "export-owner-only", Outcome: checks.Passed},
@@ -159,6 +159,9 @@ func TestControllerRefusesToAuthorise(t *testing.T) {
 		{"evidence older than the policy allows", func(e *evidence.Evaluation) { e.FinishedAt = now.Add(-25 * time.Hour) }, nil, "older than 24h"},
 		{"evidence dated in the future", func(e *evidence.Evaluation) { e.FinishedAt = now.Add(2 * time.Hour) }, nil, "dated in the future"},
 		{"a change that needs a person's review", func(e *evidence.Evaluation) { e.ReviewRequired = []string{"change touches Dockerfile"} }, nil, "a person must review"},
+		// The store leaves pull request evidence out, but the signed statement
+		// alone must be enough to refuse it.
+		{"evidence from a pull request check", func(e *evidence.Evaluation) { e.Check = evidence.CheckPullRequest }, nil, `from a "pull-request" check`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -119,6 +119,9 @@ type Result struct {
 	SuiteDigest    string
 	RunSpecDigest  string
 	Rounds         []Round
+	// Incomplete is set when the evaluation could not run at all, for a
+	// reason outside the change, so the result says nothing about it.
+	Incomplete bool
 }
 
 var runIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,30}$`)
@@ -180,6 +183,7 @@ func Run(ctx context.Context, d Deps, req Request) (Result, error) {
 			Base: req.Parent, Commit: imported.Commit, Tree: imported.Tree,
 			Purpose: req.Purpose, ImageName: req.ImageName, DigestKind: req.DigestKind,
 			RunnerImage: req.RunnerImage, ReportURL: req.ReportURL, NameKey: req.NameKey, Labels: req.Labels,
+			Check: evidence.CheckBuilder,
 		})
 		if err != nil {
 			return Result{}, err
@@ -231,9 +235,49 @@ type frozen struct {
 // freeze checks the three inputs, stores them by digest and records the run.
 // Nothing is built for a run whose inputs are not all frozen.
 func freeze(ctx context.Context, d Deps, runID, repository string, criteria, suiteText, specText []byte) (frozen, error) {
+	in, err := storeInputs(ctx, d, runID, criteria, suiteText, specText)
+	if err != nil {
+		return frozen{}, err
+	}
+	if err := beginRun(ctx, d, runID, repository, postgres.RunBuilder, in); err != nil {
+		return frozen{}, err
+	}
+	return in, nil
+}
+
+// storeInputs checks the run ID and the three inputs and stores the inputs
+// by digest, without recording a run.
+func storeInputs(ctx context.Context, d Deps, runID string, criteria, suiteText, specText []byte) (frozen, error) {
 	if !runIDPattern.MatchString(runID) {
 		return frozen{}, fmt.Errorf("controller: run ID %q is not allowed", runID)
 	}
+	in, err := ParseInputs(criteria, suiteText, specText)
+	if err != nil {
+		return frozen{}, err
+	}
+	if in.criteria, err = d.Store.PutInput(ctx, "criteria", criteria); err != nil {
+		return frozen{}, err
+	}
+	if err := d.Store.PutInputAs(ctx, "check-suite", in.suiteDigest, suiteText); err != nil {
+		return frozen{}, err
+	}
+	if err := d.Store.PutInputAs(ctx, "run-spec", in.specDigest, specText); err != nil {
+		return frozen{}, err
+	}
+	return in, nil
+}
+
+// beginRun records the run. A builder run or a release check supersedes
+// older evidence for the same criteria; a pull request check does not.
+func beginRun(ctx context.Context, d Deps, runID, repository, kind string, in frozen) error {
+	return d.Store.BeginRun(ctx, postgres.Run{ID: runID, Repository: repository, Kind: kind,
+		CriteriaDigest: in.criteria, SuiteDigest: in.suiteDigest, RunSpecDigest: in.specDigest})
+}
+
+// ParseInputs checks the three inputs: criteria that are not empty, a check
+// suite and a run spec that parse, and every actor the suite uses defined in
+// the run spec. The returned value's criteria digest is left empty.
+func ParseInputs(criteria, suiteText, specText []byte) (frozen, error) {
 	if len(bytes.TrimSpace(criteria)) == 0 {
 		return frozen{}, fmt.Errorf("%w: no criteria", ErrInputs)
 	}
@@ -256,22 +300,11 @@ func freeze(ctx context.Context, d Deps, runID, repository string, criteria, sui
 			return frozen{}, fmt.Errorf("%w: check suite uses actor %q, which the run spec does not define", ErrInputs, as)
 		}
 	}
-	in := frozen{suite: suite, spec: spec, suiteDigest: suite.Digest(), specDigest: spec.Digest()}
-	if in.criteria, err = d.Store.PutInput(ctx, "criteria", criteria); err != nil {
-		return frozen{}, err
-	}
-	if err := d.Store.PutInputAs(ctx, "check-suite", in.suiteDigest, suiteText); err != nil {
-		return frozen{}, err
-	}
-	if err := d.Store.PutInputAs(ctx, "run-spec", in.specDigest, specText); err != nil {
-		return frozen{}, err
-	}
-	if err := d.Store.BeginRun(ctx, postgres.Run{ID: runID, Repository: repository,
-		CriteriaDigest: in.criteria, SuiteDigest: in.suiteDigest, RunSpecDigest: in.specDigest}); err != nil {
-		return frozen{}, err
-	}
-	return in, nil
+	return frozen{suite: suite, spec: spec, suiteDigest: suite.Digest(), specDigest: spec.Digest()}, nil
 }
+
+// Spec returns the parsed run spec.
+func (f frozen) Spec() runspec.Spec { return f.spec }
 
 // commitRequest is one commit, already in the store, to build and evaluate.
 type commitRequest struct {
@@ -287,6 +320,7 @@ type commitRequest struct {
 	ReportURL          string
 	NameKey            []byte
 	Labels             map[string]string
+	Check              evidence.CheckKind
 }
 
 // evaluateCommit checks the Dockerfile, builds the commit, evaluates the
@@ -326,7 +360,7 @@ func evaluateCommit(ctx context.Context, d Deps, in frozen, r commitRequest) (ro
 		RunnerImage: r.RunnerImage, Spec: in.spec, Suite: in.suite, Labels: r.Labels,
 	})
 	if err != nil {
-		return round, "the evaluation could not be completed: " + err.Error(), nil
+		return round, stopEvaluationIncomplete + err.Error(), nil
 	}
 	round.Report = eval.Report
 	round.HoldoutFailed = eval.Report.HoldoutFailed()
@@ -340,7 +374,7 @@ func evaluateCommit(ctx context.Context, d Deps, in frozen, r commitRequest) (ro
 		CriteriaDigest: in.criteria, SuiteDigest: in.suiteDigest, RunSpecDigest: in.specDigest,
 		RunnerImage: r.RunnerImage, Repository: r.Repository, Commit: r.Commit, Tree: r.Tree,
 		RunID: r.RunID, Purpose: r.Purpose, FinishedAt: d.Now(), ReportURL: r.ReportURL,
-		ReviewRequired: review, Report: eval.Report, NameKey: r.NameKey,
+		ReviewRequired: review, Report: eval.Report, NameKey: r.NameKey, Check: r.Check,
 	})
 	if err != nil {
 		return round, "", err
@@ -365,7 +399,7 @@ func evaluateCommit(ctx context.Context, d Deps, in frozen, r commitRequest) (ro
 		Digest: round.EvidenceDigest, RunID: r.RunID, Round: r.Number, Repository: r.Repository,
 		ImageDigest: round.Image, DigestKind: string(r.DigestKind),
 		CriteriaDigest: in.criteria, SuiteDigest: in.suiteDigest, RunSpecDigest: in.specDigest,
-		Purpose: string(r.Purpose), Outcome: round.Outcome,
+		Purpose: string(r.Purpose), Outcome: round.Outcome, Check: string(r.Check),
 		ReviewRequired: runInfo.Annotations["reviewRequired"], Envelope: stored,
 	}); err != nil {
 		return round, "", err
@@ -373,6 +407,10 @@ func evaluateCommit(ctx context.Context, d Deps, in frozen, r commitRequest) (ro
 	logf("Round %d: evaluation %s, evidence signed (%s)", r.Number, round.Outcome, short(round.EvidenceDigest))
 	return round, "", nil
 }
+
+// stopEvaluationIncomplete starts the reason when the evaluation itself
+// could not run, which says nothing about the commit.
+const stopEvaluationIncomplete = "the evaluation could not be completed: "
 
 func short(digest string) string {
 	if len(digest) > 19 {

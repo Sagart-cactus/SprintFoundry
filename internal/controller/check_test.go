@@ -33,7 +33,7 @@ func (w *world) check(id, commit string, allowance int) Result {
 		RunID: id, Repository: w.req.Repository, StoreDir: w.req.StoreDir, Base: w.req.Parent, Commit: commit,
 		Criteria: w.req.Criteria, Suite: w.req.Suite, RunSpec: w.req.RunSpec,
 		Purpose: w.req.Purpose, ImageName: w.req.ImageName, DigestKind: w.req.DigestKind,
-		RunnerImage: w.req.RunnerImage, NameKey: w.req.NameKey, Allowance: allowance,
+		RunnerImage: w.req.RunnerImage, NameKey: w.req.NameKey, Allowance: allowance, PullRequest: allowance > 0,
 	})
 	if err != nil {
 		w.t.Fatalf("Check: %v", err)
@@ -66,6 +66,23 @@ func TestCheckOfAPullRequestHead(t *testing.T) {
 	if len(w.store.evidence) != 3 {
 		t.Errorf("evidence rows = %d, want one per check", len(w.store.evidence))
 	}
+	for i, row := range w.store.evidence {
+		if row.Check != "pull-request" || w.store.runs[i].Kind != "pull-request" {
+			t.Errorf("pull request check %d recorded as run kind %q, evidence kind %q", i, w.store.runs[i].Kind, row.Check)
+		}
+	}
+}
+
+func TestCheckOfAnAppThatCannotBeReachedOrFailsAHoldout(t *testing.T) {
+	w := newWorld(t, nil, app{unreachable: true}, app{holdoutBroken: true})
+	unreachable := w.check("check-unreachable", w.commitOf("fixed"), 10)
+	if unreachable.State != NeedsOwner || !strings.Contains(unreachable.Reason, "inconclusive") {
+		t.Fatalf("unreachable app: %s (%s)", unreachable.State, unreachable.Reason)
+	}
+	holdout := w.check("check-holdout", w.commitOf("fixed"), 10)
+	if holdout.State != NeedsOwner || holdout.Reason != "a check failed" {
+		t.Fatalf("holdout failure: %s (%q)", holdout.State, holdout.Reason)
+	}
 }
 
 func TestCheckAllowance(t *testing.T) {
@@ -80,10 +97,16 @@ func TestCheckAllowance(t *testing.T) {
 	if !strings.Contains(over.Reason, "allowance") || len(over.Rounds) != 0 || len(w.evals) != 2 {
 		t.Fatalf("over the allowance: %s (%s), %d rounds, %d evaluations", over.State, over.Reason, len(over.Rounds), len(w.evals))
 	}
+	if len(w.store.runs) != 2 {
+		t.Errorf("a check the allowance refused was recorded as a run: %d runs", len(w.store.runs))
+	}
 	// A release check after merge tells no author anything and is not counted.
 	release := w.check("release-1", w.commitOf("fixed"), 0)
 	if release.State != Passed {
 		t.Fatalf("release check: %s (%s)", release.State, release.Reason)
+	}
+	if last := w.store.evidence[len(w.store.evidence)-1]; last.Check != "release" {
+		t.Errorf("release check evidence kind = %q", last.Check)
 	}
 }
 

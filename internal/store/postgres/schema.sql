@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS sf_runs (
     created_at      timestamptz NOT NULL DEFAULT now()
 );
 ALTER TABLE sf_runs ADD COLUMN IF NOT EXISTS seq bigserial NOT NULL;
+-- builder, pull-request or release. Pull request checks supersede nothing.
+ALTER TABLE sf_runs ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'builder';
 
 CREATE INDEX IF NOT EXISTS sf_runs_by_criteria ON sf_runs (repository, criteria_digest, seq);
 
@@ -54,6 +56,7 @@ CREATE TABLE IF NOT EXISTS sf_evidence (
     created_at      timestamptz NOT NULL DEFAULT now()
 );
 ALTER TABLE sf_evidence ADD COLUMN IF NOT EXISTS seq bigserial NOT NULL;
+ALTER TABLE sf_evidence ADD COLUMN IF NOT EXISTS check_kind text NOT NULL DEFAULT 'builder';
 
 CREATE INDEX IF NOT EXISTS sf_evidence_by_image ON sf_evidence (repository, image_digest, seq DESC);
 
@@ -83,3 +86,6 @@ CREATE TABLE IF NOT EXISTS sf_registrations (
     runspec_digest  text        NOT NULL REFERENCES sf_inputs (digest),
     registered_at   timestamptz NOT NULL DEFAULT now()
 );
+-- The branch pull requests must target and release checks must be on.
+-- Empty means the repository's default branch.
+ALTER TABLE sf_registrations ADD COLUMN IF NOT EXISTS branch text NOT NULL DEFAULT '';
