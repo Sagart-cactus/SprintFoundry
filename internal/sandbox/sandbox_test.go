@@ -118,6 +118,21 @@ func TestSandboxRefusesSecrets(t *testing.T) {
 	}
 }
 
+func TestALocalImageIDCountsAsPinned(t *testing.T) {
+	l := newLayout(t)
+	spec := l.spec()
+	spec.Image = strings.Repeat("ab", 32)
+	if _, err := spec.Validate(l.guard()); err != nil {
+		t.Errorf("an image ID was refused: %v", err)
+	}
+	for _, bad := range []string{strings.Repeat("ab", 31), "sha256:" + strings.Repeat("ab", 32), strings.Repeat("AB", 32)} {
+		spec.Image = bad
+		if _, err := spec.Validate(l.guard()); !errors.Is(err, sandbox.ErrUnsafeSpec) {
+			t.Errorf("image %q: err = %v", bad, err)
+		}
+	}
+}
+
 func TestGuardCannotBeLeftHalfConfigured(t *testing.T) {
 	l := newLayout(t)
 

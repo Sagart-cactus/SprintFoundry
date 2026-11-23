@@ -1,6 +1,6 @@
 # SprintFoundry v1
 
-**Status: pre-alpha, under construction on the `v1` branch.** The released product is v0.7 on the [`main` branch](https://github.com/Sagart-cactus/SprintFoundry/tree/main). What works today is the demo below. Running a real coding agent and working against GitHub are not built yet.
+**Status: pre-alpha, under construction on the `v1` branch.** The released product is v0.7 on the [`main` branch](https://github.com/Sagart-cactus/SprintFoundry/tree/main). What works today: the demo below, and `sprintfoundry run`, which runs Codex CLI on your own repository in a sandbox that holds no key. Working against GitHub is not built yet.
 
 SprintFoundry v1 answers one question before a change is released: *did an independent check pass on this exact image?*
 
@@ -37,12 +37,33 @@ It asks the release gate about all three images, writes an evidence report, and 
 
 **What the demo does not prove.** The candidates run in ordinary containers. That keeps honest mistakes apart, and it is not a security boundary against a hostile agent. The demo's signing key is generated on your machine and can only sign for the `demo` purpose.
 
+## Run Codex CLI on your own repository
+
+`sprintfoundry run` takes three files you write and approve first, and a repository:
+
+```bash
+export OPENAI_API_KEY=...
+```
+
+```bash
+./sprintfoundry run --repo path/to/app --criteria criteria.md --checks checks.yaml --runspec runspec.yaml
+```
+
+- **criteria.md** says what to build, in plain words. Codex CLI sees this, and nothing else.
+- **checks.yaml** is the frozen check suite. Codex CLI never sees it. See `internal/demo/checks.yaml` and `docs/design/0003-check-suite.md`.
+- **runspec.yaml** says how to build and preview the app, which base images are allowed and which paths need a person's review. See `internal/demo/runspec.yaml` and `docs/design/0001-run-spec.md`.
+
+Codex CLI runs in a container whose only network peer is a proxy. The proxy holds the key, forwards only the model calls Codex needs, refuses tools that would run on the provider's side, and stops after `--max-requests` requests (default 60). Your repository is copied, never changed. The first run builds an agent image with Node and Codex CLI, which needs network access.
+
+`OPENAI_API_KEY` is read by `sprintfoundry` and written only to the proxy's environment.
+
 ## Layout
 
 | Path | What it holds |
 |---|---|
 | `cmd/sprintfoundry` | The single binary |
 | `cmd/sprintfoundry-runner` | The check runner that goes into a container; it has no model |
+| `cmd/sprintfoundry-proxy` | The sandbox's only way out: holds the model key and filters requests |
 | `internal/` | Controller, evaluation, release gate, store, signer and the demo |
 | `docs/design/` | Design decisions, each with the rejected option |
 | `docs/spec/` | Behaviour spec that the tests implement |

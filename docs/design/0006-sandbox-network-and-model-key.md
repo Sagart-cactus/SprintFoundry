@@ -1,6 +1,6 @@
 # 0006: The sandbox has no key and one network peer
 
-Status: decided on 22 November 2026 after a spike.
+Status: decided on 22 November 2026 after a spike, and built on 23 November 2026 (`internal/proxy`, `cmd/sprintfoundry-proxy`, `internal/sandbox/containerbox`, `internal/agent/sandboxed`).
 
 ## Decision
 
@@ -32,6 +32,13 @@ Run on Podman 5.7 (macOS). A fake model API stood in for the real one, so no rea
 ## Remaining risk
 
 Whatever the agent sends to the model reaches the model provider. That includes the repository contents the agent reads. This is inherent in using a hosted model and is stated in the docs.
+
+## How it is built
+
+- The sandbox's root file system is read-only. The builder works in in-memory directories (`/workspace`, `/home/agent`, `/sf`), and nothing from the host is mounted; files go in and out as tar streams.
+- Each round gets a fresh sandbox with a clone of the parent commit, the previous round's change applied, and `/sf/task.md` holding the criteria and the feedback.
+- The proxy runs as its own FROM scratch container with built-in root certificates. It receives the key in an env file, never on a command line, and logs method, path and outcome only.
+- The proxy forwards the body it checked, re-encoded, not the bytes it was sent, so a repeated JSON key cannot hide a tool from the check.
 
 ## Not verified
 

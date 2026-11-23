@@ -112,6 +112,20 @@ One window stays open by design: if a hold is lost while the effect is being per
 | A production policy cannot trust a demo signer, and a decision may not live longer than an hour | `TestPolicyRules` |
 | `verify` never accepts a tag | `TestParseImageNeverAcceptsATag` |
 
+## Running a real agent
+
+| Rule | Test |
+|---|---|
+| The proxy adds the key, drops whatever credential the client sent, and forwards only listed calls | `TestProxyAddsTheKeyAndDropsTheClientsCredentials`, `TestProxyRefusesEverythingOffItsList` |
+| The proxy refuses unknown request fields and tools that run on the provider's side, also nested ones | `TestProxyRefusesEverythingOffItsList`, `TestAnthropicPreset` |
+| The upstream sees only the body the proxy checked | `TestUpstreamSeesOnlyWhatWasChecked` |
+| The proxy stops at the run's request budget, also under contention, and never follows a redirect | `TestProxyStopsAtTheRequestBudget`, `TestProxyPassesARedirectBackWithoutFollowingIt` |
+| A sandbox reaches the model API only through the proxy, holds no key, cannot reach the internet or the upstream, and has a read-only root | `TestSandboxReachesOnlyTheProxyAndHoldsNoKey` |
+| The local backend never mounts host directories | `TestBackendRefusesHostMounts` |
+| The builder is told the criteria and the feedback, never a check | `TestTaskTextCarriesCriteriaAndFeedbackOnly` |
+| Each round starts from the previous round's change, and a symbolic link from the agent is refused on import | `TestAgentRoundsBuildOnEachOtherAndImportCleanly`, `TestASymlinkFromTheAgentIsRefusedOnImport` |
+| `sprintfoundry run` takes a change from a sandboxed agent to a gate decision without touching the user's repository | `TestRunWithAStubAgent` |
+
 ## The whole slice
 
 `TestDemoEndToEnd` runs the demo three times in a row on a real container runtime and then asks the gate from a separate command. It is the milestone 1 exit test. In CI it runs on Linux with Docker.

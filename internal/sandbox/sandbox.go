@@ -98,7 +98,9 @@ type Guard struct {
 var ErrUnsafeSpec = errors.New("sandbox: unsafe spec")
 
 var (
-	pinned      = regexp.MustCompile(`^[a-zA-Z0-9][^@\s]*@sha256:[0-9a-f]{64}$`)
+	// An image is pinned by name@sha256:digest or by a bare image ID, which
+	// is a content hash on the local runtime.
+	pinned      = regexp.MustCompile(`^([a-zA-Z0-9][^@\s]*@sha256:[0-9a-f]{64}|[0-9a-f]{64})$`)
 	secretNames = regexp.MustCompile(`(?i)(token|secret|passw(or)?d|api[_-]?key|credential|private[_-]?key)`)
 	envName     = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
 )

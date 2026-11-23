@@ -272,3 +272,31 @@ func Plumbing(store, index string, env ...string) func(ctx context.Context, stdi
 	r := runner{store: store, index: index, name: controllerName, email: controllerEmail, env: env}
 	return r.output
 }
+
+// CloneBare copies a local repository the user pointed at into a new bare
+// store the controller owns and returns the commit its HEAD points to. Hooks
+// and configuration are ignored, as everywhere else in this package.
+func CloneBare(ctx context.Context, src, dst string) (string, error) {
+	abs, err := filepath.Abs(src)
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(dst); err == nil {
+		return "", fmt.Errorf("gitimport: %s already exists", dst)
+	}
+	cmd := exec.CommandContext(ctx, "git",
+		"-c", "core.hooksPath="+os.DevNull, "-c", "protocol.allow=never", "-c", "protocol.file.allow=always",
+		"clone", "--bare", "--no-local", "--quiet", "--", abs, dst)
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.DevNull, "GIT_CONFIG_NOSYSTEM=1",
+		"GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_TERMINAL_PROMPT=0", "GIT_NO_REPLACE_OBJECTS=1"}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("gitimport: copy %s: %v: %s", src, err, strings.TrimSpace(stderr.String()))
+	}
+	head, err := Plumbing(dst, "")(ctx, nil, "rev-parse", "--verify", "HEAD^{commit}")
+	if err != nil {
+		return "", fmt.Errorf("gitimport: %s has no commit at HEAD: %w", src, err)
+	}
+	return head, nil
+}
