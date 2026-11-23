@@ -43,12 +43,17 @@ func TestCodexScript(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"codex exec --json", "--dangerously-bypass-approvals-and-sandbox", "--cd /workspace/repo",
-		`base_url = "http://sf-run-abc-proxy:8080/v1"`, `wire_api = "responses"`, "- < /sf/task.md"} {
+		`base_url = "http://sf-run-abc-proxy:8080/v1"`, `wire_api = "responses"`, `web_search="disabled"`, "- < /sf/task.md"} {
 		if !strings.Contains(script, want) {
 			t.Errorf("script lacks %q:\n%s", want, script)
 		}
 	}
+	if _, err := Codex("http://sf-run-abc-proxy:8080/v1", "qwen2.5-coder:7b"); err != nil {
+		t.Errorf("a local model name was refused: %v", err)
+	}
 	for _, bad := range [][2]string{
+		{"http://sf-proxy:8080/v1", "qwen:7b; rm -rf /"},
+		{"http://sf-proxy:8080/v1", "-c evil"},
 		{"http://evil.example/v1; rm -rf /", "gpt-5"},
 		{"http://sf-proxy:8080/v1", "gpt-5'; curl evil.example #"},
 		{"https://api.openai.com/v1", "gpt-5"},

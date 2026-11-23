@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -24,6 +25,7 @@ import (
 	"github.com/sagart-cactus/sprintfoundry/internal/evaluate"
 	"github.com/sagart-cactus/sprintfoundry/internal/evidence"
 	"github.com/sagart-cactus/sprintfoundry/internal/gitimport"
+	"github.com/sagart-cactus/sprintfoundry/internal/proxy"
 	"github.com/sagart-cactus/sprintfoundry/internal/report"
 	"github.com/sagart-cactus/sprintfoundry/internal/runnerimage"
 	"github.com/sagart-cactus/sprintfoundry/internal/sandbox"
@@ -68,6 +70,10 @@ exact image, and signs the evidence. The model key is read from the
 OPENAI_API_KEY environment variable and is only ever given to the proxy,
 which also pins the model and caps each request's output.
 
+A model served on this machine, for example by Ollama, needs no key:
+  --upstream http://host.containers.internal:11434 --model qwen2.5-coder:7b
+(use host.docker.internal with Docker).
+
 `)
 		fs.PrintDefaults()
 	}
@@ -81,8 +87,13 @@ which also pins the model and caps each request's output.
 	opts.Home = *home
 	opts.Key = os.Getenv("OPENAI_API_KEY")
 	if opts.Key == "" {
-		fmt.Fprintln(stderr, "sprintfoundry: set OPENAI_API_KEY; it is given to the proxy only, never to the sandbox")
-		return 2
+		// A model served on this machine needs no key.
+		if u, err := url.Parse(opts.Upstream); err == nil && u.Scheme == "http" && proxy.PlainHTTPHost(u.Hostname()) {
+			opts.Key = "no-key-needed-for-a-local-model"
+		} else {
+			fmt.Fprintln(stderr, "sprintfoundry: set OPENAI_API_KEY; it is given to the proxy only, never to the sandbox")
+			return 2
+		}
 	}
 	res, err := runLive(opts, stdout)
 	if err != nil {

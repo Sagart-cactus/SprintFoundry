@@ -99,11 +99,19 @@ func (c Config) Validate() error {
 	return nil
 }
 
-// plainHTTPHost reports whether plain http is acceptable for a host: the
-// loopback interface, or a container name on a private network (a name
-// without dots).
+// PlainHTTPHost reports whether plain http is acceptable for a host: the
+// loopback interface, this machine as seen from a container, or a container
+// name on a private network (a name without dots).
+func PlainHTTPHost(host string) bool { return plainHTTPHost(host) }
+
+// plainHTTPHost is PlainHTTPHost.
 func plainHTTPHost(host string) bool {
 	if host == "localhost" || strings.HasPrefix(host, "127.") || host == "::1" {
+		return true
+	}
+	// The names container runtimes give the machine they run on, for a
+	// model served on this machine.
+	if host == "host.containers.internal" || host == "host.docker.internal" {
 		return true
 	}
 	return host != "" && !strings.Contains(host, ".") && !strings.Contains(host, ":")

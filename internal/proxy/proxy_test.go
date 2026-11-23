@@ -503,13 +503,14 @@ func TestServeReportsWhatItDid(t *testing.T) {
 }
 
 func TestPlainHTTPOnlyNearby(t *testing.T) {
-	for _, upstream := range []string{"http://127.0.0.1:9000", "http://localhost:9000", "http://sf-run-proxy-up:9000"} {
+	for _, upstream := range []string{"http://127.0.0.1:9000", "http://localhost:9000", "http://sf-run-proxy-up:9000",
+		"http://host.containers.internal:11434", "http://host.docker.internal:11434"} {
 		u, _ := url.Parse(upstream)
 		if _, err := New(OpenAIResponses(u, key, 1)); err != nil {
 			t.Errorf("%s was refused: %v", upstream, err)
 		}
 	}
-	for _, upstream := range []string{"http://api.openai.com", "http://203.0.113.5:80"} {
+	for _, upstream := range []string{"http://api.openai.com", "http://203.0.113.5:80", "http://host.containers.internal.evil.example"} {
 		u, _ := url.Parse(upstream)
 		if _, err := New(OpenAIResponses(u, key, 1)); err == nil {
 			t.Errorf("%s was accepted: the key would travel unencrypted", upstream)
