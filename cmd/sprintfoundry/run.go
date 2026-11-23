@@ -38,7 +38,7 @@ type liveOptions struct {
 	RepoPath, CriteriaPath, ChecksPath, SpecPath string
 	Repository                                   string
 	Model, Upstream, Key                         string
-	MaxRequests                                  int64
+	MaxRequests, MaxOutputTokens                 int64
 	RepairRounds                                 int
 	// AgentImage and AgentScript replace the Codex image and script. Tests
 	// use them to run a stub agent; they are not offered as flags.
@@ -58,13 +58,15 @@ func runCommand(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&opts.Model, "model", "gpt-5", "the model Codex CLI uses")
 	fs.StringVar(&opts.Upstream, "upstream", "https://api.openai.com", "the model API the proxy forwards to")
 	fs.Int64Var(&opts.MaxRequests, "max-requests", 60, "the most model requests the run may make, across all rounds")
+	fs.Int64Var(&opts.MaxOutputTokens, "max-output-tokens", 32000, "the most output tokens one model request may ask for")
 	fs.IntVar(&opts.RepairRounds, "repair-rounds", controller.DefaultRepairRounds, "how many times a failure goes back to the builder")
 	fs.Usage = func() {
 		fmt.Fprint(stderr, `Usage: sprintfoundry run --criteria FILE --checks FILE --runspec FILE [--repo DIR]
 
 Runs Codex CLI in a sandbox that holds no key, has the change checked on its
 exact image, and signs the evidence. The model key is read from the
-OPENAI_API_KEY environment variable and is only ever given to the proxy.
+OPENAI_API_KEY environment variable and is only ever given to the proxy,
+which also pins the model and caps each request's output.
 
 `)
 		fs.PrintDefaults()
@@ -106,6 +108,9 @@ func runLive(opts liveOptions, out io.Writer) (controller.Result, error) {
 
 	if opts.MaxRequests < 1 {
 		return controller.Result{}, errors.New("--max-requests must be at least 1")
+	}
+	if opts.MaxOutputTokens < 1 {
+		opts.MaxOutputTokens = 32000
 	}
 	inputs := map[string][]byte{}
 	for name, path := range map[string]string{"criteria": opts.CriteriaPath, "checks": opts.ChecksPath, "runspec": opts.SpecPath} {
@@ -183,7 +188,7 @@ func runLive(opts liveOptions, out io.Writer) (controller.Result, error) {
 	step("Starting the sandbox network; the proxy is the only way out and holds the key")
 	net, err := containerbox.StartNetwork(ctx, env.cli, runID, containerbox.ProxyConfig{
 		Image: proxyImage, Preset: "openai-responses", Upstream: opts.Upstream, Key: opts.Key,
-		MaxRequests: opts.MaxRequests, TempDir: env.home.Dir,
+		MaxRequests: opts.MaxRequests, Model: opts.Model, MaxTokens: opts.MaxOutputTokens, TempDir: env.home.Dir,
 	}, labels)
 	if err != nil {
 		return controller.Result{}, err
@@ -220,7 +225,7 @@ func runLive(opts liveOptions, out io.Writer) (controller.Result, error) {
 	if err != nil {
 		return controller.Result{}, err
 	}
-	forwarded := strings.Count(net.ProxyLog(ctx, 10000), " forwarded")
+	forwarded := net.Forwarded(ctx)
 	if result.Reason != "" {
 		step("Result: %s. %s", result.State, result.Reason)
 	} else {

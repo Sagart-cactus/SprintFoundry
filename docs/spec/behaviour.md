@@ -119,8 +119,13 @@ One window stays open by design: if a hold is lost while the effect is being per
 | The proxy adds the key, drops whatever credential the client sent, and forwards only listed calls | `TestProxyAddsTheKeyAndDropsTheClientsCredentials`, `TestProxyRefusesEverythingOffItsList` |
 | The proxy refuses unknown request fields and tools that run on the provider's side, also nested ones | `TestProxyRefusesEverythingOffItsList`, `TestAnthropicPreset` |
 | The upstream sees only the body the proxy checked | `TestUpstreamSeesOnlyWhatWasChecked` |
+| A URL, stored file or stored item anywhere in a request is refused; inline data is allowed | `TestProxyRefusesReferencesTheProviderWouldFollow` |
+| Only the run's model is allowed, each request's output is capped, and the conversation is not stored at the provider | `TestProxyPinsTheModelAndCapsSpend` |
+| The key never travels over plain http beyond this machine or its container network | `TestPlainHTTPOnlyNearby` |
 | The proxy stops at the run's request budget, also under contention, and never follows a redirect | `TestProxyStopsAtTheRequestBudget`, `TestProxyPassesARedirectBackWithoutFollowingIt` |
-| A sandbox reaches the model API only through the proxy, holds no key, cannot reach the internet or the upstream, and has a read-only root | `TestSandboxReachesOnlyTheProxyAndHoldsNoKey` |
+| A sandbox reaches the model API only through the proxy, holds no key, cannot reach the internet or the upstream (by name or address), and has a read-only root; a request path cannot forge a proxy log line | `TestSandboxReachesOnlyTheProxyAndHoldsNoKey` |
+| What a sandbox writes back is bounded, keeping the head or the tail | `TestOutputIsBounded` |
+| The agent sees no history, its output cannot flood the controller, and control characters never reach the person's screen | `TestAgentSeesNoHistoryAndCannotFloodTheController` |
 | The local backend never mounts host directories | `TestBackendRefusesHostMounts` |
 | The builder is told the criteria and the feedback, never a check | `TestTaskTextCarriesCriteriaAndFeedbackOnly` |
 | Each round starts from the previous round's change, and a symbolic link from the agent is refused on import | `TestAgentRoundsBuildOnEachOtherAndImportCleanly`, `TestASymlinkFromTheAgentIsRefusedOnImport` |

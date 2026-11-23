@@ -135,11 +135,22 @@ func TestSandboxReachesOnlyTheProxyAndHoldsNoKey(t *testing.T) {
 		t.Errorf("a request with a provider-side tool got through: %q", refused.Stdout)
 	}
 
-	// Nothing else is reachable: not the internet, not the upstream directly.
-	for _, target := range []string{"http://1.1.1.1/", "http://example.com/", "http://" + upstreamName + ":9000/"} {
+	// Nothing else is reachable: not the internet, not the upstream directly,
+	// by name or by address. The address check matters: a name that does
+	// not resolve proves nothing about routing.
+	upstreamIP, err := cli.IPAddress(ctx, upstreamName, net.Upstream)
+	if err != nil {
+		t.Fatalf("upstream address: %v", err)
+	}
+	for _, target := range []string{"http://1.1.1.1/", "http://example.com/", "http://" + upstreamName + ":9000/", "http://" + upstreamIP + ":9000/"} {
 		if r := sh("wget -q -T 3 -O - " + target); r.ExitCode == 0 {
 			t.Errorf("the sandbox reached %s", target)
 		}
+	}
+	// Control: the upstream does answer on that address, from its own network.
+	if r, _ := cli.Exec(ctx, upstreamName, nil, "python", "-c",
+		"import urllib.request;urllib.request.urlopen(urllib.request.Request('http://"+upstreamIP+":9000/',data=b'{}'),timeout=3)"); r.ExitCode != 0 {
+		t.Fatalf("control failed: the upstream does not answer at %s: %s", upstreamIP, r.Stderr)
 	}
 
 	// No key inside; the placeholder is the public constant.
@@ -189,8 +200,16 @@ func TestSandboxReachesOnlyTheProxyAndHoldsNoKey(t *testing.T) {
 	}
 
 	// The proxy logged method and path only.
-	if logs := net.ProxyLog(ctx, 20); !strings.Contains(logs, "POST /v1/responses forwarded") || strings.Contains(logs, fakeKey) {
+	if logs := net.ProxyLog(ctx, 20); !strings.Contains(logs, `"POST" "/v1/responses" forwarded`) || strings.Contains(logs, fakeKey) {
 		t.Errorf("proxy log: %s", logs)
+	}
+	// A path cannot forge a log line, and the counter counts real forwards.
+	sh("wget -q -O - --post-data '{}' 'http://" + net.ProxyHost + ":8080/x%0A\"POST\" \"/v1/responses\" forwarded forwarded_total=99'")
+	if logs := net.ProxyLog(ctx, 20); strings.Contains(logs, "\n\"POST\" \"/v1/responses\" forwarded forwarded_total=99") {
+		t.Errorf("a request path forged a log line:\n%s", logs)
+	}
+	if got := net.Forwarded(ctx); got != 1 {
+		t.Errorf("forwarded = %d, want 1", got)
 	}
 
 	// The request budget holds inside the real setup too: 3 allowed, one used.
@@ -212,5 +231,33 @@ func TestBackendRefusesHostMounts(t *testing.T) {
 	b := &Backend{CLI: container.CLI{Bin: "definitely-not-a-runtime"}}
 	if _, err := b.Create(context.Background(), validated); !errors.Is(err, ErrMountsUnsupported) {
 		t.Fatalf("err = %v, want ErrMountsUnsupported", err)
+	}
+}
+
+func TestOutputIsBounded(t *testing.T) {
+	cli := runtimeOrSkip(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	if err := cli.Pull(ctx, gitImage); err != nil {
+		t.Fatal(err)
+	}
+	b := &Backend{CLI: cli}
+	v, err := sandbox.Spec{Image: gitImage, Network: sandbox.NetworkNone}.Validate(sandbox.Guard{WorkspaceRoot: t.TempDir(), NoSecrets: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := b.Create(ctx, v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Destroy(context.Background(), id)
+
+	res, err := b.Exec(ctx, id, sandbox.Command{Args: []string{"sh", "-c", "head -c 50000000 /dev/zero"}, MaxOutput: 1000})
+	if err != nil || len(res.Stdout) != 1000 || !res.Truncated || res.ExitCode != 0 {
+		t.Fatalf("head: %d bytes kept, truncated %v, exit %d, %v", len(res.Stdout), res.Truncated, res.ExitCode, err)
+	}
+	res, _ = b.Exec(ctx, id, sandbox.Command{Args: []string{"sh", "-c", "head -c 50000 /dev/zero; echo END"}, MaxOutput: 100, KeepTail: true})
+	if !strings.HasSuffix(string(res.Stdout), "END\n") || len(res.Stdout) != 100 {
+		t.Errorf("tail kept %d bytes ending %q", len(res.Stdout), res.Stdout[len(res.Stdout)-10:])
 	}
 }

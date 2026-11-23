@@ -15,6 +15,16 @@ func TestConfigFromTheEnvironment(t *testing.T) {
 	if err != nil || listen != ":8080" || cfg.MaxRequests != 40 || cfg.KeyValue != "Bearer sk-test" {
 		t.Fatalf("config = %+v, %q, %v", cfg, listen, err)
 	}
+	env["SF_PROXY_MODEL"], env["SF_PROXY_MAX_TOKENS"] = "gpt-5", "8000"
+	if cfg, _, err := config(getenv); err != nil || cfg.Model != "gpt-5" || cfg.MaxTokens != 8000 {
+		t.Errorf("pinned config = %+v, %v", cfg, err)
+	}
+	env["SF_PROXY_MAX_TOKENS"] = ""
+	if _, _, err := config(getenv); err == nil {
+		t.Error("a pinned model without a token cap was accepted")
+	}
+	delete(env, "SF_PROXY_MODEL")
+	delete(env, "SF_PROXY_MAX_TOKENS")
 	env["SF_PROXY_PRESET"] = "anthropic-messages"
 	if cfg, _, _ := config(getenv); cfg.KeyHeader != "x-api-key" {
 		t.Errorf("anthropic preset key header = %q", cfg.KeyHeader)

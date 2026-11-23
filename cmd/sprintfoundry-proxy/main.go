@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -51,6 +52,13 @@ func config(getenv func(string) string) (proxy.Config, string, error) {
 	default:
 		return proxy.Config{}, "", errors.New("SF_PROXY_PRESET must be openai-responses or anthropic-messages")
 	}
+	if model := getenv("SF_PROXY_MODEL"); model != "" {
+		maxTokens, err := strconv.ParseInt(getenv("SF_PROXY_MAX_TOKENS"), 10, 64)
+		if err != nil || maxTokens < 1 {
+			return proxy.Config{}, "", errors.New("SF_PROXY_MAX_TOKENS must be a positive number when SF_PROXY_MODEL is set")
+		}
+		cfg = cfg.Pin(model, maxTokens)
+	}
 	listen := getenv("SF_PROXY_LISTEN")
 	if listen == "" {
 		listen = ":8080"
@@ -74,16 +82,21 @@ func run(getenv func(string) string, logOut io.Writer) error {
 		fmt.Fprintf(w, "ok forwarded=%d refused=%d\n", p.Forwarded(), p.Refused())
 	})
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		before := p.Refused()
-		p.ServeHTTP(w, r)
-		outcome := "forwarded"
-		if p.Refused() > before {
-			outcome = "refused"
+		outcome := "refused"
+		if p.Serve(w, r) {
+			outcome = "forwarded"
 		}
 		// Method, path and outcome only: bodies hold the repository's code.
-		logger.Printf("%s %s %s", r.Method, r.URL.Path, outcome)
+		// The path comes from the sandbox, so it is quoted: it cannot start
+		// a line of its own.
+		logger.Printf("%q %q %s forwarded_total=%d", r.Method, r.URL.Path, outcome, p.Forwarded())
 	}))
-	server := &http.Server{Addr: listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
-	logger.Printf("listening on %s, forwarding to %s, budget %d requests", listen, cfg.Upstream.Host, cfg.MaxRequests)
-	return server.ListenAndServe()
+	ln, err := net.Listen("tcp", listen)
+	if err != nil {
+		return err
+	}
+	server := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	// Only now is the proxy ready: the controller waits for this line.
+	logger.Printf("listening on %s, forwarding to %s, budget %d requests", ln.Addr(), cfg.Upstream.Host, cfg.MaxRequests)
+	return server.Serve(ln)
 }

@@ -53,9 +53,11 @@ export OPENAI_API_KEY=...
 - **checks.yaml** is the frozen check suite. Codex CLI never sees it. See `internal/demo/checks.yaml` and `docs/design/0003-check-suite.md`.
 - **runspec.yaml** says how to build and preview the app, which base images are allowed and which paths need a person's review. See `internal/demo/runspec.yaml` and `docs/design/0001-run-spec.md`.
 
-Codex CLI runs in a container whose only network peer is a proxy. The proxy holds the key, forwards only the model calls Codex needs, refuses tools that would run on the provider's side, and stops after `--max-requests` requests (default 60). Your repository is copied, never changed. The first run builds an agent image with Node and Codex CLI, which needs network access.
+Codex CLI runs in a container whose only network peer is a proxy. The proxy holds the key and forwards only the model calls Codex needs. It refuses tools that would run on the provider's side, and any URL or stored file in a request that the provider would fetch. It allows only the `--model` you chose, caps each request at `--max-output-tokens` (default 32000), stops after `--max-requests` requests (default 60), and tells the provider not to store the conversation. Codex sees your repository's files at HEAD without its history. Your repository is copied, never changed. The first run builds an agent image with Node and Codex CLI, which needs network access.
 
-`OPENAI_API_KEY` is read by `sprintfoundry` and written only to the proxy's environment.
+`OPENAI_API_KEY` is read by `sprintfoundry`, written to a private file for a moment, and handed to the proxy container, whose settings hold it until the container is removed at the end of the run. `sprintfoundry down` removes a proxy left behind by an interrupted run.
+
+The sandbox's isolation depends on internal container networks. Podman is fine. Docker Engine before 26.0 lets internal networks reach outside DNS servers, so `run` refuses it.
 
 ## Layout
 

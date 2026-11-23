@@ -218,10 +218,19 @@ func carries(value, secret string) bool {
 	return false
 }
 
+// DefaultMaxOutput bounds what a command may write to each of its output
+// streams when the Command does not say.
+const DefaultMaxOutput = 1 << 20
+
 // Command is one process to run inside a sandbox.
 type Command struct {
 	Args  []string
 	Stdin io.Reader
+	// MaxOutput bounds the bytes kept from each output stream. Zero means
+	// DefaultMaxOutput. Output beyond it is read and dropped, never held.
+	MaxOutput int
+	// KeepTail keeps the last MaxOutput bytes instead of the first.
+	KeepTail bool
 }
 
 // Result is what a finished command produced.
@@ -229,6 +238,8 @@ type Result struct {
 	ExitCode int
 	Stdout   []byte
 	Stderr   []byte
+	// Truncated is set when a stream wrote more than MaxOutput.
+	Truncated bool
 }
 
 // Sandbox is a backend that runs untrusted work.

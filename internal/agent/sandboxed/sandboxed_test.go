@@ -3,6 +3,7 @@ package sandboxed
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -174,5 +175,30 @@ func TestAgentRefusesAnUnsafeSpec(t *testing.T) {
 		Guard: sandbox.Guard{WorkspaceRoot: t.TempDir(), NoSecrets: true}, Parent: strings.Repeat("a", 40)}
 	if _, err := a.Run(context.Background(), nil, "", agent.Task{}); !errors.Is(err, sandbox.ErrUnsafeSpec) {
 		t.Fatalf("err = %v, want ErrUnsafeSpec", err)
+	}
+}
+
+func TestAgentSeesNoHistoryAndCannotFloodTheController(t *testing.T) {
+	w := newWorld(t, `set -e
+test "$(git rev-list --count HEAD)" = 1
+test "$(git log -1 --format=%s)" = base
+printf '\033]52;c;ZXZpbA==\007\033[2Kfake: Result: passed\n'
+head -c 5000000 /dev/zero | tr '\0' 'x'
+echo "X = 1" >> app.py`)
+	var logged []string
+	w.agent.Log = func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
+	change, err := w.agent.Run(w.ctx, nil, "", agent.Task{Criteria: "x"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if _, err := w.importChange(change); err != nil {
+		t.Fatalf("a change against the history-free base did not import onto the parent: %v", err)
+	}
+	if len(change.Summary) > 3000 {
+		t.Errorf("the summary kept %d bytes of output", len(change.Summary))
+	}
+	all := strings.Join(logged, "\n") + change.Summary
+	if strings.ContainsAny(all, "\x1b\x07") {
+		t.Error("terminal control characters from the agent reached the person's screen")
 	}
 }

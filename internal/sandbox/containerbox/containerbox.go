@@ -19,6 +19,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -36,6 +38,9 @@ type Backend struct {
 }
 
 var _ sandbox.Sandbox = (*Backend)(nil)
+
+// MaxCopyOutBytes bounds a CopyOut.
+const MaxCopyOutBytes = 256 << 20
 
 // ErrMountsUnsupported is returned for a spec that mounts host directories.
 // This backend copies files in and out instead, so nothing on the host is
@@ -95,16 +100,56 @@ func (b *Backend) Create(ctx context.Context, v sandbox.Validated) (string, erro
 	return name, nil
 }
 
-// Exec runs a command to completion inside the sandbox.
+// capped keeps at most limit bytes of what is written to it, the first or
+// the last, and reads and drops the rest so the writer is never blocked.
+type capped struct {
+	limit     int
+	keepTail  bool
+	buf       []byte
+	truncated bool
+}
+
+func (c *capped) Write(p []byte) (int, error) {
+	n := len(p)
+	if c.keepTail {
+		c.buf = append(c.buf, p...)
+		if len(c.buf) > c.limit {
+			c.truncated = true
+			c.buf = append(c.buf[:0], c.buf[len(c.buf)-c.limit:]...)
+		}
+		return n, nil
+	}
+	room := c.limit - len(c.buf)
+	if room <= 0 {
+		c.truncated = c.truncated || n > 0
+		return n, nil
+	}
+	if len(p) > room {
+		p, c.truncated = p[:room], true
+	}
+	c.buf = append(c.buf, p...)
+	return n, nil
+}
+
+// Exec runs a command to completion inside the sandbox. What it writes is
+// bounded by cmd.MaxOutput, so a hostile process cannot exhaust the
+// controller's memory.
 func (b *Backend) Exec(ctx context.Context, id string, cmd sandbox.Command) (sandbox.Result, error) {
 	if !strings.HasPrefix(id, "sf-sbx-") {
 		return sandbox.Result{}, fmt.Errorf("containerbox: %q is not a sandbox of this backend", id)
 	}
-	res, err := b.CLI.Exec(ctx, id, cmd.Stdin, cmd.Args...)
+	limit := cmd.MaxOutput
+	if limit <= 0 {
+		limit = sandbox.DefaultMaxOutput
+	}
+	stdout := &capped{limit: limit, keepTail: cmd.KeepTail}
+	stderr := &capped{limit: limit, keepTail: cmd.KeepTail}
+	code, err := b.CLI.ExecTo(ctx, id, cmd.Stdin, stdout, stderr, cmd.Args...)
 	if err != nil {
 		return sandbox.Result{}, err
 	}
-	return sandbox.Result{ExitCode: res.ExitCode, Stdout: res.Stdout, Stderr: res.Stderr}, nil
+	return sandbox.Result{ExitCode: code, Stdout: stdout.buf, Stderr: stderr.buf,
+		Truncated: stdout.truncated || stderr.truncated}, nil
 }
 
 // CopyIn unpacks a tar stream at dst inside the sandbox. It runs tar inside
@@ -128,9 +173,12 @@ func (b *Backend) CopyOut(ctx context.Context, id, src string) (io.ReadCloser, e
 	if !filepath.IsAbs(src) {
 		return nil, fmt.Errorf("containerbox: source %q must be absolute", src)
 	}
-	res, err := b.Exec(ctx, id, sandbox.Command{Args: []string{"tar", "-c", "-f", "-", "-C", src, "."}})
+	res, err := b.Exec(ctx, id, sandbox.Command{Args: []string{"tar", "-c", "-f", "-", "-C", src, "."}, MaxOutput: MaxCopyOutBytes})
 	if err != nil {
 		return nil, err
+	}
+	if res.Truncated {
+		return nil, fmt.Errorf("containerbox: %s is larger than %d bytes", src, MaxCopyOutBytes)
 	}
 	if res.ExitCode != 0 {
 		return nil, fmt.Errorf("containerbox: pack %s: exit %d: %s", src, res.ExitCode, bytes.TrimSpace(res.Stderr))
@@ -166,6 +214,10 @@ type ProxyConfig struct {
 	Upstream    string // https://api.openai.com
 	Key         string
 	MaxRequests int64
+	// Model and MaxTokens pin the one model the run may use and cap the
+	// output of each request. Empty Model leaves both open.
+	Model     string
+	MaxTokens int64
 	// TempDir is where the env file is written for a moment. It must be a
 	// directory only this user can read.
 	TempDir string
@@ -177,6 +229,9 @@ type ProxyConfig struct {
 // Podman: a container that joins an internal network first gets no route
 // out.
 func StartNetwork(ctx context.Context, cli container.CLI, runID string, cfg ProxyConfig, labels map[string]string) (*Network, error) {
+	if err := cli.CheckInternalNetworks(ctx); err != nil {
+		return nil, err
+	}
 	suffix, err := randomSuffix()
 	if err != nil {
 		return nil, err
@@ -197,7 +252,7 @@ func StartNetwork(ctx context.Context, cli container.CLI, runID string, cfg Prox
 	if err := cli.NetworkCreate(ctx, n.Upstream, false, labels); err != nil {
 		return nil, err
 	}
-	if strings.ContainsAny(cfg.Key+cfg.Upstream+cfg.Preset, "\n\r") {
+	if strings.ContainsAny(cfg.Key+cfg.Upstream+cfg.Preset+cfg.Model, "\n\r") {
 		return nil, errors.New("containerbox: proxy settings must not contain line breaks")
 	}
 	envFile, err := os.CreateTemp(cfg.TempDir, ".proxy-env-*")
@@ -207,12 +262,15 @@ func StartNetwork(ctx context.Context, cli container.CLI, runID string, cfg Prox
 	defer os.Remove(envFile.Name())
 	_, werr := fmt.Fprintf(envFile, "SF_PROXY_PRESET=%s\nSF_PROXY_UPSTREAM=%s\nSF_PROXY_KEY=%s\nSF_PROXY_MAX_REQUESTS=%d\n",
 		cfg.Preset, cfg.Upstream, cfg.Key, cfg.MaxRequests)
+	if werr == nil && cfg.Model != "" {
+		_, werr = fmt.Fprintf(envFile, "SF_PROXY_MODEL=%s\nSF_PROXY_MAX_TOKENS=%d\n", cfg.Model, cfg.MaxTokens)
+	}
 	if cerr := envFile.Close(); werr != nil || cerr != nil {
 		return nil, errors.Join(werr, cerr)
 	}
 	if _, err := cli.Run(ctx, container.RunOptions{
 		Name: n.proxy, Image: cfg.Image, Network: n.Upstream, EnvFile: envFile.Name(), Labels: labels,
-		MemoryMB: 256, CPUs: 1, PIDs: 128,
+		MemoryMB: 512, CPUs: 1, PIDs: 128, Remove: true,
 	}); err != nil {
 		return nil, fmt.Errorf("containerbox: start proxy: %w", err)
 	}
@@ -243,6 +301,19 @@ func StartNetwork(ctx context.Context, cli container.CLI, runID string, cfg Prox
 func (n *Network) ProxyLog(ctx context.Context, lines int) string {
 	logs, _ := n.cli.Logs(ctx, n.proxy, lines)
 	return logs
+}
+
+var forwardedTotal = regexp.MustCompile(`(?m) forwarded_total=([0-9]+)$`)
+
+// Forwarded returns how many requests the proxy has passed to the model API,
+// from the counter on its last log line.
+func (n *Network) Forwarded(ctx context.Context) int64 {
+	matches := forwardedTotal.FindAllStringSubmatch(n.ProxyLog(ctx, 50), -1)
+	if len(matches) == 0 {
+		return 0
+	}
+	total, _ := strconv.ParseInt(matches[len(matches)-1][1], 10, 64)
+	return total
 }
 
 // Close removes the proxy and both networks.
