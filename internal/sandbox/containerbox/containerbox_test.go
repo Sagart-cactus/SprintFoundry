@@ -204,12 +204,18 @@ func TestSandboxReachesOnlyTheProxyAndHoldsNoKey(t *testing.T) {
 		t.Errorf("proxy log: %s", logs)
 	}
 	// A path cannot forge a log line, and the counter counts real forwards.
+	// The count before is not always 1: a first attempt that reached the
+	// proxy while the fake upstream was still starting is a real forward.
+	before := net.Forwarded(ctx)
+	if before < 1 {
+		t.Fatalf("forwarded = %d after a successful call", before)
+	}
 	sh("wget -q -O - --post-data '{}' 'http://" + net.ProxyHost + ":8080/x%0A\"POST\" \"/v1/responses\" forwarded forwarded_total=99'")
 	if logs := net.ProxyLog(ctx, 20); strings.Contains(logs, "\n\"POST\" \"/v1/responses\" forwarded forwarded_total=99") {
 		t.Errorf("a request path forged a log line:\n%s", logs)
 	}
-	if got := net.Forwarded(ctx); got != 1 {
-		t.Errorf("forwarded = %d, want 1", got)
+	if got := net.Forwarded(ctx); got != before {
+		t.Errorf("forwarded = %d after a refused request, want %d", got, before)
 	}
 
 	// The request budget holds inside the real setup too: 3 allowed, one used.
