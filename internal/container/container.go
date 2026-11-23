@@ -170,6 +170,17 @@ type RunOptions struct {
 	// Writable leaves the root file system writable. The default is
 	// read-only with a small writable /tmp.
 	Writable bool
+	// Tmpfs adds writable in-memory directories, as "path:options", for
+	// example "/workspace:rw,exec,size=2g,mode=1777". They vanish with the
+	// container.
+	Tmpfs []string
+	// Entrypoint replaces the image's entrypoint when set.
+	Entrypoint string
+	// Workdir sets the working directory inside the container.
+	Workdir string
+	// EnvFile is a file of NAME=value lines. Secrets go here and not in Env,
+	// so they never appear on a command line.
+	EnvFile  string
 	MemoryMB int
 	CPUs     float64
 	PIDs     int
@@ -191,6 +202,31 @@ func runArgs(mode []string, opts RunOptions) ([]string, error) {
 		"--cap-drop=ALL", "--security-opt", "no-new-privileges")
 	if !opts.Writable {
 		args = append(args, "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m")
+	}
+	for _, t := range opts.Tmpfs {
+		path, _, _ := strings.Cut(t, ":")
+		if !strings.HasPrefix(path, "/") || path == "/tmp" || strings.ContainsAny(t, " \t\n") {
+			return nil, fmt.Errorf("container: tmpfs %q is not allowed", t)
+		}
+		args = append(args, "--tmpfs", t)
+	}
+	if opts.Entrypoint != "" {
+		if strings.HasPrefix(opts.Entrypoint, "-") {
+			return nil, fmt.Errorf("container: entrypoint %q is not allowed", opts.Entrypoint)
+		}
+		args = append(args, "--entrypoint", opts.Entrypoint)
+	}
+	if opts.Workdir != "" {
+		if !strings.HasPrefix(opts.Workdir, "/") {
+			return nil, fmt.Errorf("container: workdir %q must be absolute", opts.Workdir)
+		}
+		args = append(args, "--workdir", opts.Workdir)
+	}
+	if opts.EnvFile != "" {
+		if !filepath.IsAbs(opts.EnvFile) {
+			return nil, fmt.Errorf("container: env file %q must be an absolute path", opts.EnvFile)
+		}
+		args = append(args, "--env-file", opts.EnvFile)
 	}
 	if opts.MemoryMB > 0 {
 		args = append(args, "--memory", strconv.Itoa(opts.MemoryMB)+"m")
@@ -498,3 +534,57 @@ func (c CLI) Pull(ctx context.Context, image string) error {
 }
 
 var pinnedRef = regexp.MustCompile(`^[a-zA-Z0-9][^@\s]*@sha256:[0-9a-f]{64}$`)
+
+// NetworkConnect attaches a running container to another network.
+func (c CLI) NetworkConnect(ctx context.Context, network, name string) error {
+	if !nameOK.MatchString(network) || !nameOK.MatchString(name) {
+		return fmt.Errorf("container: network %q or container %q is not allowed", network, name)
+	}
+	_, err := c.must(ctx, nil, "network", "connect", network, name)
+	return err
+}
+
+// BuildTrusted builds an image from a build context the controller itself
+// wrote, with the default network so that it can install packages. It is
+// never used for anything a builder wrote; candidates go through Build.
+func (c CLI) BuildTrusted(ctx context.Context, buildContext io.Reader, labels map[string]string) (string, error) {
+	args := []string{"build", "--quiet", "--file", "Dockerfile"}
+	args = append(args, labelArgs(labels)...)
+	args = append(args, "-")
+	out, err := c.must(ctx, buildContext, args...)
+	if err != nil {
+		return "", err
+	}
+	lines := strings.Split(out, "\n")
+	id := strings.TrimPrefix(strings.TrimSpace(lines[len(lines)-1]), "sha256:")
+	if !imageID.MatchString(id) {
+		return "", fmt.Errorf("container: build did not print an image ID, got %q", id)
+	}
+	return id, nil
+}
+
+// ExecStream runs a command inside a running container and writes its
+// standard output to w as it arrives. Standard error is returned.
+func (c CLI) ExecStream(ctx context.Context, name string, stdin io.Reader, stdout io.Writer, args ...string) (int, []byte, error) {
+	if !nameOK.MatchString(name) {
+		return 0, nil, fmt.Errorf("container: name %q is not allowed", name)
+	}
+	full := []string{"exec"}
+	if stdin != nil {
+		full = append(full, "--interactive")
+	}
+	full = append(append(full, name), args...)
+	cmd := exec.CommandContext(ctx, c.bin(), full...)
+	cmd.Stdin = stdin
+	var stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = stdout, &stderr
+	err := cmd.Run()
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		return exit.ExitCode(), stderr.Bytes(), nil
+	}
+	if err != nil {
+		return 0, stderr.Bytes(), fmt.Errorf("container: exec in %s: %w", name, err)
+	}
+	return 0, stderr.Bytes(), nil
+}

@@ -10,8 +10,10 @@ all: build
 # The check runner runs inside a Linux container, whatever the host is. Its
 # binaries are embedded into the main binary, so they are built first.
 runner:
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o $(RUNNER_BIN)/runner-linux-amd64 ./cmd/sprintfoundry-runner
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o $(RUNNER_BIN)/runner-linux-arm64 ./cmd/sprintfoundry-runner
+	for arch in amd64 arm64; do \
+		CGO_ENABLED=0 GOOS=linux GOARCH=$$arch go build -trimpath -ldflags "-s -w" -o $(RUNNER_BIN)/runner-linux-$$arch ./cmd/sprintfoundry-runner && \
+		CGO_ENABLED=0 GOOS=linux GOARCH=$$arch go build -trimpath -ldflags "-s -w" -o $(RUNNER_BIN)/proxy-linux-$$arch ./cmd/sprintfoundry-proxy || exit 1; \
+	done
 
 build: runner
 	CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" -o sprintfoundry ./cmd/sprintfoundry
@@ -20,4 +22,4 @@ test: runner
 	go test -race -count=1 ./...
 
 clean:
-	rm -f sprintfoundry $(RUNNER_BIN)/runner-linux-*
+	rm -f sprintfoundry $(RUNNER_BIN)/runner-linux-* $(RUNNER_BIN)/proxy-linux-*
