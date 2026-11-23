@@ -19,6 +19,8 @@ Usage:
 Commands:
   demo      Run the built-in demo: one feature, two builders, signed evidence
   run       Run Codex CLI on a repository in a keyless sandbox, check and sign
+  register  Register the criteria, checks and run spec for a GitHub repository
+  check     Check a pull request or a merged commit and post a commit status
   verify    Ask whether an image may be released under a policy
   down      Stop the local database (add --purge to delete its data)
   version   Print the version
@@ -42,6 +44,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return demoCommand(args[1:], stdout, stderr)
 	case "run":
 		return runCommand(args[1:], stdout, stderr)
+	case "register":
+		return registerCommand(args[1:], stdout, stderr)
+	case "check":
+		return checkCommand(args[1:], stdout, stderr)
 	case "verify":
 		return verifyCommand(args[1:], stdout, stderr)
 	case "down":

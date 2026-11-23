@@ -232,3 +232,32 @@ func TestInputsAreAddressedByContent(t *testing.T) {
 		t.Errorf("missing input: err = %v", err)
 	}
 }
+
+func TestRegistration(t *testing.T) {
+	ctx := context.Background()
+	s := open(t, freshURL(t))
+	if _, err := s.Registered(ctx, "github.com/o/r"); !errors.Is(err, postgres.ErrNotFound) {
+		t.Fatalf("unregistered repository: err = %v", err)
+	}
+	r := newRun(t, s, "unused", "github.com/o/r", "criteria v1")
+	reg := postgres.Registration{Repository: "github.com/o/r", CriteriaDigest: r.CriteriaDigest, SuiteDigest: r.SuiteDigest, RunSpecDigest: r.RunSpecDigest}
+	if err := s.Register(ctx, reg); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Registered(ctx, "github.com/o/r")
+	if err != nil || got != reg {
+		t.Fatalf("registered = %+v, %v", got, err)
+	}
+	v2, _ := s.PutInput(ctx, "criteria", []byte("criteria v2"))
+	reg.CriteriaDigest = v2
+	if err := s.Register(ctx, reg); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Registered(ctx, "github.com/o/r"); got.CriteriaDigest != v2 {
+		t.Error("registering again did not replace the criteria")
+	}
+	reg.SuiteDigest = "sha256:not-stored"
+	if err := s.Register(ctx, reg); err == nil {
+		t.Error("an input that was never stored was registered")
+	}
+}

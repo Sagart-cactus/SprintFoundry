@@ -133,51 +133,15 @@ func Run(ctx context.Context, d Deps, req Request) (Result, error) {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
-	if !runIDPattern.MatchString(req.RunID) {
-		return Result{}, fmt.Errorf("controller: run ID %q is not allowed", req.RunID)
-	}
 	if req.RepairRounds <= 0 {
 		req.RepairRounds = DefaultRepairRounds
 	}
 
-	// Freeze the inputs before anything is built. A run without all three
-	// digests does not start.
-	if len(bytes.TrimSpace(req.Criteria)) == 0 {
-		return Result{}, fmt.Errorf("%w: no criteria", ErrInputs)
-	}
-	suite, err := checks.Parse(req.Suite)
+	in, err := freeze(ctx, d, req.RunID, req.Repository, req.Criteria, req.Suite, req.RunSpec)
 	if err != nil {
-		return Result{}, fmt.Errorf("%w: %v", ErrInputs, err)
-	}
-	spec, err := runspec.Parse(req.RunSpec)
-	if err != nil {
-		return Result{}, fmt.Errorf("%w: %v", ErrInputs, err)
-	}
-	for _, c := range suite.Checks {
-		as := ""
-		if c.HTTP != nil {
-			as = c.HTTP.As
-		} else {
-			as = c.Browser.As
-		}
-		if _, ok := spec.Actors[as]; !ok {
-			return Result{}, fmt.Errorf("%w: check suite uses actor %q, which the run spec does not define", ErrInputs, as)
-		}
-	}
-	res := Result{RunID: req.RunID, SuiteDigest: suite.Digest(), RunSpecDigest: spec.Digest()}
-	if res.CriteriaDigest, err = d.Store.PutInput(ctx, "criteria", req.Criteria); err != nil {
 		return Result{}, err
 	}
-	if err := d.Store.PutInputAs(ctx, "check-suite", res.SuiteDigest, req.Suite); err != nil {
-		return Result{}, err
-	}
-	if err := d.Store.PutInputAs(ctx, "run-spec", res.RunSpecDigest, req.RunSpec); err != nil {
-		return Result{}, err
-	}
-	if err := d.Store.BeginRun(ctx, postgres.Run{ID: req.RunID, Repository: req.Repository,
-		CriteriaDigest: res.CriteriaDigest, SuiteDigest: res.SuiteDigest, RunSpecDigest: res.RunSpecDigest}); err != nil {
-		return Result{}, err
-	}
+	res := Result{RunID: req.RunID, CriteriaDigest: in.criteria, SuiteDigest: in.suiteDigest, RunSpecDigest: in.specDigest}
 	logf("Inputs frozen: criteria %s, checks %s, run spec %s", short(res.CriteriaDigest), short(res.SuiteDigest), short(res.RunSpecDigest))
 
 	var feedback []agent.Feedback
@@ -211,87 +175,21 @@ func Run(ctx context.Context, d Deps, req Request) (Result, error) {
 			res.State, res.Reason = NeedsOwner, "the builder's change was refused on import: "+err.Error()
 			return res, nil
 		}
-		round := Round{Number: number, Commit: imported.Commit, Tree: imported.Tree, BuilderNote: change.Summary}
-		if round.ChangedPaths, err = gitimport.ChangedPaths(ctx, req.StoreDir, req.Parent, imported.Commit); err != nil {
-			return Result{}, err
-		}
-		round.SensitivePaths = spec.Sensitive(round.ChangedPaths)
-		logf("Round %d: imported as data, commit %s, %d file(s) changed", number, imported.Commit[:12], len(round.ChangedPaths))
-		if len(round.SensitivePaths) > 0 {
-			logf("Round %d: the change touches protected paths: %v", number, round.SensitivePaths)
-		}
-
-		// The builder wrote the Dockerfile. Check it before the runtime reads
-		// it: only listed base images, nothing fetched from outside.
-		content, err := gitimport.ReadFile(ctx, req.StoreDir, imported.Commit, spec.Build.Dockerfile)
-		if err == nil {
-			err = dockerfile.Check(content, spec.Build.BaseImages)
-		}
-		if err != nil {
-			res.Rounds = append(res.Rounds, round)
-			res.State, res.Reason = NeedsOwner, "the Dockerfile was refused before any build: "+err.Error()
-			return res, nil
-		}
-
-		if round.Image, err = d.Build(ctx, req.StoreDir, imported.Commit, spec); err != nil {
-			res.Rounds = append(res.Rounds, round)
-			res.State, res.Reason = NeedsOwner, "the candidate could not be built: "+err.Error()
-			return res, nil
-		}
-		logf("Round %d: candidate built, image %s", number, round.Image[:12])
-
-		eval, err := d.Evaluate(ctx, evaluate.Request{
-			RunID: fmt.Sprintf("%s-r%d", req.RunID, number), Candidate: round.Image,
-			RunnerImage: req.RunnerImage, Spec: spec, Suite: suite, Labels: req.Labels,
-		})
-		if err != nil {
-			res.Rounds = append(res.Rounds, round)
-			res.State, res.Reason = NeedsOwner, "the evaluation could not be completed: "+err.Error()
-			return res, nil
-		}
-		round.Report = eval.Report
-		round.HoldoutFailed = eval.Report.HoldoutFailed()
-
-		var review []string
-		for _, p := range round.SensitivePaths {
-			review = append(review, "change touches "+p)
-		}
-		statement, err := evidence.NewEvidence(evidence.Evaluation{
-			ImageName: req.ImageName, ImageDigest: round.Image, DigestKind: req.DigestKind,
-			CriteriaDigest: res.CriteriaDigest, SuiteDigest: res.SuiteDigest, RunSpecDigest: res.RunSpecDigest,
-			RunnerImage: req.RunnerImage, Repository: req.Repository, Commit: imported.Commit, Tree: imported.Tree,
-			RunID: req.RunID, Purpose: req.Purpose, FinishedAt: d.Now(), ReportURL: req.ReportURL,
-			ReviewRequired: review, Report: eval.Report, NameKey: req.NameKey,
+		round, stop, err := evaluateCommit(ctx, d, in, commitRequest{
+			RunID: req.RunID, Number: number, Repository: req.Repository, StoreDir: req.StoreDir,
+			Base: req.Parent, Commit: imported.Commit, Tree: imported.Tree,
+			Purpose: req.Purpose, ImageName: req.ImageName, DigestKind: req.DigestKind,
+			RunnerImage: req.RunnerImage, ReportURL: req.ReportURL, NameKey: req.NameKey, Labels: req.Labels,
 		})
 		if err != nil {
 			return Result{}, err
 		}
-		payload, err := statement.Marshal()
-		if err != nil {
-			return Result{}, err
+		round.BuilderNote = change.Summary
+		if stop != "" {
+			res.Rounds = append(res.Rounds, round)
+			res.State, res.Reason = NeedsOwner, stop
+			return res, nil
 		}
-		envelope, err := d.Signer.Sign(ctx, payload)
-		if err != nil {
-			return Result{}, fmt.Errorf("controller: sign evidence: %w", err)
-		}
-		stored, err := json.Marshal(envelope)
-		if err != nil {
-			return Result{}, err
-		}
-		_, parsed, _ := evidence.ParseTestResult(payload)
-		runInfo, _ := parsed.Config("run")
-		round.Outcome = runInfo.Annotations["outcome"]
-		round.EvidenceDigest = evidence.Digest(payload)
-		if err := d.Store.PutEvidence(ctx, postgres.Evidence{
-			Digest: round.EvidenceDigest, RunID: req.RunID, Round: number, Repository: req.Repository,
-			ImageDigest: round.Image, DigestKind: string(req.DigestKind),
-			CriteriaDigest: res.CriteriaDigest, SuiteDigest: res.SuiteDigest, RunSpecDigest: res.RunSpecDigest,
-			Purpose: string(req.Purpose), Outcome: round.Outcome,
-			ReviewRequired: runInfo.Annotations["reviewRequired"], Envelope: stored,
-		}); err != nil {
-			return Result{}, err
-		}
-		logf("Round %d: evaluation %s, evidence signed (%s)", number, round.Outcome, short(round.EvidenceDigest))
 
 		switch round.Outcome {
 		case evidence.OutcomePassed:
@@ -309,7 +207,7 @@ func Run(ctx context.Context, d Deps, req Request) (Result, error) {
 			return res, nil
 		}
 
-		round.Feedback = eval.Report.BuilderFeedback()
+		round.Feedback = round.Report.BuilderFeedback()
 		res.Rounds = append(res.Rounds, round)
 		if len(round.Feedback) == 0 {
 			res.State, res.Reason = NeedsOwner, "a holdout check failed; the builder is told nothing and a person must look"
@@ -321,6 +219,159 @@ func Run(ctx context.Context, d Deps, req Request) (Result, error) {
 			logf("Round %d: feedback to the builder: %s: %s", number, f.Criterion, f.Text)
 		}
 	}
+}
+
+// frozen holds a run's parsed inputs and their digests.
+type frozen struct {
+	suite                             checks.Suite
+	spec                              runspec.Spec
+	criteria, suiteDigest, specDigest string
+}
+
+// freeze checks the three inputs, stores them by digest and records the run.
+// Nothing is built for a run whose inputs are not all frozen.
+func freeze(ctx context.Context, d Deps, runID, repository string, criteria, suiteText, specText []byte) (frozen, error) {
+	if !runIDPattern.MatchString(runID) {
+		return frozen{}, fmt.Errorf("controller: run ID %q is not allowed", runID)
+	}
+	if len(bytes.TrimSpace(criteria)) == 0 {
+		return frozen{}, fmt.Errorf("%w: no criteria", ErrInputs)
+	}
+	suite, err := checks.Parse(suiteText)
+	if err != nil {
+		return frozen{}, fmt.Errorf("%w: %v", ErrInputs, err)
+	}
+	spec, err := runspec.Parse(specText)
+	if err != nil {
+		return frozen{}, fmt.Errorf("%w: %v", ErrInputs, err)
+	}
+	for _, c := range suite.Checks {
+		as := ""
+		if c.HTTP != nil {
+			as = c.HTTP.As
+		} else {
+			as = c.Browser.As
+		}
+		if _, ok := spec.Actors[as]; !ok {
+			return frozen{}, fmt.Errorf("%w: check suite uses actor %q, which the run spec does not define", ErrInputs, as)
+		}
+	}
+	in := frozen{suite: suite, spec: spec, suiteDigest: suite.Digest(), specDigest: spec.Digest()}
+	if in.criteria, err = d.Store.PutInput(ctx, "criteria", criteria); err != nil {
+		return frozen{}, err
+	}
+	if err := d.Store.PutInputAs(ctx, "check-suite", in.suiteDigest, suiteText); err != nil {
+		return frozen{}, err
+	}
+	if err := d.Store.PutInputAs(ctx, "run-spec", in.specDigest, specText); err != nil {
+		return frozen{}, err
+	}
+	if err := d.Store.BeginRun(ctx, postgres.Run{ID: runID, Repository: repository,
+		CriteriaDigest: in.criteria, SuiteDigest: in.suiteDigest, RunSpecDigest: in.specDigest}); err != nil {
+		return frozen{}, err
+	}
+	return in, nil
+}
+
+// commitRequest is one commit, already in the store, to build and evaluate.
+type commitRequest struct {
+	RunID, Repository, StoreDir string
+	Number                      int
+	// Base is the commit the change is measured against, for the protected
+	// paths. Commit and Tree are what is built.
+	Base, Commit, Tree string
+	Purpose            signer.Purpose
+	ImageName          string
+	DigestKind         evidence.DigestKind
+	RunnerImage        string
+	ReportURL          string
+	NameKey            []byte
+	Labels             map[string]string
+}
+
+// evaluateCommit checks the Dockerfile, builds the commit, evaluates the
+// image, and signs and stores the evidence. A non-empty stop is the reason a
+// person must take over before anything was evaluated.
+func evaluateCommit(ctx context.Context, d Deps, in frozen, r commitRequest) (round Round, stop string, err error) {
+	logf := d.Log
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+	round = Round{Number: r.Number, Commit: r.Commit, Tree: r.Tree}
+	if round.ChangedPaths, err = gitimport.ChangedPaths(ctx, r.StoreDir, r.Base, r.Commit); err != nil {
+		return round, "", err
+	}
+	round.SensitivePaths = in.spec.Sensitive(round.ChangedPaths)
+	logf("Round %d: commit %s, %d file(s) changed", r.Number, r.Commit[:12], len(round.ChangedPaths))
+	if len(round.SensitivePaths) > 0 {
+		logf("Round %d: the change touches protected paths: %v", r.Number, round.SensitivePaths)
+	}
+
+	// The builder wrote the Dockerfile. Check it before the runtime reads it:
+	// only listed base images, nothing fetched from outside.
+	content, err := gitimport.ReadFile(ctx, r.StoreDir, r.Commit, in.spec.Build.Dockerfile)
+	if err == nil {
+		err = dockerfile.Check(content, in.spec.Build.BaseImages)
+	}
+	if err != nil {
+		return round, "the Dockerfile was refused before any build: " + err.Error(), nil
+	}
+	if round.Image, err = d.Build(ctx, r.StoreDir, r.Commit, in.spec); err != nil {
+		return round, "the candidate could not be built: " + err.Error(), nil
+	}
+	logf("Round %d: candidate built, image %s", r.Number, round.Image[:12])
+
+	eval, err := d.Evaluate(ctx, evaluate.Request{
+		RunID: fmt.Sprintf("%s-r%d", r.RunID, r.Number), Candidate: round.Image,
+		RunnerImage: r.RunnerImage, Spec: in.spec, Suite: in.suite, Labels: r.Labels,
+	})
+	if err != nil {
+		return round, "the evaluation could not be completed: " + err.Error(), nil
+	}
+	round.Report = eval.Report
+	round.HoldoutFailed = eval.Report.HoldoutFailed()
+
+	var review []string
+	for _, p := range round.SensitivePaths {
+		review = append(review, "change touches "+p)
+	}
+	statement, err := evidence.NewEvidence(evidence.Evaluation{
+		ImageName: r.ImageName, ImageDigest: round.Image, DigestKind: r.DigestKind,
+		CriteriaDigest: in.criteria, SuiteDigest: in.suiteDigest, RunSpecDigest: in.specDigest,
+		RunnerImage: r.RunnerImage, Repository: r.Repository, Commit: r.Commit, Tree: r.Tree,
+		RunID: r.RunID, Purpose: r.Purpose, FinishedAt: d.Now(), ReportURL: r.ReportURL,
+		ReviewRequired: review, Report: eval.Report, NameKey: r.NameKey,
+	})
+	if err != nil {
+		return round, "", err
+	}
+	payload, err := statement.Marshal()
+	if err != nil {
+		return round, "", err
+	}
+	envelope, err := d.Signer.Sign(ctx, payload)
+	if err != nil {
+		return round, "", fmt.Errorf("controller: sign evidence: %w", err)
+	}
+	stored, err := json.Marshal(envelope)
+	if err != nil {
+		return round, "", err
+	}
+	_, parsed, _ := evidence.ParseTestResult(payload)
+	runInfo, _ := parsed.Config("run")
+	round.Outcome = runInfo.Annotations["outcome"]
+	round.EvidenceDigest = evidence.Digest(payload)
+	if err := d.Store.PutEvidence(ctx, postgres.Evidence{
+		Digest: round.EvidenceDigest, RunID: r.RunID, Round: r.Number, Repository: r.Repository,
+		ImageDigest: round.Image, DigestKind: string(r.DigestKind),
+		CriteriaDigest: in.criteria, SuiteDigest: in.suiteDigest, RunSpecDigest: in.specDigest,
+		Purpose: string(r.Purpose), Outcome: round.Outcome,
+		ReviewRequired: runInfo.Annotations["reviewRequired"], Envelope: stored,
+	}); err != nil {
+		return round, "", err
+	}
+	logf("Round %d: evaluation %s, evidence signed (%s)", r.Number, round.Outcome, short(round.EvidenceDigest))
+	return round, "", nil
 }
 
 func short(digest string) string {

@@ -73,3 +73,13 @@ CREATE TABLE IF NOT EXISTS sf_evaluations (
     used            integer NOT NULL DEFAULT 0,
     PRIMARY KEY (repository, criteria_digest)
 );
+
+-- Inputs registered for a repository by its operator. Pull request checks
+-- use these; nothing in the repository itself can change them.
+CREATE TABLE IF NOT EXISTS sf_registrations (
+    repository      text        PRIMARY KEY,
+    criteria_digest text        NOT NULL REFERENCES sf_inputs (digest),
+    suite_digest    text        NOT NULL REFERENCES sf_inputs (digest),
+    runspec_digest  text        NOT NULL REFERENCES sf_inputs (digest),
+    registered_at   timestamptz NOT NULL DEFAULT now()
+);
