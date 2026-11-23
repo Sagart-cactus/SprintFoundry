@@ -5,3 +5,4 @@
 *.out
 .DS_Store
 /internal/runnerimage/bin/runner-linux-*
+/internal/runnerimage/bin/proxy-linux-*

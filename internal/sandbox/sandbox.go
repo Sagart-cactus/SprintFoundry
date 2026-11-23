@@ -98,7 +98,9 @@ type Guard struct {
 var ErrUnsafeSpec = errors.New("sandbox: unsafe spec")
 
 var (
-	pinned      = regexp.MustCompile(`^[a-zA-Z0-9][^@\s]*@sha256:[0-9a-f]{64}$`)
+	// An image is pinned by name@sha256:digest or by a bare image ID, which
+	// is a content hash on the local runtime.
+	pinned      = regexp.MustCompile(`^([a-zA-Z0-9][^@\s]*@sha256:[0-9a-f]{64}|[0-9a-f]{64})$`)
 	secretNames = regexp.MustCompile(`(?i)(token|secret|passw(or)?d|api[_-]?key|credential|private[_-]?key)`)
 	envName     = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
 )
@@ -216,10 +218,19 @@ func carries(value, secret string) bool {
 	return false
 }
 
+// DefaultMaxOutput bounds what a command may write to each of its output
+// streams when the Command does not say.
+const DefaultMaxOutput = 1 << 20
+
 // Command is one process to run inside a sandbox.
 type Command struct {
 	Args  []string
 	Stdin io.Reader
+	// MaxOutput bounds the bytes kept from each output stream. Zero means
+	// DefaultMaxOutput. Output beyond it is read and dropped, never held.
+	MaxOutput int
+	// KeepTail keeps the last MaxOutput bytes instead of the first.
+	KeepTail bool
 }
 
 // Result is what a finished command produced.
@@ -227,6 +238,8 @@ type Result struct {
 	ExitCode int
 	Stdout   []byte
 	Stderr   []byte
+	// Truncated is set when a stream wrote more than MaxOutput.
+	Truncated bool
 }
 
 // Sandbox is a backend that runs untrusted work.

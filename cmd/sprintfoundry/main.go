@@ -18,6 +18,7 @@ Usage:
 
 Commands:
   demo      Run the built-in demo: one feature, two builders, signed evidence
+  run       Run Codex CLI on a repository in a keyless sandbox, check and sign
   verify    Ask whether an image may be released under a policy
   down      Stop the local database (add --purge to delete its data)
   version   Print the version
@@ -39,6 +40,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	case "demo":
 		return demoCommand(args[1:], stdout, stderr)
+	case "run":
+		return runCommand(args[1:], stdout, stderr)
 	case "verify":
 		return verifyCommand(args[1:], stdout, stderr)
 	case "down":

@@ -1,10 +1,11 @@
 module github.com/sagart-cactus/sprintfoundry
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/jackc/pgx/v5 v5.13.0
 	go.yaml.in/yaml/v3 v3.0.6
+	golang.org/x/crypto/x509roots/fallback v0.0.0-20261115193255-739070949446
 )
 
 require (

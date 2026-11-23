@@ -7,6 +7,7 @@ package container
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -170,6 +171,20 @@ type RunOptions struct {
 	// Writable leaves the root file system writable. The default is
 	// read-only with a small writable /tmp.
 	Writable bool
+	// Tmpfs adds writable in-memory directories, as "path:options", for
+	// example "/workspace:rw,exec,size=2g,mode=1777". They vanish with the
+	// container.
+	Tmpfs []string
+	// Entrypoint replaces the image's entrypoint when set.
+	Entrypoint string
+	// Workdir sets the working directory inside the container.
+	Workdir string
+	// EnvFile is a file of NAME=value lines. Secrets go here and not in Env,
+	// so they never appear on a command line.
+	EnvFile string
+	// Remove deletes the container, and the settings stored with it, as
+	// soon as it stops.
+	Remove   bool
 	MemoryMB int
 	CPUs     float64
 	PIDs     int
@@ -191,6 +206,34 @@ func runArgs(mode []string, opts RunOptions) ([]string, error) {
 		"--cap-drop=ALL", "--security-opt", "no-new-privileges")
 	if !opts.Writable {
 		args = append(args, "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m")
+	}
+	for _, t := range opts.Tmpfs {
+		path, _, _ := strings.Cut(t, ":")
+		if !strings.HasPrefix(path, "/") || path == "/tmp" || strings.ContainsAny(t, " \t\n") {
+			return nil, fmt.Errorf("container: tmpfs %q is not allowed", t)
+		}
+		args = append(args, "--tmpfs", t)
+	}
+	if opts.Entrypoint != "" {
+		if strings.HasPrefix(opts.Entrypoint, "-") {
+			return nil, fmt.Errorf("container: entrypoint %q is not allowed", opts.Entrypoint)
+		}
+		args = append(args, "--entrypoint", opts.Entrypoint)
+	}
+	if opts.Workdir != "" {
+		if !strings.HasPrefix(opts.Workdir, "/") {
+			return nil, fmt.Errorf("container: workdir %q must be absolute", opts.Workdir)
+		}
+		args = append(args, "--workdir", opts.Workdir)
+	}
+	if opts.EnvFile != "" {
+		if !filepath.IsAbs(opts.EnvFile) {
+			return nil, fmt.Errorf("container: env file %q must be an absolute path", opts.EnvFile)
+		}
+		args = append(args, "--env-file", opts.EnvFile)
+	}
+	if opts.Remove && mode[0] == "--detach" {
+		args = append(args, "--rm")
 	}
 	if opts.MemoryMB > 0 {
 		args = append(args, "--memory", strconv.Itoa(opts.MemoryMB)+"m")
@@ -498,3 +541,107 @@ func (c CLI) Pull(ctx context.Context, image string) error {
 }
 
 var pinnedRef = regexp.MustCompile(`^[a-zA-Z0-9][^@\s]*@sha256:[0-9a-f]{64}$`)
+
+// NetworkConnect attaches a running container to another network.
+func (c CLI) NetworkConnect(ctx context.Context, network, name string) error {
+	if !nameOK.MatchString(network) || !nameOK.MatchString(name) {
+		return fmt.Errorf("container: network %q or container %q is not allowed", network, name)
+	}
+	_, err := c.must(ctx, nil, "network", "connect", network, name)
+	return err
+}
+
+// BuildTrusted builds an image from a build context the controller itself
+// wrote, with the default network so that it can install packages. It is
+// never used for anything a builder wrote; candidates go through Build.
+func (c CLI) BuildTrusted(ctx context.Context, buildContext io.Reader, labels map[string]string) (string, error) {
+	args := []string{"build", "--quiet", "--file", "Dockerfile"}
+	args = append(args, labelArgs(labels)...)
+	args = append(args, "-")
+	out, err := c.must(ctx, buildContext, args...)
+	if err != nil {
+		return "", err
+	}
+	lines := strings.Split(out, "\n")
+	id := strings.TrimPrefix(strings.TrimSpace(lines[len(lines)-1]), "sha256:")
+	if !imageID.MatchString(id) {
+		return "", fmt.Errorf("container: build did not print an image ID, got %q", id)
+	}
+	return id, nil
+}
+
+// ExecTo runs a command inside a running container and writes its output
+// streams to the given writers as they arrive, so the caller decides how
+// much to keep. It returns the exit code.
+func (c CLI) ExecTo(ctx context.Context, name string, stdin io.Reader, stdout, stderr io.Writer, args ...string) (int, error) {
+	if !nameOK.MatchString(name) {
+		return 0, fmt.Errorf("container: name %q is not allowed", name)
+	}
+	full := []string{"exec"}
+	if stdin != nil {
+		full = append(full, "--interactive")
+	}
+	full = append(append(full, name), args...)
+	cmd := exec.CommandContext(ctx, c.bin(), full...)
+	cmd.Stdin = stdin
+	cmd.Stdout, cmd.Stderr = stdout, stderr
+	err := cmd.Run()
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		return exit.ExitCode(), nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("container: exec in %s: %w", name, err)
+	}
+	return 0, nil
+}
+
+// IPAddress returns a container's address on one network.
+func (c CLI) IPAddress(ctx context.Context, name, network string) (string, error) {
+	if !nameOK.MatchString(name) || !nameOK.MatchString(network) {
+		return "", fmt.Errorf("container: name %q or network %q is not allowed", name, network)
+	}
+	out, err := c.must(ctx, nil, "inspect", "--type", "container", "--format",
+		"{{(index .NetworkSettings.Networks \""+network+"\").IPAddress}}", name)
+	if err != nil {
+		return "", err
+	}
+	if out == "" || strings.ContainsAny(out, " <") {
+		return "", fmt.Errorf("container: %s has no address on %s", name, network)
+	}
+	return out, nil
+}
+
+// CheckInternalNetworks refuses a runtime whose internal networks are known
+// to leak. Docker Engine before 26.0 forwarded DNS queries from internal
+// networks to outside resolvers (CVE-2024-29018), which lets a sandbox send
+// data out through DNS. Podman is not affected.
+func (c CLI) CheckInternalNetworks(ctx context.Context) error {
+	if filepath.Base(c.bin()) == "podman" {
+		return nil
+	}
+	out, err := c.must(ctx, nil, "version", "--format", "{{json .Server}}")
+	if err != nil {
+		return err
+	}
+	var server struct {
+		Version    string
+		Components []struct{ Name string }
+	}
+	if err := json.Unmarshal([]byte(out), &server); err != nil {
+		return fmt.Errorf("container: cannot read the engine version: %v", err)
+	}
+	for _, component := range server.Components {
+		if strings.Contains(strings.ToLower(component.Name), "podman") {
+			return nil // the docker command talking to Podman
+		}
+	}
+	major, err := strconv.Atoi(strings.SplitN(strings.TrimPrefix(server.Version, "v"), ".", 2)[0])
+	if err != nil {
+		return fmt.Errorf("container: cannot read the engine version %q", server.Version)
+	}
+	if major < 26 {
+		return fmt.Errorf("container: Docker Engine %s lets internal networks reach outside DNS servers (CVE-2024-29018); upgrade to 26.0 or later", server.Version)
+	}
+	return nil
+}

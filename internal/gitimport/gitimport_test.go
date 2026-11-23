@@ -276,3 +276,26 @@ func TestImportRejectsPathEscape(t *testing.T) {
 		t.Fatalf("a file was written outside the store")
 	}
 }
+
+func TestCloneBareCopiesHeadWithoutRunningHooks(t *testing.T) {
+	f := newFixture(t)
+	marker := filepath.Join(t.TempDir(), "hook-ran")
+	write(t, filepath.Join(f.builder, ".git", "hooks", "post-checkout"), "#!/bin/sh\ntouch '"+marker+"'\n")
+	dst := filepath.Join(t.TempDir(), "copy.git")
+	head, err := CloneBare(context.Background(), f.builder, dst)
+	if err != nil {
+		t.Fatalf("CloneBare: %v", err)
+	}
+	if head != f.parent {
+		t.Errorf("head = %s, want %s", head, f.parent)
+	}
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Error("a hook of the source repository ran")
+	}
+	if _, err := CloneBare(context.Background(), f.builder, dst); err == nil {
+		t.Error("cloning over an existing store was accepted")
+	}
+	if _, err := CloneBare(context.Background(), t.TempDir(), filepath.Join(t.TempDir(), "x.git")); err == nil {
+		t.Error("a directory that is not a repository was accepted")
+	}
+}

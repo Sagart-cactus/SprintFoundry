@@ -1,6 +1,6 @@
 # 0006: The sandbox has no key and one network peer
 
-Status: decided on 22 November 2026 after a spike.
+Status: decided on 22 November 2026 after a spike, and built on 23 November 2026 (`internal/proxy`, `cmd/sprintfoundry-proxy`, `internal/sandbox/containerbox`, `internal/agent/sandboxed`).
 
 ## Decision
 
@@ -27,11 +27,22 @@ Run on Podman 5.7 (macOS). A fake model API stood in for the real one, so no rea
 4. **Codex uses a custom provider entry.** With the built-in provider it tries a WebSocket first and loses about six seconds before falling back.
 5. **Start order on Podman.** The proxy starts on the upstream network and is then connected to the internal one.
 6. **No network for the agent's tools.** `git fetch` and `npm install` fail inside the sandbox by design. A repository that needs packages gets them from the image or from registries the proxy allows.
-7. **Spend cap.** The proxy counts requests and tokens per run and stops forwarding at the cap.
+7. **Spend cap.** The proxy stops forwarding after the run's request budget. It allows only the one model the run was started with, lowers or sets each request's output limit to a cap, removes the price-tier field and forces `store: false`. It does not count tokens across requests; the bound on spend is requests times the per-request cap, plus input.
+8. **References the provider would follow.** The proxy walks the whole request body and refuses any URL that is not inline data (`image_url`, `file_url`, `url`, `uri`), any stored file or earlier stored item (`file_id`, `item_reference`, `previous_response_id`, `conversation`), and any content source that is not inline. Otherwise the provider would fetch from, or send data to, the internet for the sandbox.
 
 ## Remaining risk
 
 Whatever the agent sends to the model reaches the model provider. That includes the repository contents the agent reads. This is inherent in using a hosted model and is stated in the docs.
+
+## How it is built
+
+- The sandbox's root file system is read-only. The builder works in in-memory directories (`/workspace`, `/home/agent`, `/sf`), and nothing from the host is mounted; files go in and out as tar streams.
+- Each round gets a fresh sandbox with the parent commit's files under a new root commit (no history, so secrets in old commits never reach the agent or the provider), the previous round's change applied, and `/sf/task.md` holding the criteria and the feedback.
+- What the sandbox writes back is bounded: the agent's own output keeps its last 64 KB, the patch may not exceed the import limit, and control characters are removed before anything is shown to a person.
+- `run` refuses Docker Engine before 26.0, whose internal networks forward DNS to outside resolvers (CVE-2024-29018).
+- The proxy runs as its own FROM scratch container with built-in root certificates. It receives the key in an env file, never on a command line. The container's stored settings keep the key while it exists, so it is removed as soon as it stops. It logs method, path (quoted, so a path cannot start a line of its own) and outcome, with a running count of forwarded requests.
+- The key may travel over plain http only to this machine or a container on its network.
+- The proxy forwards the body it checked, re-encoded, not the bytes it was sent, so a repeated JSON key cannot hide a tool from the check.
 
 ## Not verified
 
