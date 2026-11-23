@@ -241,14 +241,20 @@ func Codex(proxyURL, model string) (string, error) {
 	if !regexp.MustCompile(`^http://[a-z0-9-]+:[0-9]+/v1$`).MatchString(proxyURL) {
 		return "", fmt.Errorf("sandboxed: proxy URL %q is not of the expected form", proxyURL)
 	}
-	if !regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`).MatchString(model) {
+	if !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,95}$`).MatchString(model) {
 		return "", fmt.Errorf("sandboxed: model %q is not a model name", model)
 	}
 	provider := `model_providers.sf={ name = "sprintfoundry proxy", base_url = "` + proxyURL + `", wire_api = "responses" }`
-	return "codex exec --json --skip-git-repo-check --ephemeral --dangerously-bypass-approvals-and-sandbox " +
+	// Codex refuses to start if its home directory does not exist, and the
+	// sandbox's home is a fresh in-memory directory.
+	return "mkdir -p \"${CODEX_HOME:-$HOME/.codex}\" && " +
+		"codex exec --json --skip-git-repo-check --ephemeral --dangerously-bypass-approvals-and-sandbox " +
 		"--cd /workspace/repo -m " + model + " " +
 		"-c '" + provider + "' -c 'model_provider=\"sf\"' " +
 		"-c 'check_for_update_on_startup=false' -c 'analytics.enabled=false' " +
+		// Web search runs on the provider's side; the proxy would refuse
+		// every request that offers it.
+		"-c 'web_search=\"disabled\"' " +
 		"- < /sf/task.md", nil
 }
 
