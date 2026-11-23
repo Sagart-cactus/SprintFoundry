@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -98,9 +99,10 @@ func TestOpenIsSafeToRepeatAndToRace(t *testing.T) {
 	}
 }
 
-// lockSessions returns the backend PIDs that hold an advisory lock in the
-// test database.
-func lockSessions(t *testing.T, url string) []int32 {
+// lockSessions returns the backend PIDs that hold the advisory lock for key
+// in the test database. Other tests share the database and take advisory
+// locks of their own at the same time, so only this key counts.
+func lockSessions(t *testing.T, url, key string) []int32 {
 	t.Helper()
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, url)
@@ -108,8 +110,9 @@ func lockSessions(t *testing.T, url string) []int32 {
 		t.Fatal(err)
 	}
 	defer conn.Close(ctx)
-	rows, err := conn.Query(ctx, `SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND granted
-		AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`)
+	rows, err := conn.Query(ctx, `SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND granted AND objsubid = 1
+		AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+		AND ((classid::bigint << 32) | objid::bigint) = hashtextextended($1, 0)`, key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +154,7 @@ func TestLockIsReleasedWhenTheHolderDies(t *testing.T) {
 	}
 
 	// The holding controller's database session dies.
-	pids := lockSessions(t, url)
+	pids := lockSessions(t, url, key)
 	if len(pids) != 1 {
 		t.Fatalf("expected one session holding an advisory lock, found %d", len(pids))
 	}
@@ -173,6 +176,11 @@ func TestHolderCannotRecordAfterLosingItsSession(t *testing.T) {
 	ctx := context.Background()
 
 	inDo, proceed := make(chan struct{}), make(chan struct{})
+	// If the test stops early, let A's Do return, or closing A's store waits
+	// forever for the connection A still holds.
+	var letGo sync.Once
+	release := func() { letGo.Do(func() { close(proceed) }) }
+	t.Cleanup(release)
 	var performed atomic.Int64
 	first := make(chan error, 1)
 	go func() {
@@ -189,7 +197,7 @@ func TestHolderCannotRecordAfterLosingItsSession(t *testing.T) {
 	<-inDo
 
 	// Controller A's lock session is killed while it is still inside Do.
-	pids := lockSessions(t, url)
+	pids := lockSessions(t, url, key)
 	if len(pids) != 1 {
 		t.Fatalf("expected one session holding an advisory lock, found %d", len(pids))
 	}
@@ -203,7 +211,7 @@ func TestHolderCannotRecordAfterLosingItsSession(t *testing.T) {
 		t.Fatalf("controller B: %q, %v", got, err)
 	}
 
-	close(proceed)
+	release()
 	if err := <-first; !errors.Is(err, effect.ErrHoldLost) {
 		t.Fatalf("controller A returned %v after losing its session, want ErrHoldLost", err)
 	}
