@@ -48,7 +48,7 @@ importers:
         version: 3.1.1(@opentelemetry/api@1.10.0)
       commander:
         specifier: ^15.0.0
-        version: 15.0.0
+        version: 15.1.0
       pg:
         specifier: ^8.16.3
         version: 8.23.1
@@ -2104,6 +2104,10 @@ packages:
 
   commander@15.0.0:
     resolution: {integrity: sha512-z67u4ZhzCL/Tydu1lJARtEZYWbWaN7oYLHbsuzocr6y4N6WZAagG3RQ4FW61V1/0+jImpj293XfrcYnd1qxtPg==}
+    engines: {node: '>=22.12.0'}
+
+  commander@15.1.0:
+    resolution: {integrity: sha512-cgnQ88TRrWcC7pVq46RzJVRMktu3W2RcbnoidnfBsl1bmDCBwJS/udcIZpKoCrbAYYaCqsz1yZCVIgbIaU3ddQ==}
     engines: {node: '>=22.12.0'}
 
   constantinople@4.0.1:
@@ -5252,6 +5256,8 @@ snapshots:
 
   commander@15.0.0: {}
 
+  commander@15.1.0: {}
+
   constantinople@4.0.1:
     dependencies:
       '@babel/parser': 7.29.9
@@ -5786,7 +5792,7 @@ snapshots:
       '@jscpd/html-reporter': 4.2.5
       '@jscpd/tokenizer': 4.2.6
       colors: 1.4.0
-      commander: 15.0.0
+      commander: 15.1.0
       fs-extra: 11.4.1
       jscpd-sarif-reporter: 4.2.5
 
