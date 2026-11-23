@@ -131,6 +131,16 @@ One window stays open by design: if a hold is lost while the effect is being per
 | Each round starts from the previous round's change, and a symbolic link from the agent is refused on import | `TestAgentRoundsBuildOnEachOtherAndImportCleanly`, `TestASymlinkFromTheAgentIsRefusedOnImport` |
 | `sprintfoundry run` takes a change from a sandboxed agent to a gate decision without touching the user's repository | `TestRunWithAStubAgent` |
 
+## GitHub
+
+| Rule | Test |
+|---|---|
+| A commit someone else wrote is built and checked against the registered inputs; a failure names criteria and symptoms only; protected paths need a person | `TestCheckOfAPullRequestHead` |
+| Pull request checks draw on an allowance per repository and criteria; release checks are not counted | `TestCheckAllowance` |
+| A repository's registered inputs can be replaced only by registering again, and only with stored inputs | `TestRegistration` |
+| The GitHub adapter validates every reference and cuts status descriptions to GitHub's limit | `TestPullRequestAndStatus`, `TestReferencesAreValidated` |
+| On a real repository: advisory statuses on pull requests, and after a squash merge only the release check's image is accepted | `TestGitHubExit` (runs when `SPRINTFOUNDRY_GITHUB_TESTBED` is set) |
+
 ## The whole slice
 
 `TestDemoEndToEnd` runs the demo three times in a row on a real container runtime and then asks the gate from a separate command. It is the milestone 1 exit test. In CI it runs on Linux with Docker.
