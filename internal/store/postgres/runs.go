@@ -51,10 +51,20 @@ func (s *Store) GetInput(ctx context.Context, digest string) ([]byte, error) {
 	return content, err
 }
 
+// Run kinds.
+const (
+	RunBuilder     = "builder"
+	RunPullRequest = "pull-request"
+	RunRelease     = "release"
+)
+
 // Run identifies one run and the frozen inputs it is bound to.
 type Run struct {
-	ID             string
-	Repository     string
+	ID         string
+	Repository string
+	// Kind is RunBuilder, RunPullRequest or RunRelease. Empty means
+	// RunBuilder.
+	Kind           string
 	CriteriaDigest string
 	SuiteDigest    string
 	RunSpecDigest  string
@@ -66,14 +76,22 @@ var ErrRunExists = errors.New("postgres: a run with this ID already exists")
 // BeginRun records a run. A run ID can be used once: a second run with the
 // same ID is an error, never a silent no-op.
 //
-// Beginning a run is what supersedes older evidence: from now on, evidence
-// from any earlier run for the same repository and criteria can no longer
-// back a release. See LatestEvidence.
+// Beginning a builder run or a release check is what supersedes older
+// evidence: from now on, evidence from any earlier run for the same
+// repository and criteria can no longer back a release. A pull request check
+// supersedes nothing: anyone who can open a pull request could otherwise
+// withdraw the release candidate's evidence. See LatestEvidence.
 func (s *Store) BeginRun(ctx context.Context, r Run) error {
+	if r.Kind == "" {
+		r.Kind = RunBuilder
+	}
+	if r.Kind != RunBuilder && r.Kind != RunPullRequest && r.Kind != RunRelease {
+		return fmt.Errorf("postgres: run kind %q", r.Kind)
+	}
 	tag, err := s.pool.Exec(ctx,
-		`INSERT INTO sf_runs (id, repository, criteria_digest, suite_digest, runspec_digest)
-		 VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO NOTHING`,
-		r.ID, r.Repository, r.CriteriaDigest, r.SuiteDigest, r.RunSpecDigest)
+		`INSERT INTO sf_runs (id, repository, criteria_digest, suite_digest, runspec_digest, kind)
+		 VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO NOTHING`,
+		r.ID, r.Repository, r.CriteriaDigest, r.SuiteDigest, r.RunSpecDigest, r.Kind)
 	if err != nil {
 		return fmt.Errorf("postgres: record run: %w", err)
 	}
@@ -85,17 +103,19 @@ func (s *Store) BeginRun(ctx context.Context, r Run) error {
 
 // Evidence is one stored evaluation.
 type Evidence struct {
-	Digest           string
-	RunID            string
-	Round            int
-	Repository       string
-	ImageDigest      string
-	DigestKind       string
-	CriteriaDigest   string
-	SuiteDigest      string
-	RunSpecDigest    string
-	Purpose          string
-	Outcome          string
+	Digest         string
+	RunID          string
+	Round          int
+	Repository     string
+	ImageDigest    string
+	DigestKind     string
+	CriteriaDigest string
+	SuiteDigest    string
+	RunSpecDigest  string
+	Purpose        string
+	Outcome        string
+	// Check is the evidence check kind: builder, pull-request or release.
+	Check            string
 	ReviewRequired   string
 	ReviewApprovedBy string
 	Envelope         []byte
@@ -105,19 +125,24 @@ type Evidence struct {
 
 // PutEvidence stores a signed evidence statement.
 func (s *Store) PutEvidence(ctx context.Context, e Evidence) error {
+	check := e.Check
+	if check == "" {
+		check = RunBuilder
+	}
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO sf_evidence (digest, run_id, round, repository, image_digest, digest_kind,
-			criteria_digest, suite_digest, runspec_digest, purpose, outcome, review_required, envelope)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT (digest) DO NOTHING`,
+			criteria_digest, suite_digest, runspec_digest, purpose, outcome, review_required, envelope, check_kind)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT (digest) DO NOTHING`,
 		e.Digest, e.RunID, e.Round, e.Repository, e.ImageDigest, e.DigestKind,
-		e.CriteriaDigest, e.SuiteDigest, e.RunSpecDigest, e.Purpose, e.Outcome, e.ReviewRequired, e.Envelope)
+		e.CriteriaDigest, e.SuiteDigest, e.RunSpecDigest, e.Purpose, e.Outcome, e.ReviewRequired, e.Envelope, check)
 	if err != nil {
 		return fmt.Errorf("postgres: store evidence: %w", err)
 	}
 	return nil
 }
 
-// LatestEvidence returns the newest evidence for an image in a repository.
+// LatestEvidence returns the newest evidence for an image in a repository
+// that could back a release: evidence from pull request checks is left out.
 //
 // Superseded is worked out here, not stored: evidence is superseded when a
 // run that began after its own run exists for the same repository and
@@ -132,13 +157,14 @@ func (s *Store) LatestEvidence(ctx context.Context, repository, imageDigest stri
 			EXISTS (SELECT 1 FROM sf_runs newer
 			        WHERE newer.repository = mine.repository
 			          AND newer.criteria_digest = mine.criteria_digest
-			          AND newer.seq > mine.seq)
+			          AND newer.kind <> 'pull-request'
+			          AND newer.seq > mine.seq), e.check_kind
 		 FROM sf_evidence e JOIN sf_runs mine ON mine.id = e.run_id
-		 WHERE e.repository = $1 AND e.image_digest = $2
+		 WHERE e.repository = $1 AND e.image_digest = $2 AND e.check_kind <> 'pull-request'
 		 ORDER BY e.seq DESC LIMIT 1`, repository, imageDigest).
 		Scan(&e.Digest, &e.RunID, &e.Round, &e.Repository, &e.ImageDigest, &e.DigestKind, &e.CriteriaDigest,
 			&e.SuiteDigest, &e.RunSpecDigest, &e.Purpose, &e.Outcome, &e.ReviewRequired, &e.ReviewApprovedBy,
-			&e.Envelope, &e.CreatedAt, &e.Superseded)
+			&e.Envelope, &e.CreatedAt, &e.Superseded, &e.Check)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Evidence{}, ErrNotFound
 	}

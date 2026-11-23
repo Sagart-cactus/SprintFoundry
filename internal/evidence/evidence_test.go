@@ -32,6 +32,28 @@ func evaluation(outcomes ...checks.Outcome) Evaluation {
 		FinishedAt: time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC),
 		NameKey:    []byte("a controller secret of 32 bytes!"),
 		Report:     report(outcomes...),
+		Check:      CheckRelease,
+	}
+}
+
+func TestEvidenceRecordsWhatKindOfCheckItWas(t *testing.T) {
+	e := evaluation(checks.Passed)
+	e.Check = CheckPullRequest
+	st, err := NewEvidence(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := st.Marshal()
+	_, result, err := ParseTestResult(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run, _ := result.Config("run"); run.Annotations["check"] != "pull-request" {
+		t.Errorf("check annotation = %q", run.Annotations["check"])
+	}
+	e.Check = ""
+	if _, err := NewEvidence(e); err == nil {
+		t.Error("evidence without a check kind was built")
 	}
 }
 

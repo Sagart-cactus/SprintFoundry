@@ -3,6 +3,7 @@ package postgres_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -38,6 +39,59 @@ func putEvidence(t *testing.T, s *postgres.Store, r postgres.Run, digest, image,
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A pull request check runs code anyone can propose. It must neither withdraw
+// the release candidate's evidence nor be chosen as an image's evidence.
+func TestPullRequestChecksNeitherSupersedeNorBackARelease(t *testing.T) {
+	ctx := context.Background()
+	s := open(t, freshURL(t))
+	candidate, prHead := strings.Repeat("1", 64), strings.Repeat("2", 64)
+
+	release := newRun(t, s, "release-1", "github.com/o/r", "criteria")
+	release.Kind = postgres.RunRelease
+	if err := s.BeginRun(ctx, release); err != nil {
+		t.Fatal(err)
+	}
+	putEvidence(t, s, release, "sha256:e1", candidate, "passed", "")
+
+	for i := range 3 {
+		pr := newRun(t, s, fmt.Sprintf("pr-%d", i), "github.com/o/r", "criteria")
+		pr.Kind = postgres.RunPullRequest
+		if err := s.BeginRun(ctx, pr); err != nil {
+			t.Fatal(err)
+		}
+		// One check of the candidate's own image too: same tree, same image.
+		for j, image := range []string{prHead, candidate} {
+			if err := s.PutEvidence(ctx, postgres.Evidence{Digest: fmt.Sprintf("sha256:pr%d%d", i, j), RunID: pr.ID, Round: 1,
+				Repository: pr.Repository, ImageDigest: image, DigestKind: "image-config", CriteriaDigest: pr.CriteriaDigest,
+				SuiteDigest: pr.SuiteDigest, RunSpecDigest: pr.RunSpecDigest, Purpose: "demo", Outcome: "passed",
+				Check: postgres.RunPullRequest, Envelope: []byte("{}")}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	e, err := s.LatestEvidence(ctx, "github.com/o/r", candidate)
+	if err != nil || e.Digest != "sha256:e1" || e.Superseded {
+		t.Fatalf("release candidate after pull request checks: %+v, %v", e, err)
+	}
+	if _, err := s.LatestEvidence(ctx, "github.com/o/r", prHead); !errors.Is(err, postgres.ErrNotFound) {
+		t.Fatalf("a pull request head's image has evidence that could back a release: err = %v", err)
+	}
+	// A later release check does supersede.
+	next := newRun(t, s, "release-2", "github.com/o/r", "criteria")
+	next.Kind = postgres.RunRelease
+	if err := s.BeginRun(ctx, next); err != nil {
+		t.Fatal(err)
+	}
+	if e, _ := s.LatestEvidence(ctx, "github.com/o/r", candidate); !e.Superseded {
+		t.Error("a newer release check did not supersede the older candidate")
+	}
+	bad := newRun(t, s, "odd", "github.com/o/r", "criteria")
+	bad.Kind = "other"
+	if err := s.BeginRun(ctx, bad); err == nil {
+		t.Error("a run of an unknown kind was recorded")
 	}
 }
 
@@ -230,5 +284,34 @@ func TestInputsAreAddressedByContent(t *testing.T) {
 	}
 	if _, err := s.GetInput(ctx, "sha256:nope"); !errors.Is(err, postgres.ErrNotFound) {
 		t.Errorf("missing input: err = %v", err)
+	}
+}
+
+func TestRegistration(t *testing.T) {
+	ctx := context.Background()
+	s := open(t, freshURL(t))
+	if _, err := s.Registered(ctx, "github.com/o/r"); !errors.Is(err, postgres.ErrNotFound) {
+		t.Fatalf("unregistered repository: err = %v", err)
+	}
+	r := newRun(t, s, "unused", "github.com/o/r", "criteria v1")
+	reg := postgres.Registration{Repository: "github.com/o/r", CriteriaDigest: r.CriteriaDigest, SuiteDigest: r.SuiteDigest, RunSpecDigest: r.RunSpecDigest}
+	if err := s.Register(ctx, reg); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Registered(ctx, "github.com/o/r")
+	if err != nil || got != reg {
+		t.Fatalf("registered = %+v, %v", got, err)
+	}
+	v2, _ := s.PutInput(ctx, "criteria", []byte("criteria v2"))
+	reg.CriteriaDigest = v2
+	if err := s.Register(ctx, reg); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Registered(ctx, "github.com/o/r"); got.CriteriaDigest != v2 {
+		t.Error("registering again did not replace the criteria")
+	}
+	reg.SuiteDigest = "sha256:not-stored"
+	if err := s.Register(ctx, reg); err == nil {
+		t.Error("an input that was never stored was registered")
 	}
 }

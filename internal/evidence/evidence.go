@@ -99,6 +99,10 @@ type Evaluation struct {
 	// back a release, for example "change touches Dockerfile".
 	ReviewRequired []string
 
+	// Check says what kind of evaluation this was. Only builder runs and
+	// release checks can back a release; a pull request check is advisory.
+	Check CheckKind
+
 	Report checks.Report
 }
 
@@ -126,6 +130,8 @@ func (e Evaluation) validate() error {
 		return fmt.Errorf("%w: report has no checks", errInvalid)
 	case len(e.NameKey) < 16:
 		return fmt.Errorf("%w: the key for naming checks is missing or shorter than 16 bytes", errInvalid)
+	case e.Check != CheckBuilder && e.Check != CheckPullRequest && e.Check != CheckRelease:
+		return fmt.Errorf("%w: check kind %q", errInvalid, e.Check)
 	}
 	return nil
 }
@@ -143,6 +149,20 @@ func TestName(key []byte, suiteDigest string, g checks.CheckGrade) string {
 	}
 	return prefix + "/" + hex.EncodeToString(mac.Sum(nil))[:12]
 }
+
+// CheckKind is what kind of evaluation produced a statement.
+type CheckKind string
+
+// Check kinds, recorded in the run descriptor's "check" annotation.
+const (
+	// CheckBuilder evaluates a change a builder made in a controller run.
+	CheckBuilder CheckKind = "builder"
+	// CheckPullRequest evaluates a pull request's head. Its result is
+	// advisory and never backs a release.
+	CheckPullRequest CheckKind = "pull-request"
+	// CheckRelease evaluates a commit after merge: the release candidate.
+	CheckRelease CheckKind = "release"
+)
 
 // Outcome values recorded in the run descriptor.
 const (
@@ -190,6 +210,7 @@ func NewEvidence(e Evaluation) (Statement, error) {
 	run := map[string]string{
 		"outcome":    outcome,
 		"finishedAt": e.FinishedAt.UTC().Format(time.RFC3339),
+		"check":      string(e.Check),
 	}
 	if len(e.ReviewRequired) > 0 {
 		reasons := append([]string(nil), e.ReviewRequired...)

@@ -1,6 +1,6 @@
 # SprintFoundry v1
 
-**Status: pre-alpha, under construction on the `v1` branch.** The released product is v0.7 on the [`main` branch](https://github.com/Sagart-cactus/SprintFoundry/tree/main). What works today: the demo below, and `sprintfoundry run`, which runs Codex CLI on your own repository in a sandbox that holds no key. Working against GitHub is not built yet.
+**Status: pre-alpha, under construction on the `v1` branch.** The released product is v0.7 on the [`main` branch](https://github.com/Sagart-cactus/SprintFoundry/tree/main). What works today: the demo below; `sprintfoundry run`, which runs Codex CLI on your own repository in a sandbox that holds no key; and `sprintfoundry check`, which checks GitHub pull requests and merged commits.
 
 SprintFoundry v1 answers one question before a change is released: *did an independent check pass on this exact image?*
 
@@ -58,6 +58,28 @@ Codex CLI runs in a container whose only network peer is a proxy. The proxy hold
 `OPENAI_API_KEY` is read by `sprintfoundry`, written to a private file for a moment, and handed to the proxy container, whose settings hold it until the container is removed at the end of the run. `sprintfoundry down` removes a proxy left behind by an interrupted run.
 
 The sandbox's isolation depends on internal container networks. Podman is fine. Docker Engine before 26.0 lets internal networks reach outside DNS servers, so `run` refuses it.
+
+## Check GitHub pull requests
+
+Register a repository's inputs once. They live with SprintFoundry, never in the repository:
+
+```bash
+./sprintfoundry register --repo owner/app --criteria criteria.md --checks checks.yaml --runspec runspec.yaml
+```
+
+Check a pull request. SprintFoundry builds its head, runs the checks on that exact image and posts an advisory `sprintfoundry/checks` status:
+
+```bash
+./sprintfoundry check --repo owner/app --pr 12
+```
+
+After merging, check the merged commit. Its image is the release candidate, and `sprintfoundry verify` accepts only that image:
+
+```bash
+./sprintfoundry check --repo owner/app --commit <merge commit>
+```
+
+Both use your `gh` login. The token stays with SprintFoundry and never reaches a sandbox. See `docs/design/0008-github-with-the-operators-login.md`.
 
 ## Layout
 
