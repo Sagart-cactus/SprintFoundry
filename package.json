@@ -97,7 +97,7 @@
     "globals": "^17",
     "html-validate": "^11",
     "husky": "^9",
-    "jscpd": "^4",
+    "jscpd": "^5",
     "knip": "^6",
     "lint-staged": "^17.6.0",
     "prettier": "^3",
