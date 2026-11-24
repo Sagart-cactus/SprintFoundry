@@ -111,6 +111,22 @@ A passing change waits for you: pushing it runs the repository's own CI on it. L
 
 A job that stopped because of errors, for example during an outage, can be queued again with `./sprintfoundry retry --job ID`. See `docs/design/0009-durable-controller.md`.
 
+The builder writes the pull request's title and body. SprintFoundry cleans them (mentions and closing keywords for other issues become code, so they notify and close nothing) and adds a footer: the job's own issue, the evidence, and "Built by SprintFoundry with Codex CLI".
+
+## Build from Linear issues
+
+The issue can also come from Linear; the change still goes to a GitHub repository. Give SprintFoundry a Linear API key (read access is enough; it stays with the controller) and name the repository:
+
+```bash
+export LINEAR_API_KEY=lin_api_...
+```
+
+```bash
+./sprintfoundry approve --repo owner/app --linear ENG-123 --checks checks.yaml
+```
+
+The rest works as for GitHub issues. `serve` also lists open Linear issues labelled `sprintfoundry`. The branch carries the identifier and the pull request says `Fixes ENG-123`, so Linear's GitHub integration links them and moves the issue when the pull request merges. SprintFoundry never writes to Linear. See `docs/design/0010-linear-issues-and-builder-written-pull-requests.md`.
+
 ## Layout
 
 | Path | What it holds |

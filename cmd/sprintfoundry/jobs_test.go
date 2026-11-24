@@ -73,3 +73,45 @@ func TestJobIDsDependOnTheRepository(t *testing.T) {
 		t.Errorf("job IDs %q and %q", a, b)
 	}
 }
+
+func TestLinearJobIDsNameTheIssue(t *testing.T) {
+	d := "sha256:" + strings.Repeat("1", 64)
+	a := linearJobID("github.com/o/r", "ENG-123", d)
+	if !strings.HasPrefix(a, "job-eng-123-") || len(a) != len("job-eng-123-")+8 {
+		t.Errorf("job ID %q", a)
+	}
+	if a == linearJobID("github.com/o/r", "ENG-124", d) || a == linearJobID("github.com/o/s", "ENG-123", d) {
+		t.Error("job IDs do not depend on the issue and the repository")
+	}
+}
+
+func TestApproveTakesExactlyOneIssue(t *testing.T) {
+	for _, args := range [][]string{
+		{"--repo", "o/r", "--checks", "c.yaml"},
+		{"--repo", "o/r", "--checks", "c.yaml", "--issue", "3", "--linear", "ENG-1"},
+		{"--repo", "o/r", "--checks", "c.yaml", "--issue", "0"},
+	} {
+		var out, errOut strings.Builder
+		if code := approveCommand(args, &out, &errOut); code != 2 {
+			t.Errorf("%v: exit %d, want 2", args, code)
+		}
+	}
+	// A bad identifier is refused before anything is asked of GitHub or Linear.
+	t.Setenv("PATH", t.TempDir())
+	var out, errOut strings.Builder
+	if code := approveCommand([]string{"--repo", "o/r", "--checks", "c.yaml", "--linear", "ENG-1;rm"}, &out, &errOut); code != 1 ||
+		!strings.Contains(errOut.String(), "not a Linear issue identifier") {
+		t.Errorf("exit %d, %s", code, errOut.String())
+	}
+}
+
+func TestAnApprovedIssueNamesItself(t *testing.T) {
+	gh := approvedIssue{source: "github", number: 12}
+	lin := approvedIssue{source: "linear", key: "ENG-7"}
+	if gh.ref() != "#12" || lin.ref() != "ENG-7" {
+		t.Errorf("refs %q %q", gh.ref(), lin.ref())
+	}
+	if strings.Join(gh.flag(), " ") != "--issue 12" || strings.Join(lin.flag(), " ") != "--linear ENG-7" {
+		t.Errorf("flags %v %v", gh.flag(), lin.flag())
+	}
+}

@@ -181,6 +181,21 @@ One window stays open by design: if a hold is lost while the effect is being per
 | The push only creates the job's branch, never moves one | `TestPushBranchOnlyCreatesTheBranch` |
 | `approve` refuses issue text a terminal would show differently; job IDs depend on the repository | `TestIssueCriteriaRefusesTextATerminalWouldHide`, `TestJobIDsDependOnTheRepository` |
 
+## Linear issues and builder-written pull requests
+
+| Rule | Test |
+|---|---|
+| A Linear job is created once per issue and criteria; another issue with the same text is another job | `TestALinearJobIsCreatedOncePerIssueAndCriteria` |
+| A job names its issue either by GitHub number or by Linear identifier, never both | `TestAJobMustNameItsIssueOneWay` |
+| A milestone 3 database is upgraded in place and keeps its jobs | `TestAnOlderJobTableIsUpgraded` |
+| Linear is read with the key as given, never through a redirect; identifiers are checked before Linear is asked; a missing or refused issue is an error that does not show the key | `TestGetIssue`, `TestGetIssueEdges`, `TestIdentifiersAreCheckedBeforeAsking`, `TestARedirectIsNotFollowedWithTheKey` |
+| `serve` lists open Linear issues labelled `sprintfoundry` | `TestLabeledIssues` |
+| `approve` takes exactly one issue, GitHub or Linear; Linear job IDs carry the identifier | `TestApproveTakesExactlyOneIssue`, `TestLinearJobIDsNameTheIssue` |
+| The builder describes its change outside the repository; the description is never in the patch, and a missing, linked, FIFO or oversized description keeps the change | `TestTheBuilderDescribesItsChangeOutsideThePatch`, `TestParseDescription` |
+| A description notifies nobody and closes or links no other issue; code is left alone; hidden characters and HTML comments are removed; the title and body are bounded | `TestCleanDescriptionNeutralizesWhatActsOnOthers`, `TestCleanDescriptionLeavesCodeAlone`, `TestCleanDescriptionRemovesWhatAReaderCannotSee`, `TestCleanDescriptionLimitsAndFallback`, `TestCleanDescriptionKeepsOrdinaryText` |
+| The footer names the job's own issue and the builder; a round stored before descriptions keeps its title | `TestThePullRequestNamesItsOwnIssueInTheFooter` |
+| After a kill at any step, each pull request has the cleaned builder title and body and the footer for its own issue, GitHub or Linear, and the commit subject is the title | `TestRecoveryAfterAKillAtEveryStep` |
+
 ## The whole slice
 
 `TestDemoEndToEnd` runs the demo three times in a row on a real container runtime and then asks the gate from a separate command. It is the milestone 1 exit test. In CI it runs on Linux with Docker.

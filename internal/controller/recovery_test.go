@@ -270,7 +270,12 @@ func (b *planBuilder) Run(ctx context.Context, _ sandbox.Sandbox, _ string, task
 	if err != nil {
 		return agent.Change{}, err
 	}
-	return demo.Change(ctx, dir, b.store, b.parent, variant)
+	change, err := demo.Change(ctx, dir, b.store, b.parent, variant)
+	// A description that would notify someone and close another issue,
+	// were it not cleaned.
+	change.Title = "Export only what the owner may see (@alice, fixes #99)"
+	change.Body = fmt.Sprintf("Round %d for %s.\n\nCloses #98 too.", round+1, b.jobID)
+	return change, err
 }
 
 // firstTime reports whether the marker did not exist yet, and creates it.
@@ -327,6 +332,8 @@ type fakeGitHub struct {
 	remote string
 	mu     sync.Mutex
 	prs    map[string]int // head branch -> number
+	titles map[string]string
+	bodies map[string]string
 	opened map[string]int // head branch -> times a create was asked for
 	status map[string]int // commit -> statuses posted
 	next   int
@@ -375,6 +382,7 @@ func (f *fakeGitHub) handler() http.Handler {
 		}
 		f.next++
 		f.prs[body["head"]] = f.next
+		f.titles[body["head"]], f.bodies[body["head"]] = body["title"], body["body"]
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(map[string]int{"number": f.next})
 	})
@@ -425,7 +433,8 @@ func newScenario(t *testing.T, plan string) *scenario {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
 	}
-	s.api = &fakeGitHub{remote: remote, prs: map[string]int{}, opened: map[string]int{}, status: map[string]int{}}
+	s.api = &fakeGitHub{remote: remote, prs: map[string]int{}, opened: map[string]int{}, status: map[string]int{},
+		titles: map[string]string{}, bodies: map[string]string{}}
 	srv := httptest.NewServer(s.api.handler())
 	t.Cleanup(srv.Close)
 	s.url = srv.URL
@@ -436,6 +445,10 @@ func newScenario(t *testing.T, plan string) *scenario {
 	for _, issue := range []int{11, 12} {
 		criteria := append(demo.Criteria(), []byte(fmt.Sprintf("\n<!-- issue %d -->\n", issue))...)
 		job := postgres.Job{ID: fmt.Sprintf("job-%d", issue), Repository: "github.com/o/r", Issue: issue, Base: s.parent, BaseBranch: "main"}
+		if issue == 12 {
+			// One job comes from Linear (design 0010).
+			job.Source, job.Issue, job.IssueKey = postgres.SourceLinear, 0, "ENG-12"
+		}
 		job.Inputs.CriteriaDigest, err = s.store.PutInput(ctx, "criteria", criteria)
 		if err != nil {
 			t.Fatal(err)
@@ -605,7 +618,22 @@ func (s *scenario) checkPassed(label string, failures int) {
 		last := rounds[len(rounds)-1]
 		s.api.mu.Lock()
 		opened, pr, statuses := s.api.opened[branch], s.api.prs[branch], s.api.status[last.Commit]
+		title, body := s.api.titles[branch], s.api.bodies[branch]
 		s.api.mu.Unlock()
+		// The builder's description, cleaned, with SprintFoundry's footer
+		// naming the job's own issue.
+		wantTitle := "Export only what the owner may see (`@alice`, refers to `#99`)"
+		own := "Closes #11."
+		if j.Source == postgres.SourceLinear {
+			own = "Fixes ENG-12\n"
+		}
+		if title != wantTitle || !strings.Contains(body, "for "+j.ID+".\n\nrefers to `#98` too.") || !strings.Contains(body, own) ||
+			!strings.Contains(body, "Built by SprintFoundry with plan builder") {
+			s.t.Errorf("%s: %s: pull request %q\n%s", label, j.ID, title, body)
+		}
+		if subject, err := exec.Command("git", "--git-dir", s.api.remote, "log", "-1", "--format=%s", last.Commit).Output(); err != nil || strings.TrimSpace(string(subject)) != wantTitle {
+			s.t.Errorf("%s: %s: commit subject %q, %v", label, j.ID, subject, err)
+		}
 		if job.State != postgres.JobPassed || job.PullRequest == 0 || job.PullRequest != pr || job.Failures != failures {
 			s.t.Errorf("%s: %s ended %s (%s), pull request %d, API has %d, %d failures (last: %s)",
 				label, j.ID, job.State, job.Reason, job.PullRequest, pr, job.Failures, job.LastError)

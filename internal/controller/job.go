@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/sagart-cactus/sprintfoundry/internal/agent"
 	"github.com/sagart-cactus/sprintfoundry/internal/checks"
@@ -24,7 +23,7 @@ type JobStore interface {
 	Rounds(ctx context.Context, jobID string) ([]postgres.RoundRecord, error)
 	StartRound(ctx context.Context, jobID, owner string, number, evalLimit int) (postgres.RoundRecord, error)
 	BeginAttempt(ctx context.Context, jobID, owner string, number, requests, requestCap, maxAttempts int) (postgres.RoundRecord, error)
-	SaveChange(ctx context.Context, jobID, owner string, number int, patch []byte, testedTree, summary string, at time.Time) (postgres.RoundRecord, error)
+	SaveChange(ctx context.Context, jobID, owner string, number int, c postgres.Change) (postgres.RoundRecord, error)
 	SaveRoundResult(ctx context.Context, jobID, owner string, number int, res postgres.RoundResult) (postgres.RoundRecord, error)
 	SaveRoundEvaluation(ctx context.Context, jobID, owner string, number int, e postgres.Evidence, res postgres.RoundResult) (postgres.RoundRecord, error)
 	CheckLease(ctx context.Context, jobID, owner string) error
@@ -244,7 +243,12 @@ func buildRound(ctx context.Context, d JobDeps, job postgres.Job, s JobSettings,
 			// run out.
 			return rec, fmt.Errorf("round %d: the builder did not produce a change: %w", rec.Number, err)
 		}
-		if rec, err = d.Store.SaveChange(ctx, job.ID, d.Owner, rec.Number, change.Patch, change.TestedTree, change.Summary, d.Now()); err != nil {
+		// The description is cleaned once, here, and stored with the patch:
+		// the commit message is made from it, so every import gives the
+		// same commit.
+		title, body := CleanDescription(change.Title, change.Body, fallbackTitle(job))
+		if rec, err = d.Store.SaveChange(ctx, job.ID, d.Owner, rec.Number, postgres.Change{Patch: change.Patch, TestedTree: change.TestedTree,
+			Summary: change.Summary, Title: title, Body: body, At: d.Now()}); err != nil {
 			return rec, err
 		}
 		step("change-stored")
@@ -347,7 +351,11 @@ func publish(ctx context.Context, d JobDeps, job postgres.Job, rec postgres.Roun
 				return nil, err
 			}
 			step("open-pull-request")
-			n, err := d.Forge.OpenPullRequest(ctx, branch, job.BaseBranch, title(job), pullRequestBody(job, rec))
+			builder := ""
+			if d.Agent != nil {
+				builder = d.Agent.Name()
+			}
+			n, err := d.Forge.OpenPullRequest(ctx, branch, job.BaseBranch, changeTitle(job, rec), pullRequestBody(job, rec, builder))
 			if err != nil {
 				return nil, err
 			}
@@ -386,7 +394,7 @@ var ErrPermanent = errors.New("controller: retrying will not help")
 func importRound(ctx context.Context, d JobDeps, job postgres.Job, rec postgres.RoundRecord) (gitimport.Result, error) {
 	return gitimport.Import(ctx, gitimport.Request{
 		Store: d.StoreDir, Parent: job.Base, TestedTree: rec.TestedTree, Patch: rec.Patch,
-		Message:    fmt.Sprintf("%s\n\nSprintFoundry job %s, round %d.\n", title(job), job.ID, rec.Number),
+		Message:    fmt.Sprintf("%s\n\nSprintFoundry job %s, round %d.\n", changeTitle(job, rec), job.ID, rec.Number),
 		AuthorName: "SprintFoundry builder", AuthorEmail: "builder@sprintfoundry.invalid", Date: rec.ChangedAt,
 	})
 }
@@ -412,20 +420,6 @@ func ensureCommit(ctx context.Context, d JobDeps, job postgres.Job, rec postgres
 		return fmt.Errorf("%w: round %d's stored change imports as %s, but %s was evaluated", ErrPermanent, rec.Number, short(imported.Commit), short(rec.Commit))
 	}
 	return nil
-}
-
-func title(job postgres.Job) string {
-	return fmt.Sprintf("SprintFoundry: issue #%d", job.Issue)
-}
-
-func pullRequestBody(job postgres.Job, rec postgres.RoundRecord) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "Closes #%d.\n\n", job.Issue)
-	fmt.Fprintf(&b, "Built by SprintFoundry job `%s` in round %d and evaluated on the exact image built from this commit.\n\n", job.ID, rec.Number)
-	fmt.Fprintf(&b, "- Criteria: `%s`\n- Evidence: `%s`\n\n", job.Inputs.CriteriaDigest, rec.EvidenceDigest)
-	b.WriteString("This check is advisory. The release gate evaluates the image built from the merged commit.\n\n")
-	fmt.Fprintf(&b, "<!-- sprintfoundry-job: %s -->\n", job.ID)
-	return b.String()
 }
 
 // loadInputs reads a job's frozen inputs back from the store and checks they

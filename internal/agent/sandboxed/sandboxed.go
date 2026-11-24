@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -148,6 +149,14 @@ func (a *Agent) Run(ctx context.Context, _ sandbox.Sandbox, _ string, task agent
 		return agent.Change{}, ErrNoChange
 	}
 	change := agent.Change{Patch: patchOut.Stdout, TestedTree: tree, Summary: tail(res.Stdout, 2000)}
+	// The description is optional: a builder that wrote none still hands
+	// over its change.
+	desc, err := a.Sandbox.Exec(ctx, id, sandbox.Command{
+		Args: []string{"sh", "-c", "if [ -f " + DescriptionPath + " ] && [ ! -L " + DescriptionPath + " ]; then head -c " +
+			strconv.Itoa(MaxDescriptionBytes) + " " + DescriptionPath + "; fi"}, MaxOutput: MaxDescriptionBytes})
+	if err == nil && desc.ExitCode == 0 {
+		change.Title, change.Body = ParseDescription(desc.Stdout)
+	}
 	a.previous = &change
 	return change, nil
 }
@@ -188,7 +197,10 @@ func TaskText(task agent.Task) string {
 	b.WriteString("Implement the change described below. Edit the files directly.\n\n")
 	b.WriteString("Rules:\n- Do not commit, and do not change Git history or configuration.\n")
 	b.WriteString("- Run the project's own tests if it has any.\n")
-	b.WriteString("- Changing tests, the Dockerfile, CI or dependency files sends the change to a person for review.\n\n")
+	b.WriteString("- Changing tests, the Dockerfile, CI or dependency files sends the change to a person for review.\n")
+	b.WriteString("- When you are done, describe the whole change for its pull request in " + DescriptionPath + ", outside the\n")
+	b.WriteString("  repository: a short title on the first line, a blank line, then the body in Markdown. Write it fresh\n")
+	b.WriteString("  every time; it replaces any description you wrote before.\n\n")
 	b.WriteString("## What to build\n\n")
 	b.WriteString(strings.TrimSpace(task.Criteria))
 	b.WriteString("\n")
@@ -199,6 +211,26 @@ func TaskText(task agent.Task) string {
 		}
 	}
 	return b.String()
+}
+
+// DescriptionPath is where the builder describes its change for the pull
+// request. It is outside the repository checkout, so it never becomes part
+// of the patch.
+const DescriptionPath = "/workspace/pull-request.md"
+
+// MaxDescriptionBytes bounds what is read of the description. Anything
+// longer is cut, and the controller cuts the body shorter still.
+const MaxDescriptionBytes = 64 << 10
+
+// ParseDescription splits a builder's description into a title, its first
+// line that is not blank without a leading Markdown heading mark, and a
+// body, the rest. Both come back as the builder wrote them otherwise.
+func ParseDescription(raw []byte) (title, body string) {
+	text := strings.ReplaceAll(string(raw), "\r\n", "\n")
+	text = strings.TrimLeft(text, " \t\n")
+	first, rest, _ := strings.Cut(text, "\n")
+	title = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(first), "#"))
+	return title, strings.Trim(rest, "\n")
 }
 
 func tarOf(files map[string][]byte) *bytes.Buffer {

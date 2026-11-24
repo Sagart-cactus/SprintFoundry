@@ -37,7 +37,14 @@ var (
 type Job struct {
 	ID         string
 	Repository string
-	Issue      int
+	// Source is where the issue lives: SourceGitHub with the issue number in
+	// Issue, or SourceLinear with the identifier in IssueKey. Empty means
+	// SourceGitHub.
+	Source   string
+	Issue    int
+	IssueKey string
+	// IssueTitle is the issue's title when it was approved.
+	IssueTitle string
 	// Base is the commit the builder starts from, on BaseBranch.
 	Base        string
 	BaseBranch  string
@@ -53,23 +60,47 @@ type Job struct {
 	PublishApproved bool
 }
 
+// Issue sources.
+const (
+	SourceGitHub = "github"
+	SourceLinear = "linear"
+)
+
+// IssueRef names the job's issue as people write it: #42 or ENG-123.
+func (j Job) IssueRef() string {
+	if j.Source == SourceLinear {
+		return j.IssueKey
+	}
+	return fmt.Sprintf("#%d", j.Issue)
+}
+
 // CreateJob records an approved job and its run. The job's ID is also its
 // run's ID, so evidence from the job is tied to the frozen inputs.
 func (s *Store) CreateJob(ctx context.Context, j Job) error {
+	if j.Source == "" {
+		j.Source = SourceGitHub
+	}
+	switch {
+	case j.Source == SourceGitHub && (j.Issue < 1 || j.IssueKey != ""),
+		j.Source == SourceLinear && (j.Issue != 0 || j.IssueKey == ""),
+		j.Source != SourceGitHub && j.Source != SourceLinear:
+		return fmt.Errorf("postgres: job %s: source %q with issue %d and key %q", j.ID, j.Source, j.Issue, j.IssueKey)
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("postgres: create job: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	tag, err := tx.Exec(ctx,
-		`INSERT INTO sf_jobs (id, repository, issue, base, base_branch, criteria_digest, suite_digest, runspec_digest)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT DO NOTHING`,
-		j.ID, j.Repository, j.Issue, j.Base, j.BaseBranch, j.Inputs.CriteriaDigest, j.Inputs.SuiteDigest, j.Inputs.RunSpecDigest)
+		`INSERT INTO sf_jobs (id, repository, issue, base, base_branch, criteria_digest, suite_digest, runspec_digest, source, issue_key, issue_title)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) ON CONFLICT DO NOTHING`,
+		j.ID, j.Repository, j.Issue, j.Base, j.BaseBranch, j.Inputs.CriteriaDigest, j.Inputs.SuiteDigest, j.Inputs.RunSpecDigest,
+		j.Source, j.IssueKey, storableText(j.IssueTitle))
 	if err != nil {
 		return fmt.Errorf("postgres: create job: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("%w: %s issue %d", ErrJobExists, j.Repository, j.Issue)
+		return fmt.Errorf("%w: %s issue %s", ErrJobExists, j.Repository, j.IssueRef())
 	}
 	tag, err = tx.Exec(ctx,
 		`INSERT INTO sf_runs (id, repository, criteria_digest, suite_digest, runspec_digest)
@@ -84,12 +115,13 @@ func (s *Store) CreateJob(ctx context.Context, j Job) error {
 	return tx.Commit(ctx)
 }
 
-const jobColumns = `id, repository, issue, base, base_branch, criteria_digest, suite_digest, runspec_digest, state, reason, pull_request, claims, failures, last_error, publish_approved`
+const jobColumns = `id, repository, issue, base, base_branch, criteria_digest, suite_digest, runspec_digest, state, reason, pull_request, claims, failures, last_error, publish_approved, source, issue_key, issue_title`
 
 func scanJob(row pgx.Row) (Job, error) {
 	var j Job
 	err := row.Scan(&j.ID, &j.Repository, &j.Issue, &j.Base, &j.BaseBranch, &j.Inputs.CriteriaDigest, &j.Inputs.SuiteDigest,
-		&j.Inputs.RunSpecDigest, &j.State, &j.Reason, &j.PullRequest, &j.Claims, &j.Failures, &j.LastError, &j.PublishApproved)
+		&j.Inputs.RunSpecDigest, &j.State, &j.Reason, &j.PullRequest, &j.Claims, &j.Failures, &j.LastError, &j.PublishApproved,
+		&j.Source, &j.IssueKey, &j.IssueTitle)
 	j.Inputs.ID, j.Inputs.Repository = j.ID, j.Repository
 	return j, err
 }
@@ -316,6 +348,10 @@ type RoundRecord struct {
 	TestedTree string
 	Summary    string
 	ChangedAt  time.Time
+	// PRTitle and PRBody describe the change for its pull request, as the
+	// controller cleaned them. PRTitle is empty only for rounds stored
+	// before builders wrote a description.
+	PRTitle, PRBody string
 	// The evaluation, once it was signed and stored.
 	Commit         string
 	EvidenceDigest string
@@ -437,17 +473,29 @@ func (s *Store) lockHeldJob(ctx context.Context, jobID, owner string) (pgx.Tx, s
 	return tx, repository, criteria, nil
 }
 
+// Change is a builder's change as a round stores it.
+type Change struct {
+	Patch      []byte
+	TestedTree string
+	Summary    string
+	// Title and Body describe the change for its pull request. The caller
+	// cleans them; they are stored as given.
+	Title, Body string
+	At          time.Time
+}
+
 // SaveChange stores the builder's change for a round. A change already
 // stored is kept, and the stored round is returned either way, so every
 // controller that gets here goes on with the same change.
-func (s *Store) SaveChange(ctx context.Context, jobID, owner string, number int, patch []byte, testedTree, summary string, at time.Time) (RoundRecord, error) {
+func (s *Store) SaveChange(ctx context.Context, jobID, owner string, number int, c Change) (RoundRecord, error) {
+	patch := c.Patch
 	if patch == nil {
 		patch = []byte{}
 	}
 	if _, err := s.pool.Exec(ctx,
-		`UPDATE sf_rounds SET patch = $4, tested_tree = $5, summary = $6, changed_at = $7
+		`UPDATE sf_rounds SET patch = $4, tested_tree = $5, summary = $6, changed_at = $7, pr_title = $8, pr_body = $9
 		 WHERE job_id = $1 AND number = $3 AND patch IS NULL AND `+heldClause,
-		jobID, owner, number, patch, testedTree, summary, at.UTC().Truncate(time.Second)); err != nil {
+		jobID, owner, number, patch, c.TestedTree, c.Summary, c.At.UTC().Truncate(time.Second), c.Title, c.Body); err != nil {
 		return RoundRecord{}, fmt.Errorf("postgres: store change: %w", err)
 	}
 	// A controller that lost its lease must not go on, even when the new
@@ -586,7 +634,7 @@ func (s *Store) EvaluationsUsed(ctx context.Context, repository, criteriaDigest 
 	return n, err
 }
 
-const roundColumns = `number, attempts, requests, patch, tested_tree, summary, changed_at, commit_id, evidence_digest, outcome, stop_reason, feedback`
+const roundColumns = `number, attempts, requests, patch, tested_tree, summary, changed_at, commit_id, evidence_digest, outcome, stop_reason, feedback, pr_title, pr_body`
 
 type queryRower interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
@@ -605,7 +653,7 @@ func scanRound(row pgx.Row) (RoundRecord, error) {
 	var changedAt *time.Time
 	var feedback []byte
 	if err := row.Scan(&r.Number, &r.Attempts, &r.Requests, &r.Patch, &r.TestedTree, &r.Summary, &changedAt, &r.Commit,
-		&r.EvidenceDigest, &r.Outcome, &r.StopReason, &feedback); err != nil {
+		&r.EvidenceDigest, &r.Outcome, &r.StopReason, &feedback, &r.PRTitle, &r.PRBody); err != nil {
 		return RoundRecord{}, err
 	}
 	r.HasChange = r.Patch != nil
