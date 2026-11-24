@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // CLI is a container runtime reached through a docker-compatible binary.
@@ -532,13 +533,31 @@ func (c CLI) RemoveByLabel(ctx context.Context, label string) error {
 
 // Pull fetches an image the controller itself chose, pinned by digest. It is
 // never called with a reference a builder wrote.
+//
+// A pull by digest gives the same image every time, so a failed pull is
+// tried again: a daemon pulling one image for two callers at once can drop
+// one of them (containerd reports a lost lease).
 func (c CLI) Pull(ctx context.Context, image string) error {
 	if !pinnedRef.MatchString(image) {
 		return fmt.Errorf("container: image %q must be pinned as name@sha256:<64 hex>", image)
 	}
-	_, err := c.must(ctx, nil, "pull", "--quiet", image)
+	var err error
+	for attempt := 0; attempt < pullAttempts; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return err
+			case <-time.After(time.Duration(attempt) * time.Second):
+			}
+		}
+		if _, err = c.must(ctx, nil, "pull", "--quiet", image); err == nil || ctx.Err() != nil {
+			return err
+		}
+	}
 	return err
 }
+
+const pullAttempts = 3
 
 var pinnedRef = regexp.MustCompile(`^[a-zA-Z0-9][^@\s]*@sha256:[0-9a-f]{64}$`)
 
