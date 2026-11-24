@@ -131,8 +131,13 @@ CREATE INDEX IF NOT EXISTS sf_jobs_open ON sf_jobs (seq) WHERE state IN ('queued
 ALTER TABLE sf_jobs ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT 'github';
 ALTER TABLE sf_jobs ADD COLUMN IF NOT EXISTS issue_key text NOT NULL DEFAULT '';
 ALTER TABLE sf_jobs ADD COLUMN IF NOT EXISTS issue_title text NOT NULL DEFAULT '';
+-- issue_uid is Linear's own ID for the issue, which stays the same when the
+-- issue moves to another team and its identifier changes. A job is unique
+-- per issue and criteria: by number for GitHub, by issue_uid for Linear.
+ALTER TABLE sf_jobs ADD COLUMN IF NOT EXISTS issue_uid text NOT NULL DEFAULT '';
 ALTER TABLE sf_jobs DROP CONSTRAINT IF EXISTS sf_jobs_repository_issue_criteria_digest_key;
-CREATE UNIQUE INDEX IF NOT EXISTS sf_jobs_issue_criteria ON sf_jobs (repository, source, issue, issue_key, criteria_digest);
+DROP INDEX IF EXISTS sf_jobs_issue_criteria;
+CREATE UNIQUE INDEX IF NOT EXISTS sf_jobs_issue_uid_criteria ON sf_jobs (repository, source, issue, issue_uid, criteria_digest);
 
 -- One row per builder round of a job. A row exists only once its evaluation
 -- has been taken from the allowance, in the same transaction, so a crash can

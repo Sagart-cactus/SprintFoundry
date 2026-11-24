@@ -447,7 +447,7 @@ func newScenario(t *testing.T, plan string) *scenario {
 		job := postgres.Job{ID: fmt.Sprintf("job-%d", issue), Repository: "github.com/o/r", Issue: issue, Base: s.parent, BaseBranch: "main"}
 		if issue == 12 {
 			// One job comes from Linear (design 0010).
-			job.Source, job.Issue, job.IssueKey = postgres.SourceLinear, 0, "ENG-12"
+			job.Source, job.Issue, job.IssueKey, job.IssueUID = postgres.SourceLinear, 0, "ENG-12", "uid-12"
 		}
 		job.Inputs.CriteriaDigest, err = s.store.PutInput(ctx, "criteria", criteria)
 		if err != nil {
@@ -622,12 +622,12 @@ func (s *scenario) checkPassed(label string, failures int) {
 		s.api.mu.Unlock()
 		// The builder's description, cleaned, with SprintFoundry's footer
 		// naming the job's own issue.
-		wantTitle := "Export only what the owner may see (`@alice`, refers to `#99`)"
+		wantTitle := "Export only what the owner may see (＠alice, refers to ＃99)"
 		own := "Closes #11."
 		if j.Source == postgres.SourceLinear {
 			own = "Fixes ENG-12\n"
 		}
-		if title != wantTitle || !strings.Contains(body, "for "+j.ID+".\n\nrefers to `#98` too.") || !strings.Contains(body, own) ||
+		if title != wantTitle || !strings.Contains(body, "for "+j.ID+".\n\nrefers to ＃98 too.") || !strings.Contains(body, own) ||
 			!strings.Contains(body, "Built by SprintFoundry with plan builder") {
 			s.t.Errorf("%s: %s: pull request %q\n%s", label, j.ID, title, body)
 		}

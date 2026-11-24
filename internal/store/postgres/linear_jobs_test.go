@@ -12,9 +12,13 @@ import (
 )
 
 func linearJob(t *testing.T, s *postgres.Store, id, key, criteria string) postgres.Job {
+	return linearJobUID(t, s, id, key, "uid-"+key, criteria)
+}
+
+func linearJobUID(t *testing.T, s *postgres.Store, id, key, uid, criteria string) postgres.Job {
 	t.Helper()
 	r := newRun(t, s, "unused-"+id, "github.com/o/r", criteria)
-	return postgres.Job{ID: id, Repository: "github.com/o/r", Source: postgres.SourceLinear, IssueKey: key, IssueTitle: "Add a thing",
+	return postgres.Job{ID: id, Repository: "github.com/o/r", Source: postgres.SourceLinear, IssueKey: key, IssueUID: uid, IssueTitle: "Add a thing",
 		Base: "0123456789abcdef0123456789abcdef01234567", BaseBranch: "main",
 		Inputs: postgres.Run{CriteriaDigest: r.CriteriaDigest, SuiteDigest: r.SuiteDigest, RunSpecDigest: r.RunSpecDigest}}
 }
@@ -27,7 +31,7 @@ func TestALinearJobIsCreatedOncePerIssueAndCriteria(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := s.GetJob(ctx, j.ID)
-	if err != nil || got.Source != postgres.SourceLinear || got.IssueKey != "ENG-1" || got.Issue != 0 || got.IssueTitle != "Add a thing" || got.IssueRef() != "ENG-1" {
+	if err != nil || got.Source != postgres.SourceLinear || got.IssueKey != "ENG-1" || got.IssueUID != "uid-ENG-1" || got.Issue != 0 || got.IssueTitle != "Add a thing" || got.IssueRef() != "ENG-1" {
 		t.Fatalf("GetJob: %+v %v", got, err)
 	}
 
@@ -38,13 +42,19 @@ func TestALinearJobIsCreatedOncePerIssueAndCriteria(t *testing.T) {
 	}
 	// Another Linear issue with the same text, and a GitHub issue with it,
 	// are different jobs.
+	// The same issue after a move to another team is the same issue.
+	moved := j
+	moved.ID, moved.IssueKey = "job-ops-9-a", "OPS-9"
+	if err := s.CreateJob(ctx, moved); !errors.Is(err, postgres.ErrJobExists) {
+		t.Fatalf("a job for the same Linear issue under its new identifier: err = %v, want ErrJobExists", err)
+	}
 	other := j
-	other.ID, other.IssueKey = "job-eng-2-a", "ENG-2"
+	other.ID, other.IssueKey, other.IssueUID = "job-eng-2-a", "ENG-2", "uid-ENG-2"
 	if err := s.CreateJob(ctx, other); err != nil {
 		t.Fatalf("another Linear issue with the same criteria: %v", err)
 	}
 	gh := j
-	gh.ID, gh.Source, gh.IssueKey, gh.Issue = "job-1-a", postgres.SourceGitHub, "", 1
+	gh.ID, gh.Source, gh.IssueKey, gh.IssueUID, gh.Issue = "job-1-a", postgres.SourceGitHub, "", "", 1
 	if err := s.CreateJob(ctx, gh); err != nil {
 		t.Fatalf("a GitHub issue with the same criteria: %v", err)
 	}
@@ -59,6 +69,8 @@ func TestAJobMustNameItsIssueOneWay(t *testing.T) {
 	base := linearJob(t, s, "job-x", "ENG-1", "criteria")
 	for name, change := range map[string]func(*postgres.Job){
 		"Linear without a key":    func(j *postgres.Job) { j.IssueKey = "" },
+		"Linear without an ID":    func(j *postgres.Job) { j.IssueUID = "" },
+		"GitHub with a Linear ID": func(j *postgres.Job) { j.Source, j.Issue, j.IssueKey = postgres.SourceGitHub, 3, "" },
 		"Linear with a number":    func(j *postgres.Job) { j.Issue = 3 },
 		"GitHub without number":   func(j *postgres.Job) { j.Source = postgres.SourceGitHub },
 		"GitHub with a key":       func(j *postgres.Job) { j.Source, j.Issue = postgres.SourceGitHub, 3 },

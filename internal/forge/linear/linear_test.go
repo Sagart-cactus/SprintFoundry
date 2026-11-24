@@ -40,13 +40,13 @@ func TestGetIssue(t *testing.T) {
 		if !strings.Contains(q, "issue(id: $id)") || vars["id"] != "ENG-12" {
 			return 400, `{"errors":[{"message":"unexpected"}]}`
 		}
-		return 200, `{"data":{"issue":{"identifier":"ENG-12","title":"Add a health check","description":"GET /health returns 200.","url":"https://linear.app/x/issue/ENG-12","state":{"type":"started"}}}}`
+		return 200, `{"data":{"issue":{"id":"uuid-12","identifier":"ENG-12","title":"Add a health check","description":"GET /health returns 200.","url":"https://linear.app/x/issue/ENG-12","state":{"type":"started"}}}}`
 	})
 	issue, err := c.GetIssue(context.Background(), "eng-12")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if issue.Identifier != "ENG-12" || issue.Title != "Add a health check" || issue.Description != "GET /health returns 200." || !issue.Open() {
+	if issue.ID != "uuid-12" || issue.Identifier != "ENG-12" || issue.Title != "Add a health check" || issue.Description != "GET /health returns 200." || !issue.Open() {
 		t.Errorf("issue: %+v", issue)
 	}
 	if got := (*headers)[0].Get("Authorization"); got != "lin_api_test" {
@@ -64,12 +64,26 @@ func TestGetIssueEdges(t *testing.T) {
 			func(_ Issue, err error) bool { return errors.Is(err, ErrNotFound) }},
 		"null issue": {200, `{"data":{"issue":null}}`,
 			func(_ Issue, err error) bool { return errors.Is(err, ErrNotFound) }},
-		"no description": {200, `{"data":{"issue":{"identifier":"ENG-12","title":"T","description":null,"url":"u","state":{"type":"completed"}}}}`,
+		"no description": {200, `{"data":{"issue":{"id":"u1","identifier":"ENG-12","title":"T","description":null,"url":"u","state":{"type":"completed"}}}}`,
 			func(i Issue, err error) bool { return err == nil && i.Description == "" && !i.Open() }},
-		"cancelled": {200, `{"data":{"issue":{"identifier":"ENG-12","title":"T","url":"u","state":{"type":"canceled"}}}}`,
+		"cancelled": {200, `{"data":{"issue":{"id":"u1","identifier":"ENG-12","title":"T","url":"u","state":{"type":"canceled"}}}}`,
 			func(i Issue, err error) bool { return err == nil && !i.Open() }},
-		"another issue": {200, `{"data":{"issue":{"identifier":"ENG-13","title":"T","url":"u","state":{"type":"started"}}}}`,
+		"duplicate": {200, `{"data":{"issue":{"id":"u1","identifier":"ENG-12","title":"T","url":"u","state":{"type":"duplicate"}}}}`,
+			func(i Issue, err error) bool { return err == nil && !i.Open() }},
+		"a state type added later": {200, `{"data":{"issue":{"id":"u1","identifier":"ENG-12","title":"T","url":"u","state":{"type":"parked"}}}}`,
+			func(i Issue, err error) bool { return err == nil && !i.Open() }},
+		"trashed": {200, `{"data":{"issue":{"id":"u1","identifier":"ENG-12","title":"T","url":"u","state":{"type":"started"},"trashed":true}}}`,
+			func(i Issue, err error) bool { return err == nil && !i.Open() }},
+		"archived": {200, `{"data":{"issue":{"id":"u1","identifier":"ENG-12","title":"T","url":"u","state":{"type":"started"},"archivedAt":"2026-11-01T00:00:00Z"}}}`,
+			func(i Issue, err error) bool { return err == nil && !i.Open() }},
+		"moved to another team": {200, `{"data":{"issue":{"id":"u1","identifier":"OPS-3","title":"T","url":"u","state":{"type":"started"},"trashed":false,"archivedAt":null}}}`,
+			func(i Issue, err error) bool {
+				return err == nil && i.Identifier == "OPS-3" && i.ID == "u1" && i.Open()
+			}},
+		"no ID": {200, `{"data":{"issue":{"identifier":"ENG-12","title":"T","url":"u","state":{"type":"started"}}}}`,
 			func(_ Issue, err error) bool { return err != nil && !errors.Is(err, ErrNotFound) }},
+		"a malformed identifier": {200, `{"data":{"issue":{"id":"u1","identifier":"eng 12; x","title":"T","url":"u","state":{"type":"started"}}}}`,
+			func(_ Issue, err error) bool { return err != nil }},
 		"key refused": {401, `{"errors":[{"message":"Authentication required","extensions":{"code":"AUTHENTICATION_ERROR"}}]}`,
 			func(_ Issue, err error) bool { return err != nil && strings.Contains(err.Error(), KeyEnv) }},
 		"server error": {502, `<html>bad gateway</html>`,
@@ -123,19 +137,20 @@ func TestARedirectIsNotFollowedWithTheKey(t *testing.T) {
 
 func TestLabeledIssues(t *testing.T) {
 	c, _ := fakeLinear(t, func(q string, vars map[string]any) (int, string) {
-		if vars["label"] != "sprintfoundry" || !strings.Contains(q, "eqIgnoreCase") || !strings.Contains(q, `nin: ["completed", "canceled"]`) {
+		if vars["label"] != "sprintfoundry" || !strings.Contains(q, "eqIgnoreCase") || !strings.Contains(q, `in: ["triage", "backlog", "unstarted", "started"]`) {
 			return 400, `{"errors":[{"message":"unexpected"}]}`
 		}
 		return 200, `{"data":{"issues":{"nodes":[
-			{"identifier":"ENG-1","title":"One","url":"u1","state":{"type":"backlog"}},
-			{"identifier":"not an id","title":"Bad","url":"u2","state":{"type":"backlog"}},
-			{"identifier":"OPS-7","title":"Seven","url":"u3","state":{"type":"started"}}]}}}`
+			{"id":"a","identifier":"ENG-1","title":"One","url":"u1","state":{"type":"backlog"}},
+			{"id":"b","identifier":"not an id","title":"Bad","url":"u2","state":{"type":"backlog"}},
+			{"identifier":"ENG-2","title":"No ID","url":"u4","state":{"type":"backlog"}},
+			{"id":"c","identifier":"OPS-7","title":"Seven","url":"u3","state":{"type":"started"}}]}}}`
 	})
 	issues, err := c.LabeledIssues(context.Background(), "sprintfoundry")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(issues) != 2 || issues[0].Identifier != "ENG-1" || issues[1].Identifier != "OPS-7" {
+	if len(issues) != 2 || issues[0].Identifier != "ENG-1" || issues[1].Identifier != "OPS-7" || issues[1].ID != "c" {
 		t.Errorf("issues: %+v", issues)
 	}
 }

@@ -151,7 +151,10 @@ func (a *Agent) Run(ctx context.Context, _ sandbox.Sandbox, _ string, task agent
 	change := agent.Change{Patch: patchOut.Stdout, TestedTree: tree, Summary: tail(res.Stdout, 2000)}
 	// The description is optional: a builder that wrote none still hands
 	// over its change.
-	desc, err := a.Sandbox.Exec(ctx, id, sandbox.Command{
+	// A FIFO swapped in after the check would block the read: bound it.
+	readCtx, cancelRead := context.WithTimeout(ctx, 10*time.Second)
+	defer cancelRead()
+	desc, err := a.Sandbox.Exec(readCtx, id, sandbox.Command{
 		Args: []string{"sh", "-c", "if [ -f " + DescriptionPath + " ] && [ ! -L " + DescriptionPath + " ]; then head -c " +
 			strconv.Itoa(MaxDescriptionBytes) + " " + DescriptionPath + "; fi"}, MaxOutput: MaxDescriptionBytes})
 	if err == nil && desc.ExitCode == 0 {
