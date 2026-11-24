@@ -231,13 +231,15 @@ func approveCommand(args []string, stdout, stderr io.Writer) int {
 	}
 	var earlier []string
 	for _, j := range jobs {
-		same := j.Source == issue.source && j.IssueRef() == issue.ref()
+		// A GitHub issue belongs to its repository. A Linear issue does not,
+		// so a job for it in any repository counts; an issue that moved to
+		// another team keeps its Linear ID.
+		same := j.Source == issue.source && j.IssueRef() == issue.ref() && j.Repository == repository
 		if issue.source == postgres.SourceLinear {
-			// An issue that moved to another team keeps its Linear ID.
 			same = j.Source == issue.source && j.IssueUID == issue.uid
 		}
-		if j.Repository == repository && same {
-			earlier = append(earlier, fmt.Sprintf("%s (%s)", j.ID, j.State))
+		if same {
+			earlier = append(earlier, fmt.Sprintf("%s in %s (%s)", j.ID, strings.TrimPrefix(j.Repository, "github.com/"), j.State))
 		}
 	}
 	if len(earlier) > 0 && !*again {

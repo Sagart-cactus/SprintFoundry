@@ -49,7 +49,7 @@ func CleanDescription(title, body, fallback, ownKey string) (string, string) {
 	if len(body) > MaxBodyBytes {
 		body, cut = cutBytes(body, MaxBodyBytes), true
 	}
-	body = defang(body)
+	body = defang(escapeMarkup(body))
 	if len(body) > MaxBodyBytes {
 		body, cut = trimPartialEscape(cutBytes(body, MaxBodyBytes)), true
 	}
@@ -116,44 +116,62 @@ const (
 	inertAt     = "＠" // U+FF20 FULLWIDTH COMMERCIAL AT
 	inertHash   = "＃" // U+FF03 FULLWIDTH NUMBER SIGN
 	inertHyphen = "‑" // U+2011 NON-BREAKING HYPHEN
+	inertSlash  = "∕" // U+2215 DIVISION SLASH
 )
 
 var (
 	// charRef is '&' where it could start a character reference. Escaped,
 	// it shows as itself and never decodes to '@', '#' or a keyword.
 	charRef = regexp.MustCompile(`&([#A-Za-z])`)
-	// mention is '@' before a user or team name, not inside an e-mail
-	// address. GitHub never treats '@' after these characters as a mention.
-	mention = regexp.MustCompile(`(^|[^A-Za-z0-9._%+-])@([A-Za-z0-9])`)
+	// mention is '@' before a user or team name. GitHub treats '@' as a
+	// mention after anything but a letter, digit or underscore; an e-mail
+	// address such as ops@example.com is left as it is.
+	mention = regexp.MustCompile(`(^|[^A-Za-z0-9_])@([A-Za-z0-9])`)
 	// issueNumber is '#' before a number: #12, owner/repo#12.
 	issueNumber = regexp.MustCompile(`#([0-9])`)
 	// ghPrefix is GitHub's other issue form, GH-12.
 	ghPrefix = regexp.MustCompile(`(?i)\bGH-([0-9])`)
-	// issueURL is the scheme and host of a GitHub or Linear URL. Without a
-	// scheme the URL is neither autolinked nor a link target GitHub reads
-	// as an issue.
-	issueURL = regexp.MustCompile(`(?i)(?:https?:)?//(?:www\.)?(github\.com|linear\.app)/`)
+	// issueURL is the scheme and host of a GitHub or Linear URL, with any
+	// run of schemes and slashes before it, so one pass removes them all.
+	issueURL = regexp.MustCompile(`(?i)(?:(?:https?:)?/{2,})+(?:www\.)?(github\.com|linear\.app)/`)
+	// issuePath is the part of a GitHub path that GitHub links as an issue
+	// or pull request even without a host: owner/repo/issues/12.
+	issuePath = regexp.MustCompile(`(?i)\b(issues|pulls?|discussions)/([0-9])`)
 	// linearID is what Linear reads as an issue identifier.
 	linearID = regexp.MustCompile(`\b[A-Za-z][A-Za-z0-9]{0,9}-[0-9]{1,9}\b`)
+	// linearNew is Linear's placeholder that creates a new issue and links
+	// it: ENG-NEW.
+	linearNew = regexp.MustCompile(`(?i)\b[A-Za-z][A-Za-z0-9]{0,9}-NEW\b`)
+	// markupStart is '<' where it could start HTML.
+	markupStart = regexp.MustCompile(`<([A-Za-z/!?])`)
 	// keywordRefs is a closing or linking keyword that GitHub or Linear
 	// documents, followed by one or more issue references, possibly across
 	// a line break or Markdown punctuation.
 	keywordRefs = regexp.MustCompile(`(?i)\b(close[sd]?|closing|fix(?:e[sd])?|fixing|resolve[sd]?|resolving|complete[sd]?|completing` +
-		`|implement(?:s|ed|ing)?|refs?|references|part\s+of|related\s+to|relates\s+to|contributes\s+to|towards?|linear\s+issues?)\b` +
+		`|implement(?:s|ed|ing)?|refs?|references|part\s+of|related\s+to|relates\s+to|contributes\s+to|towards?|linear\s+issues?|skip|ignore)\b` +
 		`((?:(?:[\s:*_~` + "`" + `\[\]()>"',.&;-]|and\b)*` +
-		`(?:[^\s\[\]()<>` + "`" + `"']*[A-Za-z][A-Za-z0-9]{0,9}-[0-9]{1,9}\b|[^\s\[\]()<>` + "`" + `"']*[#＃][0-9]+` +
-		`|[^\s\[\]()<>` + "`" + `"']*/(?:issues|pull)/[0-9]+))+)`)
+		`(?:[^\s\[\]()<>` + "`" + `"']*[A-Za-z][A-Za-z0-9]{0,9}-(?:[0-9]{1,9}|NEW)\b|[^\s\[\]()<>` + "`" + `"']*[#＃][0-9]+` +
+		`|[^\s\[\]()<>` + "`" + `"']*/(?:issues|pulls?|discussions)/[0-9]+))+)`)
 )
 
 func inertID(id string) string { return strings.Replace(id, "-", inertHyphen, 1) }
 
+// escapeMarkup makes every '<' that could start HTML show as itself, so no
+// HTML in the body can hide, strike out or swallow the footer, whatever a
+// Markdown parser makes of the text around it. It runs before defang, so
+// keywords and references next to the escape are still seen; defang leaves
+// "&lt;" as it is, since it can only ever show '<'.
+func escapeMarkup(s string) string { return markupStart.ReplaceAllString(s, "&lt;$1") }
+
 // defang applies the rewrites to text wherever it stands.
 func defang(s string) string {
 	// Keywords first, while their references still look like references.
-	for i := 0; i < 8; i++ {
+	// Every pass replaces a keyword with "refers to", which is none, so the
+	// loop ends.
+	for {
 		next := keywordRefs.ReplaceAllStringFunc(s, func(m string) string {
 			sub := keywordRefs.FindStringSubmatch(m)
-			return "refers to" + linearID.ReplaceAllStringFunc(sub[2], inertID)
+			return "refers to" + linearNew.ReplaceAllStringFunc(linearID.ReplaceAllStringFunc(sub[2], inertID), inertID)
 		})
 		if next == s {
 			break
@@ -165,11 +183,30 @@ func defang(s string) string {
 	for next := issueURL.ReplaceAllString(s, "$1/"); next != s; next = issueURL.ReplaceAllString(s, "$1/") {
 		s = next
 	}
+	s = issuePath.ReplaceAllString(s, "${1}"+inertSlash+"${2}")
+	s = linearNew.ReplaceAllStringFunc(s, inertID)
 	s = issueNumber.ReplaceAllString(s, inertHash+"$1")
 	s = ghPrefix.ReplaceAllStringFunc(s, inertID)
 	s = mention.ReplaceAllString(s, "${1}"+inertAt+"${2}")
 	// Last, so that no rewrite above can put a new '&' before a name.
-	return charRef.ReplaceAllString(s, "&amp;$1")
+	return escapeAmpersands(s)
+}
+
+// escapeAmpersands escapes every '&' that could start a character
+// reference, except "&lt;".
+func escapeAmpersands(s string) string {
+	var b strings.Builder
+	last := 0
+	for _, loc := range charRef.FindAllStringIndex(s, -1) {
+		if strings.HasPrefix(s[loc[0]:], "&lt;") {
+			continue
+		}
+		b.WriteString(s[last:loc[0]])
+		b.WriteString("&amp;")
+		last = loc[0] + 1
+	}
+	b.WriteString(s[last:])
+	return b.String()
 }
 
 func cutRunes(s string, n int) string {
@@ -180,8 +217,8 @@ func cutRunes(s string, n int) string {
 	return strings.TrimSpace(trimPartialEscape(string(r[:n-1]))) + "…"
 }
 
-// trimPartialEscape drops the start of an "&amp;" that a cut left at the
-// end of s.
+// trimPartialEscape drops the start of an "&amp;" or "&lt;" that a cut
+// left at the end of s.
 func trimPartialEscape(s string) string {
 	if i := strings.LastIndexByte(s, '&'); i >= 0 && len(s)-i < len("&amp;") {
 		return s[:i]

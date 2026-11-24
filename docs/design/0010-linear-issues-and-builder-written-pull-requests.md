@@ -21,7 +21,7 @@ The controller reads Linear with a personal API key from `LINEAR_API_KEY`. It on
 
 `serve` also lists open Linear issues labelled `sprintfoundry` that have no job yet, with the `approve` command to run. It cannot know their repository, so the command asks for `--repo`.
 
-A job records where its issue came from: `github` with the issue number, or `linear` with the identifier and Linear's own ID for the issue. The ID is what makes a Linear job unique and what `approve` and `serve` compare: an issue that moves to another team gets a new identifier but keeps its ID, so it is not offered or approved a second time by accident. Job IDs for Linear issues carry the identifier (`job-eng-123-<hash>`), so the branch `sprintfoundry/job-eng-123-<hash>` names the issue. Linear's GitHub integration links a pull request to the issue by the identifier in its branch, and the footer says `Fixes ENG-123`, so merging the pull request moves the issue as the team's Linear workflow says. SprintFoundry itself never writes to Linear.
+A job records where its issue came from: `github` with the issue number, or `linear` with the identifier and Linear's own ID for the issue. The ID is what makes a Linear job unique and what `approve` and `serve` compare: an issue that moves to another team gets a new identifier but keeps its ID, so it is not offered or approved a second time by accident. `approve` asks for `--again` when the Linear issue already has a job in any repository. Job IDs for Linear issues carry the identifier (`job-eng-123-<hash>`), so the branch `sprintfoundry/job-eng-123-<hash>` names the issue. Linear's GitHub integration links a pull request to the issue by the identifier in its branch, and the footer says `Fixes ENG-123`, so merging the pull request moves the issue as the team's Linear workflow says. SprintFoundry itself never writes to Linear.
 
 Rejected: writing comments or state changes to Linear from the controller. It needs a write key, and Linear's own GitHub integration already does it from the branch and the footer.
 
@@ -33,10 +33,12 @@ The description is untrusted text from the builder, shown to reviewers and read 
 
 - keeps the title to one line of at most 120 characters, and the body to 20,000 bytes;
 - removes the characters a terminal or browser could show differently (the same set `approve` refuses) and HTML comments, so what a reviewer reads is all there is;
-- escapes every `&` that could start a character reference, so nothing decodes to `@`, `#` or a keyword;
-- replaces `@` before a name with `＠` (fullwidth), so the pull request notifies nobody, and `#` before a number with `＃`, so it posts no cross-reference and closes nothing on GitHub; `GH-12` gets a non-breaking hyphen;
-- removes the scheme from GitHub and Linear URLs, so they are neither links nor references;
-- rewrites a closing or linking keyword that GitHub or Linear documents, followed by issue references (`Fixes ENG-456, ENG-457`, `Implements OPS-7`, `Part of`, `Linear issue`), as "refers to", and gives the identifiers a non-breaking hyphen, so merging cannot close or move any issue but the job's own;
+- in the body, escapes every `<` that could start HTML, so no HTML can hide, strike out or swallow anything (a code sample shows `&lt;` for such a `<`);
+- escapes every `&` that could start a character reference (except `&lt;`, which can only show `<`), so nothing decodes to `@`, `#` or a keyword;
+- replaces `@` after anything but a letter, digit or underscore (GitHub's mention boundary) with `＠` (fullwidth), so the pull request notifies nobody, and `#` before a number with `＃`, so it posts no cross-reference and closes nothing on GitHub; `GH-12` gets a non-breaking hyphen;
+- removes the scheme from GitHub and Linear URLs, and replaces the slash in `issues/12`, `pull/12` and `discussions/12` with `∕` (division slash), because GitHub links `owner/repo/issues/12` even without a host;
+- rewrites a closing or linking keyword that GitHub or Linear documents, followed by issue references (`Fixes ENG-456, ENG-457`, `Implements OPS-7`, `Part of`, `Linear issue`, and Linear's `skip` and `ignore`, which would unlink the job's own issue), as "refers to", and gives the identifiers a non-breaking hyphen, so merging cannot close or move any issue but the job's own;
+- gives Linear's `ENG-NEW` placeholder, which would create and link a new issue, a non-breaking hyphen wherever it stands;
 - in the title, which Linear reads for identifiers even without a keyword, gives every identifier but the job's own a non-breaking hyphen.
 
 These rewrites do not depend on how Markdown is parsed. A first version left code spans and fenced code alone, because GitHub does not act on code; review showed that any disagreement between that scanner and GitHub's parser (escaped backticks, raw HTML, autolinks, indented fences, a cut inside a span) let mentions and references through. Now every part of the text is rewritten, code included, so a construct the controller reads differently from GitHub can only make a code sample look a little odd. The stand-ins read like the characters they replace; neither GitHub nor Linear acts on them. A fuzz test checks that nothing GitHub or Linear acts on survives, for any input.
@@ -47,7 +49,7 @@ The cleaned title and body are stored with the round's change, in the same trans
 
 ### 3. SprintFoundry's footer
 
-Below the builder's body, after a rule, the controller adds what only it can vouch for. The body must not be able to swallow the footer: an unclosed code fence or HTML element would turn `Closes #N` into code or hide it. So a CommonMark parser (goldmark) checks that a paragraph written after the body stands on its own at the top level, and that the body holds no raw HTML. If not, the body is quoted, which closes every block at the end of the quote; failing that, shown as a code block with a longer fence; failing that, left out with a note. The footer holds:
+Below the builder's body, after a rule, the controller adds what only it can vouch for. The body must not be able to swallow the footer: an unclosed code fence or HTML element would turn `Closes #N` into code or hide it. HTML is already escaped by the cleaning. For Markdown structure, a CommonMark parser (goldmark) checks that a paragraph written after the body stands on its own at the top level. If not, the body is quoted, which closes every block at the end of the quote; failing that, shown as a code block with a longer fence; failing that, left out with a note. pandoc's GFM reader checks the same in the tests when it is installed. The footer holds:
 
 - the closing line for the job's own issue: `Closes #N` or `Fixes ENG-123`;
 - the job, the round, the criteria digest and the evidence digest;
@@ -64,5 +66,6 @@ The pull request is opened with the operator's `gh` login (0008), so GitHub show
 - A builder can still put anything else it likes in the body, links to other sites included. A reviewer reads it as the builder's claims; the footer is the controller's.
 - The keyword rewrite is a deny list of the keywords GitHub and Linear document. A keyword either adds later would get through for Linear identifiers until it is added here (GitHub needs `#`, which is always replaced).
 - In the body, a Linear identifier without a keyword is left as it is: the controller cannot tell `ENG-12` from `UTF-8` without the workspace's team keys. Linear documents linking only through keywords in the body.
-- The rewrites change some harmless text: `fixes UTF-8 names` becomes "refers to UTF‑8 names", `@decorator` in a code sample becomes `＠decorator`, and a link to another issue loses its link. All of it stays readable for the reviewer.
+- The rewrites change some harmless text: `fixes UTF-8 names` becomes "refers to UTF‑8 names", `@decorator` in a code sample becomes `＠decorator`, `List<String>` in a code sample shows as `List&lt;String>`, and a link to another issue loses its link. All of it stays readable for the reviewer.
+- Two adversarial reviews (first of a version that left code alone, then of this one, checked against GitHub's own Markdown renderer) found the gaps closed above. The fuzz test's oracle encodes every form GitHub or Linear was shown to act on.
 - goldmark (v1.7.8) is a new dependency, used only to check that the footer stands on its own.

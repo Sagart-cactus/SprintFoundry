@@ -14,19 +14,24 @@ import (
 // an issue number, a GitHub issue form, a character reference, an issue
 // URL with its scheme, or a keyword before a reference.
 var live = []*regexp.Regexp{
-	regexp.MustCompile(`(^|[^A-Za-z0-9._%+-])@[A-Za-z0-9]`),
+	regexp.MustCompile(`(^|[^A-Za-z0-9_])@[A-Za-z0-9]`),
 	regexp.MustCompile(`#[0-9]`),
 	regexp.MustCompile(`(?i)\bGH-[0-9]`),
 	regexp.MustCompile(`&[#A-Za-z]`),
 	regexp.MustCompile(`(?i)//(www\.)?(github\.com|linear\.app)/`),
+	regexp.MustCompile(`(?i)\b(issues|pulls?|discussions)/[0-9]`),
+	regexp.MustCompile(`(?i)\b[A-Za-z][A-Za-z0-9]{0,9}-NEW\b`),
 }
+
+// liveInBody is HTML that GitHub would read in a body.
+var liveInBody = regexp.MustCompile(`<[A-Za-z/!?]`)
 
 func assertInert(t *testing.T, label, s string) {
 	t.Helper()
 	for i, re := range live {
 		for _, loc := range re.FindAllStringIndex(s, -1) {
-			if i == 3 && strings.HasPrefix(s[loc[0]:], "&amp;") {
-				continue // an escaped ampersand
+			if i == 3 && (strings.HasPrefix(s[loc[0]:], "&amp;") || strings.HasPrefix(s[loc[0]:], "&lt;")) {
+				continue // an escape
 			}
 			t.Errorf("%s: %q is still live in %q", label, s[loc[0]:loc[1]], s)
 		}
@@ -64,6 +69,17 @@ var bypasses = []string{
 	"see GH-44 and o/r#2 and @acme/reviewers",
 	"fi\u200bxes #3 @\u200balice",
 	"&#70;ixes ENG-3",
+	"see https://github.com/rails/rails/issues/1 and github.com/r/r/pull/2 and plain rails/rails/issues/3 and o/r/discussions/4",
+	"Fixes https://github.com/octocat/Hello-World/issues/1",
+	"thanks .@alice -@bob +@carol %@dave a.@erin end.@acme/team",
+	"ENG-NEW and Fixes ENG-NEW and Refs ops-new",
+	"Ignore ENG-999 and skip ENG-1, ENG-2 and ignore https://linear.app/x/issue/ENG-1/y",
+	"Fixes ENG-1" + strings.Repeat(",closes,https://github.com/o/r/issues/2", 9),
+	"Fixes ENG-1" + strings.Repeat(",fixes,1DES-2", 12),
+	"Adds it. <code>x",
+	"www.example.com\\<details>",
+	"https://example.com/\\<s> x",
+	"See <s> for details.",
 }
 
 func TestCleanDescriptionLeavesNothingLive(t *testing.T) {
@@ -71,6 +87,9 @@ func TestCleanDescriptionLeavesNothingLive(t *testing.T) {
 		title, body := CleanDescription(in, in, "", "")
 		assertInert(t, "body", body)
 		assertInert(t, "title", title)
+		if m := liveInBody.FindString(body); m != "" {
+			t.Errorf("HTML %q is still live in %q", m, body)
+		}
 	}
 }
 
@@ -82,8 +101,9 @@ func TestCleanDescriptionRewrites(t *testing.T) {
 		"Fixes ENG-1, ENG-2 and #3": "refers to ENG‑1, ENG‑2 and ＃3",
 		"thanks @alice and @acme/x": "thanks ＠alice and ＠acme/x",
 		"mail ops@example.com":      "mail ops@example.com",
-		"see https://github.com/o/r/pull/8 and https://example.com/a": "see github.com/o/r/pull/8 and https://example.com/a",
+		"see https://github.com/o/r/pull/8 and https://example.com/a": "see github.com/o/r/pull∕8 and https://example.com/a",
 		"R&D &amp; &#64;":       "R&amp;D &amp;amp; &＃64;",
+		"a < b and <b>bold</b>": "a < b and &lt;b>bold&lt;/b>",
 		"Supports UTF-8 names.": "Supports UTF-8 names.",
 	} {
 		_, got := CleanDescription("t", in, "", "")
@@ -162,6 +182,11 @@ func TestTheFooterCannotBeSwallowed(t *testing.T) {
 		"`````\n````\n```",
 		"text\n<script>",
 		"plain text",
+		"Adds it. <code>x",
+		"<s>x",
+		"<b>x",
+		"<a href=x>x",
+		"www.example.com\\<details>",
 	} {
 		_, cleaned := CleanDescription("t", body, "", "")
 		contained := containBody(cleaned)
@@ -182,7 +207,7 @@ func TestTheFooterRendersOnItsOwnWithPandoc(t *testing.T) {
 		t.Skip("pandoc not installed")
 	}
 	job := postgres.Job{ID: "job-12-abc", Source: postgres.SourceGitHub, Issue: 12}
-	for _, body := range []string{"```\nopen", "- a\n  ```\n  open", "<details>\n\nhidden", "    ```\nx", "plain"} {
+	for _, body := range []string{"```\nopen", "- a\n  ```\n  open", "<details>\n\nhidden", "    ```\nx", "plain", "Adds it. <s>x", "www.example.com\\<details>", "See <s> for details."} {
 		_, cleaned := CleanDescription("t", body, "", "")
 		md := pullRequestBody(job, postgres.RoundRecord{Number: 1, PRBody: cleaned}, "Codex CLI")
 		cmd := exec.Command("pandoc", "-f", "gfm", "-t", "html")
@@ -191,7 +216,7 @@ func TestTheFooterRendersOnItsOwnWithPandoc(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(string(out), "<p>Closes #12.</p>") {
+		if !strings.Contains(string(out), "<p>Closes #12.</p>") || strings.Contains(string(out), "<s>") || strings.Contains(string(out), "<details>") {
 			t.Errorf("%q: the footer did not render on its own:\n%s", body, out)
 		}
 	}
@@ -205,6 +230,9 @@ func FuzzCleanDescription(f *testing.F) {
 		title, body := CleanDescription(in, in, "", "")
 		assertInert(t, "body", body)
 		assertInert(t, "title", title)
+		if m := liveInBody.FindString(body); m != "" {
+			t.Fatalf("HTML %q is still live in %q", m, body)
+		}
 		if !utf8.ValidString(title+body) || strings.Contains(title, "\n") || utf8.RuneCountInString(title) > MaxTitleRunes {
 			t.Fatalf("title %q", title)
 		}
