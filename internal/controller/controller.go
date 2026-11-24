@@ -35,6 +35,9 @@ const (
 	Passed State = "passed"
 	// NeedsOwner: a person must decide. Reason says why.
 	NeedsOwner State = "needs_owner"
+	// AwaitingPublish: a job's change passed and waits for a person to
+	// approve pushing it.
+	AwaitingPublish State = "awaiting_publish"
 )
 
 // DefaultRepairRounds is how many times a failure goes back to the builder
@@ -108,6 +111,9 @@ type Round struct {
 	Feedback      []checks.Symptom
 	HoldoutFailed bool
 	BuilderNote   string
+	// evidenceRow is the stored form of the round's evidence, kept when the
+	// caller stores it itself (see commitRequest.storeEvidenceLater).
+	evidenceRow postgres.Evidence
 }
 
 // Result is a finished run.
@@ -306,6 +312,9 @@ func ParseInputs(criteria, suiteText, specText []byte) (frozen, error) {
 // Spec returns the parsed run spec.
 func (f frozen) Spec() runspec.Spec { return f.spec }
 
+// SuiteDigest returns the check suite's digest.
+func (f frozen) SuiteDigest() string { return f.suiteDigest }
+
 // commitRequest is one commit, already in the store, to build and evaluate.
 type commitRequest struct {
 	RunID, Repository, StoreDir string
@@ -321,6 +330,9 @@ type commitRequest struct {
 	NameKey            []byte
 	Labels             map[string]string
 	Check              evidence.CheckKind
+	// storeEvidenceLater leaves storing the evidence to the caller, which
+	// stores it together with the round's result.
+	storeEvidenceLater bool
 }
 
 // evaluateCommit checks the Dockerfile, builds the commit, evaluates the
@@ -351,7 +363,7 @@ func evaluateCommit(ctx context.Context, d Deps, in frozen, r commitRequest) (ro
 		return round, "the Dockerfile was refused before any build: " + err.Error(), nil
 	}
 	if round.Image, err = d.Build(ctx, r.StoreDir, r.Commit, in.spec); err != nil {
-		return round, "the candidate could not be built: " + err.Error(), nil
+		return round, stopBuildFailed + err.Error(), nil
 	}
 	logf("Round %d: candidate built, image %s", r.Number, round.Image[:12])
 
@@ -395,14 +407,17 @@ func evaluateCommit(ctx context.Context, d Deps, in frozen, r commitRequest) (ro
 	runInfo, _ := parsed.Config("run")
 	round.Outcome = runInfo.Annotations["outcome"]
 	round.EvidenceDigest = evidence.Digest(payload)
-	if err := d.Store.PutEvidence(ctx, postgres.Evidence{
+	round.evidenceRow = postgres.Evidence{
 		Digest: round.EvidenceDigest, RunID: r.RunID, Round: r.Number, Repository: r.Repository,
 		ImageDigest: round.Image, DigestKind: string(r.DigestKind),
 		CriteriaDigest: in.criteria, SuiteDigest: in.suiteDigest, RunSpecDigest: in.specDigest,
 		Purpose: string(r.Purpose), Outcome: round.Outcome, Check: string(r.Check),
 		ReviewRequired: runInfo.Annotations["reviewRequired"], Envelope: stored,
-	}); err != nil {
-		return round, "", err
+	}
+	if !r.storeEvidenceLater {
+		if err := d.Store.PutEvidence(ctx, round.evidenceRow); err != nil {
+			return round, "", err
+		}
 	}
 	logf("Round %d: evaluation %s, evidence signed (%s)", r.Number, round.Outcome, short(round.EvidenceDigest))
 	return round, "", nil
@@ -411,6 +426,10 @@ func evaluateCommit(ctx context.Context, d Deps, in frozen, r commitRequest) (ro
 // stopEvaluationIncomplete starts the reason when the evaluation itself
 // could not run, which says nothing about the commit.
 const stopEvaluationIncomplete = "the evaluation could not be completed: "
+
+// stopBuildFailed starts the reason when the candidate could not be built,
+// which may be the change or the machine.
+const stopBuildFailed = "the candidate could not be built: "
 
 func short(digest string) string {
 	if len(digest) > 19 {

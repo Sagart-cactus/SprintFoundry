@@ -277,3 +277,49 @@ func withDockerfile(t *testing.T, overlay *bytes.Buffer, base string) *bytes.Buf
 	}
 	return &out
 }
+
+// flakyRuntime returns a CLI whose binary fails its first `failures` calls
+// and then succeeds, and a function that counts the calls.
+func flakyRuntime(t *testing.T, failures int) (CLI, func() int) {
+	t.Helper()
+	dir := t.TempDir()
+	count := filepath.Join(dir, "count")
+	script := filepath.Join(dir, "runtime")
+	body := fmt.Sprintf("#!/bin/sh\necho x >> '%s'\nn=$(wc -l < '%s')\nif [ \"$n\" -le %d ]; then echo 'failed to lease content: NotFound' >&2; exit 1; fi\nexit 0\n", count, count, failures)
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return CLI{Bin: script}, func() int {
+		data, _ := os.ReadFile(count)
+		return strings.Count(string(data), "x")
+	}
+}
+
+func TestAPullThatFailsOnceIsTriedAgain(t *testing.T) {
+	image := "registry.example/app@sha256:" + strings.Repeat("a", 64)
+	c, calls := flakyRuntime(t, 1)
+	if err := c.Pull(context.Background(), image); err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	if calls() != 2 {
+		t.Errorf("runtime called %d times, want 2", calls())
+	}
+
+	c, calls = flakyRuntime(t, 100)
+	if err := c.Pull(context.Background(), image); err == nil {
+		t.Fatal("a pull that always fails succeeded")
+	}
+	if calls() != pullAttempts {
+		t.Errorf("runtime called %d times, want %d", calls(), pullAttempts)
+	}
+
+	c, calls = flakyRuntime(t, 100)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := c.Pull(ctx, image); err == nil {
+		t.Fatal("a cancelled pull succeeded")
+	}
+	if calls() > 1 {
+		t.Errorf("a cancelled pull was tried %d times", calls())
+	}
+}

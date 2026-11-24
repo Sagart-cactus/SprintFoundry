@@ -20,6 +20,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Errors returned by Import. Callers match them with errors.Is.
@@ -50,6 +51,10 @@ type Request struct {
 	// AuthorName and AuthorEmail identify the commit author and committer.
 	AuthorName  string
 	AuthorEmail string
+	// Date, when set, is the author and committer date. A controller that
+	// imports the same change again after a crash passes the same date and
+	// gets the same commit.
+	Date time.Time
 }
 
 // Result is the imported commit.
@@ -84,6 +89,10 @@ func Import(ctx context.Context, req Request) (Result, error) {
 	indexPath := filepath.Join(scratch, "index")
 
 	g := runner{store: req.Store, index: indexPath, name: req.AuthorName, email: req.AuthorEmail}
+	if !req.Date.IsZero() {
+		date := fmt.Sprintf("%d +0000", req.Date.Unix())
+		g.env = []string{"GIT_AUTHOR_DATE=" + date, "GIT_COMMITTER_DATE=" + date}
+	}
 
 	parentTree, err := g.output(ctx, nil, "rev-parse", "--verify", req.Parent+"^{tree}")
 	if err != nil {
@@ -93,6 +102,10 @@ func Import(ctx context.Context, req Request) (Result, error) {
 		return Result{}, fmt.Errorf("gitimport: read parent tree: %w", err)
 	}
 	if _, err := g.output(ctx, req.Patch, "apply", "--cached", "--binary", "--whitespace=nowarn", "-"); err != nil {
+		// A cancelled context kills git; that says nothing about the patch.
+		if ctx.Err() != nil {
+			return Result{}, fmt.Errorf("gitimport: apply: %w", ctx.Err())
+		}
 		return Result{}, fmt.Errorf("%w: %v", ErrBadPatch, err)
 	}
 	tree, err := g.output(ctx, nil, "write-tree")

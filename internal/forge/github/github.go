@@ -16,9 +16,11 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -89,7 +91,7 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 	if resp.StatusCode >= 300 {
 		var apiErr struct{ Message string }
 		_ = json.Unmarshal(data, &apiErr)
-		return fmt.Errorf("github: %s %s: %d %s", method, path, resp.StatusCode, apiErr.Message)
+		return &APIError{Status: resp.StatusCode, Message: fmt.Sprintf("github: %s %s: %d %s", method, path, resp.StatusCode, apiErr.Message)}
 	}
 	if out != nil {
 		if err := json.Unmarshal(data, out); err != nil {
@@ -97,6 +99,19 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 		}
 	}
 	return nil
+}
+
+// APIError is an error response from the API.
+type APIError struct {
+	Status  int
+	Message string
+}
+
+func (e *APIError) Error() string { return e.Message }
+
+func isNotFound(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound
 }
 
 // PullRequest is what the controller needs from a pull request.
@@ -317,10 +332,32 @@ func GitWithToken(ctx context.Context, dir, token string, args ...string) ([]byt
 // Fetch copies one commit of a GitHub repository into the controller's bare
 // store. The token travels in git's configuration environment, not on a
 // command line, and hooks and user configuration are ignored.
+//
+// Fetches into one store take turns, across processes, through a lock file
+// next to the store, and run with git's automatic gc and maintenance off, so
+// no git keeps working in the store after a fetch returns. A fetch that was
+// killed outright leaves git's shallow.lock behind. Under the lock no fetch
+// of ours can be running, so a shallow.lock older than a minute is stale and
+// removed; a newer one (some other git at work in the store) is an error.
 func Fetch(ctx context.Context, store, repo, commit, token string) error {
 	if !ValidRepo(repo) || !sha.MatchString(commit) {
 		return fmt.Errorf("github: %q %q is not a commit reference", repo, commit)
 	}
+	unlock, err := lockStore(ctx, store)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if info, err := os.Stat(filepath.Join(store, "shallow.lock")); err == nil {
+		if time.Since(info.ModTime()) < time.Minute {
+			return fmt.Errorf("github: %s is in use by another git (shallow.lock is %s old); try again later", store, time.Since(info.ModTime()).Round(time.Second))
+		}
+		if err := os.Remove(filepath.Join(store, "shallow.lock")); err != nil {
+			return fmt.Errorf("github: remove a stale shallow.lock: %w", err)
+		}
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Minute)
+	defer cancel()
 	if _, err := os.Stat(store); err != nil {
 		init := exec.CommandContext(ctx, "git", "init", "--bare", "--quiet", store)
 		init.Env = scrubbedEnv()
@@ -331,8 +368,10 @@ func Fetch(ctx context.Context, store, repo, commit, token string) error {
 	basic := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + token))
 	cmd := exec.CommandContext(ctx, "git", "--git-dir", store,
 		"-c", "core.hooksPath="+os.DevNull, "-c", "protocol.allow=never", "-c", "protocol.https.allow=always",
+		"-c", "gc.auto=0", "-c", "maintenance.auto=false",
 		"fetch", "--quiet", "--no-tags", "--depth=1", "https://github.com/"+repo+".git", commit)
 	cmd.Env = append(scrubbedEnv(), gitAuth(token)...)
+	gentle(cmd)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
@@ -340,6 +379,41 @@ func Fetch(ctx context.Context, store, repo, commit, token string) error {
 		return fmt.Errorf("github: fetch %s %s: %v: %s", repo, commit[:12], err, strings.TrimSpace(msg))
 	}
 	return nil
+}
+
+// gentle makes a cancelled git stop with SIGTERM, so it removes its lock
+// files, and kills it only if it has not stopped ten seconds later.
+func gentle(cmd *exec.Cmd) {
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+	cmd.WaitDelay = 10 * time.Second
+}
+
+// lockStore takes an exclusive lock on a store, shared by every process
+// that uses it, and waits for it as long as ctx allows.
+func lockStore(ctx context.Context, store string) (func(), error) {
+	if err := os.MkdirAll(filepath.Dir(store), 0o700); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(store+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("github: lock %s: %w", store, err)
+	}
+	for {
+		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN); _ = f.Close() }, nil
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) {
+			_ = f.Close()
+			return nil, fmt.Errorf("github: lock %s: %w", store, err)
+		}
+		select {
+		case <-ctx.Done():
+			_ = f.Close()
+			return nil, ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 }
 
 func scrubbedEnv() []string {
