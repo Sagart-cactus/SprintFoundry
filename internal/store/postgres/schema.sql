@@ -125,6 +125,15 @@ ALTER TABLE sf_jobs ADD COLUMN IF NOT EXISTS publish_approved boolean NOT NULL D
 
 CREATE INDEX IF NOT EXISTS sf_jobs_open ON sf_jobs (seq) WHERE state IN ('queued', 'running');
 
+-- Where a job's issue lives (design 0010): 'github' with the issue number,
+-- or 'linear' with the identifier in issue_key and issue = 0. issue_title is
+-- the issue's title when it was approved.
+ALTER TABLE sf_jobs ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT 'github';
+ALTER TABLE sf_jobs ADD COLUMN IF NOT EXISTS issue_key text NOT NULL DEFAULT '';
+ALTER TABLE sf_jobs ADD COLUMN IF NOT EXISTS issue_title text NOT NULL DEFAULT '';
+ALTER TABLE sf_jobs DROP CONSTRAINT IF EXISTS sf_jobs_repository_issue_criteria_digest_key;
+CREATE UNIQUE INDEX IF NOT EXISTS sf_jobs_issue_criteria ON sf_jobs (repository, source, issue, issue_key, criteria_digest);
+
 -- One row per builder round of a job. A row exists only once its evaluation
 -- has been taken from the allowance, in the same transaction, so a crash can
 -- neither skip nor repeat that. Every builder attempt in a round (a second
@@ -145,6 +154,12 @@ CREATE TABLE IF NOT EXISTS sf_rounds (
     feedback        jsonb,
     PRIMARY KEY (job_id, number)
 );
+
+-- The pull request title and body the builder wrote with its change, cleaned
+-- by the controller and stored with the patch (design 0010). An empty title
+-- is a round stored before builders wrote one.
+ALTER TABLE sf_rounds ADD COLUMN IF NOT EXISTS pr_title text NOT NULL DEFAULT '';
+ALTER TABLE sf_rounds ADD COLUMN IF NOT EXISTS pr_body text NOT NULL DEFAULT '';
 
 -- Model requests reserved per repository and criteria digest, across jobs.
 CREATE TABLE IF NOT EXISTS sf_spend (

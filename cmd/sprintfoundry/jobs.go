@@ -18,7 +18,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/sagart-cactus/sprintfoundry/internal/agent"
@@ -27,12 +26,14 @@ import (
 	"github.com/sagart-cactus/sprintfoundry/internal/evaluate"
 	"github.com/sagart-cactus/sprintfoundry/internal/evidence"
 	"github.com/sagart-cactus/sprintfoundry/internal/forge/github"
+	"github.com/sagart-cactus/sprintfoundry/internal/forge/linear"
 	"github.com/sagart-cactus/sprintfoundry/internal/proxy"
 	"github.com/sagart-cactus/sprintfoundry/internal/runnerimage"
 	"github.com/sagart-cactus/sprintfoundry/internal/sandbox"
 	"github.com/sagart-cactus/sprintfoundry/internal/sandbox/containerbox"
 	"github.com/sagart-cactus/sprintfoundry/internal/signer"
 	"github.com/sagart-cactus/sprintfoundry/internal/store/postgres"
+	"github.com/sagart-cactus/sprintfoundry/internal/textsafe"
 )
 
 // IssueLabel marks an issue as a request for SprintFoundry. It never starts
@@ -41,8 +42,11 @@ const IssueLabel = "sprintfoundry"
 
 // issueCriteria is the text an approved issue is frozen as. It refuses text
 // a terminal could show differently from what is frozen: see hidden.
-func issueCriteria(i github.Issue) ([]byte, error) {
-	text := fmt.Sprintf("# %s\n\n%s\n", strings.TrimSpace(i.Title), strings.TrimSpace(strings.ReplaceAll(i.Body, "\r\n", "\n")))
+func issueCriteria(i github.Issue) ([]byte, error) { return criteriaText(i.Title, i.Body) }
+
+// criteriaText freezes an issue's title and body, from GitHub or Linear.
+func criteriaText(title, body string) ([]byte, error) {
+	text := fmt.Sprintf("# %s\n\n%s\n", strings.TrimSpace(title), strings.TrimSpace(strings.ReplaceAll(body, "\r\n", "\n")))
 	if !utf8.ValidString(text) {
 		return nil, errors.New("the issue text is not valid UTF-8")
 	}
@@ -55,26 +59,8 @@ func issueCriteria(i github.Issue) ([]byte, error) {
 }
 
 // hidden reports whether a terminal could show r as nothing, or as
-// something else: control characters other than newline and tab, format
-// characters (direction overrides, zero-width joiners), line and paragraph
-// separators, spaces other than the plain space, private-use and unassigned
-// code points, variation selectors and the code points that render blank.
-func hidden(r rune) bool {
-	switch {
-	case r == '\n' || r == '\t' || r == ' ':
-		return false
-	case unicode.IsControl(r), unicode.In(r, unicode.Cf, unicode.Co, unicode.Zl, unicode.Zp, unicode.Zs, unicode.Variation_Selector):
-		return true
-	case !unicode.In(r, unicode.L, unicode.M, unicode.N, unicode.P, unicode.S):
-		return true // unassigned, surrogate, noncharacter
-	}
-	switch r {
-	case 0x034F, 0x115F, 0x1160, 0x17B4, 0x17B5, 0x2800, 0x3164, 0xFFA0, 0x180B, 0x180C, 0x180D, 0x180E, 0x180F,
-		0x16FE4, 0x1D159, 0xFFFD:
-		return true // grapheme joiner, Hangul, Khmer and Khitan fillers, braille blank, Mongolian selectors, blank notehead, replacement character
-	}
-	return false
-}
+// something else (see textsafe.Hidden).
+func hidden(r rune) bool { return textsafe.Hidden(r) }
 
 // printable makes text from issues, builders and job reasons safe to print
 // as one line: everything hidden would refuse, newlines and tabs included,
@@ -113,19 +99,49 @@ func jobID(repository string, issue int, criteriaDigest string) string {
 	return fmt.Sprintf("job-%d-%s", issue, postgres.Digest([]byte(repository + "\x00" + criteriaDigest))[len("sha256:"):][:8])
 }
 
+// linearJobID names a job for a Linear issue. Its branch then carries the
+// identifier, which links the pull request to the issue in Linear.
+func linearJobID(repository, key string, criteriaDigest string) string {
+	return fmt.Sprintf("job-%s-%s", strings.ToLower(key), postgres.Digest([]byte(repository + "\x00" + key + "\x00" + criteriaDigest))[len("sha256:"):][:8])
+}
+
+// approvedIssue is the issue a job is approved from, wherever it lives.
+type approvedIssue struct {
+	source, key string
+	number      int
+	title, body string
+	open        bool
+}
+
+func (i approvedIssue) ref() string {
+	if i.source == postgres.SourceLinear {
+		return i.key
+	}
+	return "#" + strconv.Itoa(i.number)
+}
+
+func (i approvedIssue) flag() []string {
+	if i.source == postgres.SourceLinear {
+		return []string{"--linear", i.key}
+	}
+	return []string{"--issue", strconv.Itoa(i.number)}
+}
+
 func approveCommand(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("approve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	home := homeFlag(fs)
 	repo := fs.String("repo", "", "the GitHub repository, as owner/name (required)")
-	issueNumber := fs.Int("issue", 0, "the issue whose text becomes the criteria (required)")
+	issueNumber := fs.Int("issue", 0, "the GitHub issue whose text becomes the criteria")
+	linearID := fs.String("linear", "", "the Linear issue, such as ENG-123, whose text becomes the criteria; needs "+linear.KeyEnv)
 	checksPath := fs.String("checks", "", "the check suite written for this issue (required)")
 	specPath := fs.String("runspec", "", "the run spec (default: the one registered for the repository)")
 	digest := fs.String("digest", "", "the criteria digest the first call printed; approves exactly that text")
 	again := fs.Bool("again", false, "approve although the issue already has a job (a new job gets a new evaluation allowance)")
 	fs.Usage = func() {
-		fmt.Fprint(stderr, "Usage: sprintfoundry approve --repo OWNER/NAME --issue N --checks F [--runspec F] [--digest D]\n\n"+
+		fmt.Fprint(stderr, "Usage: sprintfoundry approve --repo OWNER/NAME (--issue N | --linear ENG-123) --checks F [--runspec F] [--digest D]\n\n"+
 			"Freezes an issue's title and body as the criteria of a job, with the check suite and run spec.\n"+
+			"The issue is a GitHub issue of the repository, or a Linear issue; the change goes to the repository.\n"+
 			"The first call shows the text and its digest; a second call with --digest approves exactly that\n"+
 			"text, so an edit to the issue in between is caught. Later edits to the issue change nothing.\n\n")
 		fs.PrintDefaults()
@@ -133,7 +149,7 @@ func approveCommand(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if !github.ValidRepo(*repo) || *issueNumber < 1 || *checksPath == "" || fs.NArg() != 0 {
+	if !github.ValidRepo(*repo) || (*issueNumber < 1) == (*linearID == "") || *checksPath == "" || fs.NArg() != 0 {
 		fs.Usage()
 		return 2
 	}
@@ -142,30 +158,50 @@ func approveCommand(args []string, stdout, stderr io.Writer) int {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	fail := func(err error) int { fmt.Fprintf(stderr, "sprintfoundry: %v\n", err); return 1 }
+	key, ok := linear.NormalIdentifier(*linearID)
+	if *linearID != "" && !ok {
+		return fail(fmt.Errorf("%s is not a Linear issue identifier such as ENG-123", printable(*linearID)))
+	}
 
 	token, err := github.TokenFromGH(ctx)
 	if err != nil {
 		return fail(err)
 	}
 	client := &github.Client{Token: token}
-	issue, err := client.GetIssue(ctx, *repo, *issueNumber)
-	if err != nil {
-		return fail(err)
+	var issue approvedIssue
+	if *linearID != "" {
+		apiKey, err := linear.KeyFromEnv()
+		if err != nil {
+			return fail(err)
+		}
+		li, err := (&linear.Client{Key: apiKey}).GetIssue(ctx, key)
+		if err != nil {
+			return fail(err)
+		}
+		issue = approvedIssue{source: postgres.SourceLinear, key: li.Identifier, title: li.Title, body: li.Description, open: li.Open()}
+	} else {
+		gi, err := client.GetIssue(ctx, *repo, *issueNumber)
+		if err != nil {
+			return fail(err)
+		}
+		issue = approvedIssue{source: postgres.SourceGitHub, number: gi.Number, title: gi.Title, body: gi.Body,
+			open: !gi.PullRequest && gi.State == "open"}
 	}
-	if issue.PullRequest || issue.State != "open" {
-		return fail(fmt.Errorf("#%d is not an open issue", *issueNumber))
+	if !issue.open {
+		return fail(fmt.Errorf("%s is not an open issue", issue.ref()))
 	}
-	criteria, err := issueCriteria(issue)
+	criteria, err := criteriaText(issue.title, issue.body)
 	if err != nil {
 		return fail(err)
 	}
 	got := postgres.Digest(criteria)
 	if *digest == "" {
-		fmt.Fprintf(stdout, "The criteria for issue #%d on %s would be:\n\n", issue.Number, *repo)
+		fmt.Fprintf(stdout, "The criteria for issue %s, to be built on %s, would be:\n\n", issue.ref(), *repo)
 		for _, line := range strings.Split(strings.TrimRight(string(criteria), "\n"), "\n") {
 			fmt.Fprintf(stdout, "  | %s\n", line)
 		}
-		again := []string{"sprintfoundry", "approve", "--repo", *repo, "--issue", strconv.Itoa(issue.Number), "--checks", *checksPath}
+		again := append([]string{"sprintfoundry", "approve", "--repo", *repo}, issue.flag()...)
+		again = append(again, "--checks", *checksPath)
 		if *specPath != "" {
 			again = append(again, "--runspec", *specPath)
 		}
@@ -191,12 +227,12 @@ func approveCommand(args []string, stdout, stderr io.Writer) int {
 	}
 	var earlier []string
 	for _, j := range jobs {
-		if j.Repository == repository && j.Issue == issue.Number {
+		if j.Repository == repository && j.Source == issue.source && j.IssueRef() == issue.ref() {
 			earlier = append(earlier, fmt.Sprintf("%s (%s)", j.ID, j.State))
 		}
 	}
 	if len(earlier) > 0 && !*again {
-		return fail(fmt.Errorf("issue #%d already has jobs: %s. A new job starts with a new evaluation allowance and request cap; pass --again if that is what you want", issue.Number, strings.Join(earlier, ", ")))
+		return fail(fmt.Errorf("issue %s already has jobs: %s. A new job starts with a new evaluation allowance and request cap; pass --again if that is what you want", issue.ref(), strings.Join(earlier, ", ")))
 	}
 	reg, err := env.store.Registered(ctx, repository)
 	if err != nil && !errors.Is(err, postgres.ErrNotFound) {
@@ -245,8 +281,11 @@ func approveCommand(args []string, stdout, stderr io.Writer) int {
 		return fail(err)
 	}
 
-	job := postgres.Job{ID: jobID(repository, issue.Number, got),
-		Repository: repository, Issue: issue.Number, Base: base, BaseBranch: branch}
+	job := postgres.Job{ID: jobID(repository, issue.number, got), Repository: repository, Source: issue.source,
+		Issue: issue.number, IssueKey: issue.key, IssueTitle: strings.TrimSpace(issue.title), Base: base, BaseBranch: branch}
+	if issue.source == postgres.SourceLinear {
+		job.ID = linearJobID(repository, issue.key, got)
+	}
 	if job.Inputs.CriteriaDigest, err = env.store.PutInput(ctx, "criteria", criteria); err != nil {
 		return fail(err)
 	}
@@ -260,7 +299,7 @@ func approveCommand(args []string, stdout, stderr io.Writer) int {
 	if err := env.store.CreateJob(ctx, job); err != nil {
 		return fail(err)
 	}
-	fmt.Fprintf(stdout, "Approved job %s: issue #%d, built on %s at %s.\n`sprintfoundry serve` runs it.\n", job.ID, issue.Number, branch, base[:12])
+	fmt.Fprintf(stdout, "Approved job %s: issue %s, built on %s at %s.\n`sprintfoundry serve` runs it.\n", job.ID, issue.ref(), branch, base[:12])
 	return 0
 }
 
@@ -326,7 +365,15 @@ func serveCommand(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(err)
 	}
-	listWaiting(ctx, env.store, client, say)
+	var lin *linear.Client
+	if os.Getenv(linear.KeyEnv) != "" {
+		apiKey, err := linear.KeyFromEnv()
+		if err != nil {
+			return fail(err)
+		}
+		lin = &linear.Client{Key: apiKey}
+	}
+	listWaiting(ctx, env.store, client, lin, say)
 
 	nonce := make([]byte, 3)
 	_, _ = rand.Read(nonce)
@@ -378,17 +425,21 @@ func serveCommand(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// listWaiting shows labelled issues that have no job yet.
-func listWaiting(ctx context.Context, store *postgres.Store, client *github.Client, say func(string, ...any)) {
-	regs, err := store.Registrations(ctx)
-	if err != nil {
-		say("Could not list registered repositories: %v", err)
-		return
-	}
+// listWaiting shows labelled issues that have no job yet: GitHub issues of
+// registered repositories, and Linear issues when there is a Linear key.
+func listWaiting(ctx context.Context, store *postgres.Store, client *github.Client, lin *linear.Client, say func(string, ...any)) {
 	jobs, _ := store.Jobs(ctx)
 	have := map[string]bool{}
 	for _, j := range jobs {
-		have[fmt.Sprintf("%s#%d", j.Repository, j.Issue)] = true
+		if j.Source == postgres.SourceLinear {
+			have[j.IssueKey] = true
+		} else {
+			have[fmt.Sprintf("%s#%d", j.Repository, j.Issue)] = true
+		}
+	}
+	regs, err := store.Registrations(ctx)
+	if err != nil {
+		say("Could not list registered repositories: %v", err)
 	}
 	for _, r := range regs {
 		repo := strings.TrimPrefix(r.Repository, "github.com/")
@@ -401,6 +452,19 @@ func listWaiting(ctx context.Context, store *postgres.Store, client *github.Clie
 			if !have[fmt.Sprintf("%s#%d", r.Repository, i.Number)] {
 				say("Waiting for approval: %s#%d %q (sprintfoundry approve --repo %s --issue %d --checks ...)", repo, i.Number, i.Title, repo, i.Number)
 			}
+		}
+	}
+	if lin == nil {
+		return
+	}
+	issues, err := lin.LabeledIssues(ctx, IssueLabel)
+	if err != nil {
+		say("Could not list Linear issues: %v", err)
+		return
+	}
+	for _, i := range issues {
+		if !have[i.Identifier] {
+			say("Waiting for approval: Linear %s %q (sprintfoundry approve --repo OWNER/NAME --linear %s --checks ...)", i.Identifier, i.Title, i.Identifier)
 		}
 	}
 }
@@ -433,7 +497,11 @@ func jobsCommand(args []string, stdout, stderr io.Writer) int {
 		if j.PullRequest > 0 {
 			pr = fmt.Sprintf(" pull request #%d", j.PullRequest)
 		}
-		fmt.Fprintln(stdout, printable(fmt.Sprintf("%-24s %s#%d  %s%s  %s", j.ID, strings.TrimPrefix(j.Repository, "github.com/"), j.Issue, j.State, pr, j.Reason)))
+		issue := strings.TrimPrefix(j.Repository, "github.com/") + j.IssueRef()
+		if j.Source == postgres.SourceLinear {
+			issue = j.IssueRef() + " on " + strings.TrimPrefix(j.Repository, "github.com/")
+		}
+		fmt.Fprintln(stdout, printable(fmt.Sprintf("%-24s %s  %s%s  %s", j.ID, issue, j.State, pr, j.Reason)))
 	}
 	return 0
 }

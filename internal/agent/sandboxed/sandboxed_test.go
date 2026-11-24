@@ -207,3 +207,63 @@ echo "X = 1" >> app.py`)
 		t.Error("terminal control characters from the agent reached the person's screen")
 	}
 }
+
+// The builder describes its change outside the repository: the description
+// comes back with the change and is never part of the patch.
+func TestTheBuilderDescribesItsChangeOutsideThePatch(t *testing.T) {
+	script := `set -e
+grep -q "` + DescriptionPath + `" /sf/task.md
+echo "ROUND = 1" >> app.py
+printf '# Count the rounds\r\n\r\nAdds a round counter to app.py.\n\nNothing else changes.\n' > ` + DescriptionPath
+	w := newWorld(t, script)
+	c, err := w.agent.Run(w.ctx, nil, "", agent.Task{Criteria: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Title != "Count the rounds" || c.Body != "Adds a round counter to app.py.\n\nNothing else changes." {
+		t.Errorf("title %q, body %q", c.Title, c.Body)
+	}
+	if strings.Contains(string(c.Patch), "pull-request.md") || strings.Contains(string(c.Patch), "Count the rounds") {
+		t.Errorf("the description is in the patch:\n%s", c.Patch)
+	}
+
+	// No description, a symlink to one, a FIFO and a directory all give an
+	// empty description and keep the change.
+	for name, script := range map[string]string{
+		"none":      `echo x >> app.py`,
+		"symlink":   `echo x >> app.py; printf 'Title\n' > /workspace/real.md; ln -s /workspace/real.md ` + DescriptionPath,
+		"fifo":      `echo x >> app.py; mkfifo ` + DescriptionPath,
+		"directory": `echo x >> app.py; mkdir ` + DescriptionPath,
+	} {
+		w.agent.Script = script
+		c, err := w.agent.Run(w.ctx, nil, "", agent.Task{Criteria: "x"})
+		if err != nil || len(c.Patch) == 0 {
+			t.Errorf("%s: %v", name, err)
+		}
+		if c.Title != "" || c.Body != "" {
+			t.Errorf("%s: title %q, body %q", name, c.Title, c.Body)
+		}
+	}
+
+	// A description larger than the limit is cut, not refused.
+	w.agent.Script = `echo x >> app.py; { echo Big; echo; head -c 200000 /dev/zero | tr '\0' a; } > ` + DescriptionPath
+	c, err = w.agent.Run(w.ctx, nil, "", agent.Task{Criteria: "x"})
+	if err != nil || c.Title != "Big" || len(c.Body) == 0 || len(c.Body) > MaxDescriptionBytes {
+		t.Errorf("large description: title %q, body %d bytes, %v", c.Title, len(c.Body), err)
+	}
+}
+
+func TestParseDescription(t *testing.T) {
+	for raw, want := range map[string][2]string{
+		"":                           {"", ""},
+		"\n\n  ## Title  \n\nBody\n": {"Title", "Body"},
+		"Title only":                 {"Title only", ""},
+		"T\nline1\n\nline2\n\n":      {"T", "line1\n\nline2"},
+		"T\r\n\r\nB\r\n":             {"T", "B"},
+	} {
+		title, body := ParseDescription([]byte(raw))
+		if title != want[0] || body != want[1] {
+			t.Errorf("ParseDescription(%q) = %q, %q; want %q, %q", raw, title, body, want[0], want[1])
+		}
+	}
+}

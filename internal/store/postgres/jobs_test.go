@@ -107,7 +107,7 @@ func TestAnExpiredLeaseIsTakenOverAndTheOldHolderCannotWrite(t *testing.T) {
 	if !ok || err != nil || j.ID != "job-1" || j.State != postgres.JobRunning {
 		t.Fatalf("take over: %+v %v %v", j, ok, err)
 	}
-	if _, err := s.SaveChange(ctx, "job-1", "old", 1, []byte("patch"), "tree", "", time.Now()); !errors.Is(err, postgres.ErrLeaseLost) {
+	if _, err := s.SaveChange(ctx, "job-1", "old", 1, postgres.Change{Patch: []byte("patch"), TestedTree: "tree", At: time.Now()}); !errors.Is(err, postgres.ErrLeaseLost) {
 		t.Errorf("old holder stored a change: err = %v", err)
 	}
 	if err := s.FinishJob(ctx, "job-1", "old", postgres.JobPassed, ""); !errors.Is(err, postgres.ErrLeaseLost) {
@@ -157,12 +157,12 @@ func TestRoundsKeepTheFirstChangeAndResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	at := time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)
-	r, err := s.SaveChange(ctx, "job-1", "c", 1, []byte("first"), "tree1", "summary", at)
-	if err != nil || string(r.Patch) != "first" || !r.ChangedAt.Equal(at) {
+	r, err := s.SaveChange(ctx, "job-1", "c", 1, postgres.Change{Patch: []byte("first"), TestedTree: "tree1", Summary: "summary", Title: "Add a thing", Body: "It adds a thing.", At: at})
+	if err != nil || string(r.Patch) != "first" || !r.ChangedAt.Equal(at) || r.PRTitle != "Add a thing" || r.PRBody != "It adds a thing." {
 		t.Fatalf("SaveChange: %+v %v", r, err)
 	}
-	r, err = s.SaveChange(ctx, "job-1", "c", 1, []byte("second"), "tree2", "", at.Add(time.Hour))
-	if err != nil || string(r.Patch) != "first" || r.TestedTree != "tree1" || !r.ChangedAt.Equal(at) {
+	r, err = s.SaveChange(ctx, "job-1", "c", 1, postgres.Change{Patch: []byte("second"), TestedTree: "tree2", Title: "Other", At: at.Add(time.Hour)})
+	if err != nil || string(r.Patch) != "first" || r.TestedTree != "tree1" || !r.ChangedAt.Equal(at) || r.PRTitle != "Add a thing" {
 		t.Fatalf("a second change replaced the first: %+v %v", r, err)
 	}
 	fb := []postgres.Feedback{{Criterion: "c1", Symptom: "s"}}
@@ -247,10 +247,10 @@ func TestALostLeaseStoresNothingEvenForAStoredRound(t *testing.T) {
 		t.Fatal(err)
 	}
 	at := time.Now()
-	if _, err := s.SaveChange(ctx, "job-1", "new", 1, []byte("p"), "t", "", at); err != nil {
+	if _, err := s.SaveChange(ctx, "job-1", "new", 1, postgres.Change{Patch: []byte("p"), TestedTree: "t", At: at}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.SaveChange(ctx, "job-1", "old", 1, []byte("p"), "t", "", at); !errors.Is(err, postgres.ErrLeaseLost) {
+	if _, err := s.SaveChange(ctx, "job-1", "old", 1, postgres.Change{Patch: []byte("p"), TestedTree: "t", At: at}); !errors.Is(err, postgres.ErrLeaseLost) {
 		t.Errorf("SaveChange by the old holder: err = %v", err)
 	}
 	if _, err := s.SaveRoundResult(ctx, "job-1", "new", 1, postgres.RoundResult{StopReason: "x"}); err != nil {

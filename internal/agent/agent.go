@@ -40,6 +40,10 @@ type Change struct {
 	// Summary is the builder's own description. It is shown to people and
 	// never reaches the check runner or the grade.
 	Summary string
+	// Title and Body are the builder's description of the change for its
+	// pull request, as the builder wrote them. Both may be empty. The
+	// controller cleans them before they are stored or shown.
+	Title, Body string
 }
 
 // Agent builds a change inside a sandbox.
