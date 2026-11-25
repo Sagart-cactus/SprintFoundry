@@ -295,6 +295,60 @@ func flakyRuntime(t *testing.T, failures int) (CLI, func() int) {
 	}
 }
 
+// Pruning one label value must leave images with another value of the same
+// label alone. Podman's image prune, when it goes through the API (as it
+// always does on macOS), matched the label name only and deleted the idle
+// images of every other home, including a live run's check-runner image.
+func TestPruneImagesKeepsImagesWithAnotherLabelValue(t *testing.T) {
+	c := runtimeOrSkip(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano()%1_000_000_000)
+	// A label name of its own, so that even a prune that ignores the value
+	// can only reach this test's images.
+	const name = "sprintfoundry.prunetest"
+	build := func(value string) string {
+		t.Helper()
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM scratch\nCOPY marker /marker\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "marker"), []byte(suffix+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		id, err := c.Build(ctx, tarDir(t, dir), BuildOptions{Dockerfile: "Dockerfile", Network: "none", Labels: map[string]string{name: value}})
+		if err != nil {
+			t.Fatalf("Build: %v", err)
+		}
+		return id
+	}
+	exists := func(id string) bool {
+		t.Helper()
+		res, err := c.run(ctx, nil, "image", "inspect", "--format", "{{.Id}}", id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.ExitCode == 0
+	}
+
+	pruned, kept := build("a"+suffix), build("b"+suffix)
+	t.Cleanup(func() { _ = c.ImageRemove(context.Background(), pruned, kept) })
+	if pruned == kept {
+		t.Fatal("two label values produced the same image ID")
+	}
+
+	if err := c.PruneImages(ctx, name+"=a"+suffix); err != nil {
+		t.Fatalf("PruneImages: %v", err)
+	}
+	if exists(pruned) {
+		t.Error("the image with the pruned label value is still there")
+	}
+	if !exists(kept) {
+		t.Error("pruning one label value deleted an image with another value")
+	}
+}
+
 func TestAPullThatFailsOnceIsTriedAgain(t *testing.T) {
 	image := "registry.example/app@sha256:" + strings.Repeat("a", 64)
 	c, calls := flakyRuntime(t, 1)

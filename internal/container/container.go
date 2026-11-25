@@ -499,8 +499,32 @@ func (c CLI) PruneImages(ctx context.Context, label string) error {
 	if !labelOK.MatchString(label) {
 		return fmt.Errorf("container: label %q is not allowed", label)
 	}
-	_, err := c.must(ctx, nil, "image", "prune", "--all", "--force", "--filter", "label="+label)
-	return err
+	// Not `image prune --filter label=...`: when Podman goes through its API,
+	// as it always does on macOS, prune matches the label's name and ignores
+	// its value, so it deleted the idle images of every home on the machine,
+	// a live run's check-runner image among them. Listing filters correctly,
+	// so list the images that carry the label and remove them one by one.
+	out, err := c.must(ctx, nil, "images", "--all", "--quiet", "--no-trunc", "--filter", "label="+label)
+	if err != nil {
+		return err
+	}
+	seen := map[string]bool{}
+	for _, line := range strings.Fields(out) {
+		id := strings.TrimPrefix(line, "sha256:")
+		if !imageID.MatchString(id) {
+			return fmt.Errorf("container: the runtime listed %q as an image ID", line)
+		}
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		// Without --force, the runtime keeps an image that a container uses
+		// or that another image is built on; that refusal is not an error.
+		if _, err := c.run(ctx, nil, "rmi", id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // RemoveByLabel stops and deletes every container that carries the label
