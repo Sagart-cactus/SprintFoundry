@@ -43,6 +43,9 @@ type Job struct {
 	Source   string
 	Issue    int
 	IssueKey string
+	// IssueUID is Linear's own ID for the issue; it identifies a Linear
+	// job's issue when its identifier changes.
+	IssueUID string
 	// IssueTitle is the issue's title when it was approved.
 	IssueTitle string
 	// Base is the commit the builder starts from, on BaseBranch.
@@ -82,7 +85,8 @@ func (s *Store) CreateJob(ctx context.Context, j Job) error {
 	}
 	switch {
 	case j.Source == SourceGitHub && (j.Issue < 1 || j.IssueKey != ""),
-		j.Source == SourceLinear && (j.Issue != 0 || j.IssueKey == ""),
+		j.Source == SourceGitHub && j.IssueUID != "",
+		j.Source == SourceLinear && (j.Issue != 0 || j.IssueKey == "" || j.IssueUID == ""),
 		j.Source != SourceGitHub && j.Source != SourceLinear:
 		return fmt.Errorf("postgres: job %s: source %q with issue %d and key %q", j.ID, j.Source, j.Issue, j.IssueKey)
 	}
@@ -92,10 +96,10 @@ func (s *Store) CreateJob(ctx context.Context, j Job) error {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	tag, err := tx.Exec(ctx,
-		`INSERT INTO sf_jobs (id, repository, issue, base, base_branch, criteria_digest, suite_digest, runspec_digest, source, issue_key, issue_title)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) ON CONFLICT DO NOTHING`,
+		`INSERT INTO sf_jobs (id, repository, issue, base, base_branch, criteria_digest, suite_digest, runspec_digest, source, issue_key, issue_title, issue_uid)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) ON CONFLICT DO NOTHING`,
 		j.ID, j.Repository, j.Issue, j.Base, j.BaseBranch, j.Inputs.CriteriaDigest, j.Inputs.SuiteDigest, j.Inputs.RunSpecDigest,
-		j.Source, j.IssueKey, storableText(j.IssueTitle))
+		j.Source, j.IssueKey, storableText(j.IssueTitle), j.IssueUID)
 	if err != nil {
 		return fmt.Errorf("postgres: create job: %w", err)
 	}
@@ -115,13 +119,13 @@ func (s *Store) CreateJob(ctx context.Context, j Job) error {
 	return tx.Commit(ctx)
 }
 
-const jobColumns = `id, repository, issue, base, base_branch, criteria_digest, suite_digest, runspec_digest, state, reason, pull_request, claims, failures, last_error, publish_approved, source, issue_key, issue_title`
+const jobColumns = `id, repository, issue, base, base_branch, criteria_digest, suite_digest, runspec_digest, state, reason, pull_request, claims, failures, last_error, publish_approved, source, issue_key, issue_title, issue_uid`
 
 func scanJob(row pgx.Row) (Job, error) {
 	var j Job
 	err := row.Scan(&j.ID, &j.Repository, &j.Issue, &j.Base, &j.BaseBranch, &j.Inputs.CriteriaDigest, &j.Inputs.SuiteDigest,
 		&j.Inputs.RunSpecDigest, &j.State, &j.Reason, &j.PullRequest, &j.Claims, &j.Failures, &j.LastError, &j.PublishApproved,
-		&j.Source, &j.IssueKey, &j.IssueTitle)
+		&j.Source, &j.IssueKey, &j.IssueTitle, &j.IssueUID)
 	j.Inputs.ID, j.Inputs.Repository = j.ID, j.Repository
 	return j, err
 }

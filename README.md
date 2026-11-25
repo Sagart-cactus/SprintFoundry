@@ -111,7 +111,9 @@ A passing change waits for you: pushing it runs the repository's own CI on it. L
 
 A job that stopped because of errors, for example during an outage, can be queued again with `./sprintfoundry retry --job ID`. See `docs/design/0009-durable-controller.md`.
 
-The builder writes the pull request's title and body. SprintFoundry cleans them (mentions and closing keywords for other issues become code, so they notify and close nothing) and adds a footer: the job's own issue, the evidence, and "Built by SprintFoundry with Codex CLI".
+The builder writes the pull request's title and body. SprintFoundry cleans them, so they notify nobody and close or link no other issue (`@name` becomes `＠name`, `#12` becomes `＃12`), and adds a footer: the job's own issue, the evidence, and "Built by SprintFoundry with Codex CLI".
+
+Upgrading from milestone 3: stop every running `serve` before starting the new one against the same database.
 
 ## Build from Linear issues
 

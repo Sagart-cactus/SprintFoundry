@@ -246,7 +246,7 @@ func buildRound(ctx context.Context, d JobDeps, job postgres.Job, s JobSettings,
 		// The description is cleaned once, here, and stored with the patch:
 		// the commit message is made from it, so every import gives the
 		// same commit.
-		title, body := CleanDescription(change.Title, change.Body, fallbackTitle(job))
+		title, body := CleanDescription(change.Title, change.Body, fallbackTitle(job), job.IssueKey)
 		if rec, err = d.Store.SaveChange(ctx, job.ID, d.Owner, rec.Number, postgres.Change{Patch: change.Patch, TestedTree: change.TestedTree,
 			Summary: change.Summary, Title: title, Body: body, At: d.Now()}); err != nil {
 			return rec, err

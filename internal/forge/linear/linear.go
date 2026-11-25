@@ -46,17 +46,26 @@ func KeyFromEnv() (string, error) {
 
 // Issue is what the controller needs from a Linear issue.
 type Issue struct {
+	// ID is Linear's own ID for the issue. Unlike the identifier, it stays
+	// the same when the issue moves to another team.
+	ID          string
 	Identifier  string
 	Title       string
 	Description string
 	URL         string
 	// StateType is the type of the issue's workflow state: triage, backlog,
-	// unstarted, started, completed or canceled.
+	// unstarted, started, completed, canceled or duplicate.
 	StateType string
+	// Archived is set for an issue that is archived or in the trash.
+	Archived bool
 }
 
+// openStates are the state types in which work on an issue can still
+// start. Any other type, including one Linear adds later, counts as closed.
+var openStates = map[string]bool{"triage": true, "backlog": true, "unstarted": true, "started": true}
+
 // Open reports whether work on the issue can still start.
-func (i Issue) Open() bool { return i.StateType != "completed" && i.StateType != "canceled" }
+func (i Issue) Open() bool { return openStates[i.StateType] && !i.Archived }
 
 var identifier = regexp.MustCompile(`^[A-Z][A-Z0-9]{0,9}-[1-9][0-9]{0,8}$`)
 
@@ -72,6 +81,7 @@ func NormalIdentifier(s string) (string, bool) {
 var ErrNotFound = errors.New("linear: issue not found")
 
 type issueNode struct {
+	ID          string  `json:"id"`
 	Identifier  string  `json:"identifier"`
 	Title       string  `json:"title"`
 	Description *string `json:"description"`
@@ -79,10 +89,13 @@ type issueNode struct {
 	State       *struct {
 		Type string `json:"type"`
 	} `json:"state"`
+	Trashed    *bool   `json:"trashed"`
+	ArchivedAt *string `json:"archivedAt"`
 }
 
 func (n issueNode) issue() Issue {
-	i := Issue{Identifier: n.Identifier, Title: n.Title, URL: n.URL}
+	i := Issue{ID: n.ID, Identifier: n.Identifier, Title: n.Title, URL: n.URL,
+		Archived: (n.Trashed != nil && *n.Trashed) || n.ArchivedAt != nil}
 	if n.Description != nil {
 		i.Description = *n.Description
 	}
@@ -102,7 +115,7 @@ func (c *Client) GetIssue(ctx context.Context, id string) (Issue, error) {
 		Issue *issueNode `json:"issue"`
 	}
 	err := c.query(ctx, `query Issue($id: String!) {
-  issue(id: $id) { identifier title description url state { type } }
+  issue(id: $id) { id identifier title description url state { type } trashed archivedAt }
 }`, map[string]any{"id": id}, &out)
 	if errors.Is(err, errEntityNotFound) || (err == nil && out.Issue == nil) {
 		return Issue{}, fmt.Errorf("%w: %s", ErrNotFound, id)
@@ -111,8 +124,10 @@ func (c *Client) GetIssue(ctx context.Context, id string) (Issue, error) {
 		return Issue{}, err
 	}
 	issue := out.Issue.issue()
-	if issue.Identifier != id {
-		return Issue{}, fmt.Errorf("linear: asked for %s, got %q", id, issue.Identifier)
+	// An issue that moved to another team is found by its old identifier
+	// too, and comes back with its new one.
+	if _, ok := NormalIdentifier(issue.Identifier); !ok || issue.ID == "" {
+		return Issue{}, fmt.Errorf("linear: asked for %s, got identifier %q and ID %q", id, clip(issue.Identifier, 40), clip(issue.ID, 40))
 	}
 	return issue, nil
 }
@@ -127,15 +142,15 @@ func (c *Client) LabeledIssues(ctx context.Context, label string) ([]Issue, erro
 	err := c.query(ctx, `query Labeled($label: String!) {
   issues(first: 100, filter: {
     labels: { some: { name: { eqIgnoreCase: $label } } }
-    state: { type: { nin: ["completed", "canceled"] } }
-  }) { nodes { identifier title url state { type } } }
+    state: { type: { in: ["triage", "backlog", "unstarted", "started"] } }
+  }) { nodes { id identifier title url state { type } } }
 }`, map[string]any{"label": label}, &out)
 	if err != nil {
 		return nil, err
 	}
 	var issues []Issue
 	for _, n := range out.Issues.Nodes {
-		if _, ok := NormalIdentifier(n.Identifier); ok {
+		if _, ok := NormalIdentifier(n.Identifier); ok && n.ID != "" {
 			issues = append(issues, n.issue())
 		}
 	}

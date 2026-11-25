@@ -108,6 +108,7 @@ func linearJobID(repository, key string, criteriaDigest string) string {
 // approvedIssue is the issue a job is approved from, wherever it lives.
 type approvedIssue struct {
 	source, key string
+	uid         string // Linear's own ID for the issue
 	number      int
 	title, body string
 	open        bool
@@ -178,7 +179,10 @@ func approveCommand(args []string, stdout, stderr io.Writer) int {
 		if err != nil {
 			return fail(err)
 		}
-		issue = approvedIssue{source: postgres.SourceLinear, key: li.Identifier, title: li.Title, body: li.Description, open: li.Open()}
+		if li.Identifier != key {
+			fmt.Fprintf(stdout, "%s is now %s.\n", key, printable(li.Identifier))
+		}
+		issue = approvedIssue{source: postgres.SourceLinear, key: li.Identifier, uid: li.ID, title: li.Title, body: li.Description, open: li.Open()}
 	} else {
 		gi, err := client.GetIssue(ctx, *repo, *issueNumber)
 		if err != nil {
@@ -227,8 +231,15 @@ func approveCommand(args []string, stdout, stderr io.Writer) int {
 	}
 	var earlier []string
 	for _, j := range jobs {
-		if j.Repository == repository && j.Source == issue.source && j.IssueRef() == issue.ref() {
-			earlier = append(earlier, fmt.Sprintf("%s (%s)", j.ID, j.State))
+		// A GitHub issue belongs to its repository. A Linear issue does not,
+		// so a job for it in any repository counts; an issue that moved to
+		// another team keeps its Linear ID.
+		same := j.Source == issue.source && j.IssueRef() == issue.ref() && j.Repository == repository
+		if issue.source == postgres.SourceLinear {
+			same = j.Source == issue.source && j.IssueUID == issue.uid
+		}
+		if same {
+			earlier = append(earlier, fmt.Sprintf("%s in %s (%s)", j.ID, strings.TrimPrefix(j.Repository, "github.com/"), j.State))
 		}
 	}
 	if len(earlier) > 0 && !*again {
@@ -282,7 +293,7 @@ func approveCommand(args []string, stdout, stderr io.Writer) int {
 	}
 
 	job := postgres.Job{ID: jobID(repository, issue.number, got), Repository: repository, Source: issue.source,
-		Issue: issue.number, IssueKey: issue.key, IssueTitle: strings.TrimSpace(issue.title), Base: base, BaseBranch: branch}
+		Issue: issue.number, IssueKey: issue.key, IssueUID: issue.uid, IssueTitle: strings.TrimSpace(issue.title), Base: base, BaseBranch: branch}
 	if issue.source == postgres.SourceLinear {
 		job.ID = linearJobID(repository, issue.key, got)
 	}
@@ -432,7 +443,7 @@ func listWaiting(ctx context.Context, store *postgres.Store, client *github.Clie
 	have := map[string]bool{}
 	for _, j := range jobs {
 		if j.Source == postgres.SourceLinear {
-			have[j.IssueKey] = true
+			have[j.IssueUID] = true
 		} else {
 			have[fmt.Sprintf("%s#%d", j.Repository, j.Issue)] = true
 		}
@@ -463,7 +474,7 @@ func listWaiting(ctx context.Context, store *postgres.Store, client *github.Clie
 		return
 	}
 	for _, i := range issues {
-		if !have[i.Identifier] {
+		if !have[i.ID] {
 			say("Waiting for approval: Linear %s %q (sprintfoundry approve --repo OWNER/NAME --linear %s --checks ...)", i.Identifier, i.Title, i.Identifier)
 		}
 	}
